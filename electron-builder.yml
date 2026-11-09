@@ -31,6 +31,11 @@ linux:
     - dir
     - AppImage
   executableName: opsdeck
+  # Allow launching from the desktop shell on distributions where Chrome's
+  # setuid sandbox helper cannot be installed root-owned/4755 (e.g. per-user
+  # installs on Ubuntu). See README "Sandbox" for the hardened alternative.
+  executableArgs:
+    - --no-sandbox
   category: Development
   icon: assets/icon.png
   synopsis: Operations Studio for Docker
@@ -52,3 +57,5 @@ linux:
 
 appImage:
   artifactName: OpsDeck-${version}-${arch}.${ext}
+  executableArgs:
+    - --no-sandbox

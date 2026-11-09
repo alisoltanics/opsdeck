@@ -83,6 +83,32 @@ Remove it with `npm run uninstall:desktop`.
 `npm run dist` produces an AppImage in `release/` via the same
 [`electron-builder.yml`](./electron-builder.yml) configuration.
 
+### Sandbox
+
+Chromium's setuid sandbox helper (`chrome-sandbox`) must be owned by `root` with
+mode `4755`, which a per-user install cannot do. Ubuntu's AppArmor policy also
+blocks the unprivileged user-namespace fallback for apps started from the
+desktop shell, so the generated launcher passes `--no-sandbox`; otherwise
+clicking the icon aborts with `FATAL:setuid_sandbox_host.cc(158)` or
+`No usable sandbox!`.
+
+Hardening is still possible:
+
+```bash
+sudo chown root:root ~/.local/opt/opsdeck/chrome-sandbox
+sudo chmod 4755 ~/.local/opt/opsdeck/chrome-sandbox
+```
+
+The generated launcher checks the helper on every start: once it is
+root-owned and setuid, `--no-sandbox` is no longer passed, and no reinstall is
+needed. Reinstalling the app resets the helper, so repeat the two commands
+afterwards if you want the sandbox back.
+
+The rest of the security model does not depend on the Chromium sandbox:
+`contextIsolation` is on, `nodeIntegration` is off, the renderer runs under a
+strict CSP, all content is local, and Docker access goes through a validated
+IPC bridge that never invokes a shell.
+
 ## Architecture
 
 ```
