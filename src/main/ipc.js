@@ -1,6 +1,7 @@
 'use strict';
 
 const { ipcMain, shell, clipboard } = require('electron');
+const { spawn } = require('node:child_process');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
@@ -57,6 +58,40 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('app:copy', (text) => {
     clipboard.writeText(String(text ?? ''));
     return { ok: true };
+  });
+
+  handle('app:open-firefox', (rawUrl) => {
+    if (typeof rawUrl !== 'string' || rawUrl.length > 2048) {
+      return { ok: false, error: 'The address is not valid.' };
+    }
+    let parsed;
+    try { parsed = new URL(rawUrl); } catch { return { ok: false, error: 'The address is not valid.' }; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, error: 'Only http and https addresses can open in Firefox.' };
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+      let child;
+      try {
+        child = spawn('firefox', ['--new-tab', parsed.href], { detached: true, stdio: 'ignore' });
+      } catch (error) {
+        finish({ ok: false, error: error.message });
+        return;
+      }
+      child.once('error', (error) => {
+        finish({
+          ok: false,
+          error: error.code === 'ENOENT'
+            ? 'Firefox was not found on PATH. Install Firefox or add it to your PATH.'
+            : error.message,
+        });
+      });
+      child.once('spawn', () => {
+        child.unref();
+        finish({ ok: true, url: parsed.href });
+      });
+    });
   });
 
   handle('app:relaunch', () => {

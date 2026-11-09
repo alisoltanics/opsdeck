@@ -15,8 +15,57 @@ app.setAppUserModelId('com.opsdeck.studio');
 let mainWindow = null;
 let splash = null;
 
+const ZOOM_LEVELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5];
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 2.5;
+let zoomFactor = 1;
+
+function clampZoom(value) {
+  const factor = Number(value);
+  if (!Number.isFinite(factor)) return 1;
+  return Math.round(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, factor)) * 100) / 100;
+}
+
+function loadZoomFactor() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'zoom.json'), 'utf8'));
+    return clampZoom(data.factor);
+  } catch {
+    return 1;
+  }
+}
+
+function saveZoomFactor() {
+  try {
+    fs.writeFileSync(path.join(app.getPath('userData'), 'zoom.json'), JSON.stringify({ factor: zoomFactor }));
+  } catch { /* zoom is a convenience, never block the app */ }
+}
+
+function zoomPayload() {
+  return { ok: true, factor: zoomFactor, percent: Math.round(zoomFactor * 100) };
+}
+
+function applyZoom(value, { persist = true } = {}) {
+  const next = clampZoom(value);
+  zoomFactor = Math.abs(next - 1) < 0.005 ? 1 : next;
+  const webContents = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+  if (webContents && !webContents.isDestroyed()) {
+    webContents.setZoomFactor(zoomFactor);
+    webContents.send('window:zoom-changed', zoomPayload());
+  }
+  if (persist) saveZoomFactor();
+  return zoomPayload();
+}
+
+function stepZoom(direction) {
+  const levels = direction > 0 ? ZOOM_LEVELS : [...ZOOM_LEVELS].reverse();
+  const next = levels.find((level) => (direction > 0 ? level > zoomFactor + 0.001 : level < zoomFactor - 0.001));
+  return applyZoom(next == null ? zoomFactor : next);
+}
+
 function createWindow() {
   const state = loadWindowState();
+  zoomFactor = loadZoomFactor();
 
   mainWindow = new BrowserWindow({
     width: state.width,
@@ -43,6 +92,14 @@ function createWindow() {
 
   Menu.setApplicationMenu(null);
   mainWindow.loadFile(path.join(__dirname, 'src', 'renderer', 'index.html'));
+  if (mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.setZoomFactor(zoomFactor);
+  }
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.setZoomFactor(zoomFactor);
+    mainWindow.webContents.send('window:zoom-changed', zoomPayload());
+  });
 
   if (smokeMode) {
     mainWindow.webContents.once('did-finish-load', () => {
@@ -73,6 +130,19 @@ function createWindow() {
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown' && input.key === 'F12' && isDev) {
       mainWindow.webContents.toggleDevTools();
+      return;
+    }
+    const meta = input.control || input.meta;
+    if (input.type !== 'keyDown' || !meta) return;
+    if (input.key === '+' || input.key === '=') {
+      event.preventDefault();
+      stepZoom(1);
+    } else if (input.key === '-' || input.key === '_') {
+      event.preventDefault();
+      stepZoom(-1);
+    } else if (input.key === '0') {
+      event.preventDefault();
+      applyZoom(1);
     }
   });
 }
@@ -166,5 +236,13 @@ ipcMain.on('window:toggle-maximize', () => {
 ipcMain.on('window:close', () => mainWindow?.close());
 ipcMain.handle('window:is-maximized', () => !!mainWindow?.isMaximized());
 ipcMain.handle('window:state', () => ({ maximized: !!mainWindow?.isMaximized(), fullscreen: !!mainWindow?.isFullScreen() }));
+ipcMain.handle('window:zoom', (_event, payload = {}) => {
+  const action = typeof payload === 'string' ? payload : payload?.action;
+  if (action === 'in') return stepZoom(1);
+  if (action === 'out') return stepZoom(-1);
+  if (action === 'reset') return applyZoom(1);
+  if (action === 'set') return applyZoom(payload?.factor ?? payload?.value);
+  return zoomPayload();
+});
 
 module.exports = { isDev };

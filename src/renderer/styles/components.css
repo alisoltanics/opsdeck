@@ -615,6 +615,50 @@ select.input { padding-right: 26px; appearance: none; background-image: linear-g
 .data-table tr:hover .row-actions { opacity: 1; }
 .row-actions .icon-btn { width: 26px; height: 26px; }
 
+.badge-btn { border: 0; cursor: pointer; font-family: inherit; }
+.badge-btn:hover { filter: brightness(1.15); }
+.container-group-row td {
+  padding: 0 !important;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.data-table tbody tr.container-group-row:hover { background: var(--surface-2); }
+.container-group-inner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px;
+  min-height: 36px;
+}
+.container-group-icon { color: var(--accent); display: inline-flex; }
+.container-group-name { font-size: 11.5px; font-weight: 650; color: var(--text); letter-spacing: .01em; }
+.container-group-meta { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+.container-group-meta .dot-indicator { width: 6px; height: 6px; flex: 0 0 6px; box-shadow: none; }
+.container-group-spacer { flex: 1; }
+.container-group-inner .btn { padding-top: 3px; padding-bottom: 3px; }
+.toolbar-field { flex-direction: row; align-items: center; gap: 7px; }
+.toolbar-field > span { white-space: nowrap; }
+.toolbar-field .input { height: 30px; min-width: 160px; }
+.containers-table .cell-main > div { min-width: 0; }
+.containers-table .cell-title,
+.containers-table .cell-sub {
+  max-width: 230px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.containers-table .row-actions { opacity: .75; }
+.containers-table th:last-child,
+.containers-table td:last-child {
+  position: sticky; right: 0; z-index: 3;
+  background: var(--surface);
+  box-shadow: -10px 0 14px -12px rgba(0, 0, 0, .55);
+}
+.containers-table thead th:last-child { background: var(--surface-2); }
+.containers-table tbody tr:hover td:last-child { background: var(--surface-2); }
+.containers-table tr.container-group-row td:last-child {
+  position: static;
+  box-shadow: none;
+  background: var(--surface-2);
+}
+
 .dot-indicator {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--faint); flex: 0 0 8px;

@@ -12,7 +12,7 @@
   const rerender = () => (OD.app && OD.app.rerender ? OD.app.rerender() : location.reload());
 
   const state = {
-    containerFilter: { q: '', status: 'all' },
+    containerFilter: { q: '', status: 'all', project: 'all', grouped: null },
     imageFilter: { q: '', kind: 'all' },
     eventFilter: { since: 3600, type: 'all' },
     terminal: { history: [], consent: false, pending: null, busy: false },
@@ -230,43 +230,128 @@
 
   // ------------------------------------------------------------------ containers
 
+  function projectKey(item) {
+    return item.compose || '__standalone';
+  }
+
+  function projectLabel(key) {
+    return key === '__standalone' ? 'Standalone' : key;
+  }
+
+  function publishedTcpPorts(item) {
+    const seen = new Set();
+    for (const raw of item?.ports || []) {
+      const match = /^(?:.*:)?(\d+)(?:-(\d+))?->(\d+)(?:-(\d+))?\/(tcp|udp)$/.exec(String(raw).trim());
+      if (!match || match[5] !== 'tcp') continue;
+      const start = Number(match[1]);
+      const end = Number(match[2] || match[1]);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || end < start || end - start > 64) continue;
+      for (let port = start; port <= end; port += 1) {
+        if (port > 0 && port < 65536) seen.add(port);
+      }
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+
+  function containerUrl(port) {
+    const protocol = port === 443 || port === 8443 ? 'https' : 'http';
+    return `${protocol}://localhost:${port}`;
+  }
+
   function containerMatches(x) {
     const f = state.containerFilter;
     if (f.status !== 'all' && x.state !== f.status) return false;
+    if (f.project && f.project !== 'all' && projectKey(x) !== f.project) return false;
     const q = f.q.trim().toLowerCase();
     if (!q) return true;
     return `${x.name} ${x.image} ${x.id} ${x.compose || ''} ${x.service || ''}`.toLowerCase().includes(q);
   }
 
+  function containerProjects(items) {
+    const map = new Map();
+    for (const item of items) {
+      const key = projectKey(item);
+      const entry = map.get(key) || { key, total: 0, running: 0, services: new Set() };
+      entry.total += 1;
+      if (item.state === 'running') entry.running += 1;
+      if (item.service) entry.services.add(item.service);
+      map.set(key, entry);
+    }
+    return [...map.values()].sort((a, b) => {
+      if (a.key === '__standalone') return 1;
+      if (b.key === '__standalone') return -1;
+      return a.key.localeCompare(b.key);
+    });
+  }
+
+  function containerRow(x) {
+    const ports = (x.ports || []).slice(0, 2).join(' · ');
+    const extra = (x.ports || []).length - 2;
+    const published = publishedTcpPorts(x);
+    return `<tr class="clickable" data-open-container="${esc(x.id)}" data-container-name="${esc(x.name)}">
+      <td><div class="cell-main"><span class="dot-indicator ${esc(x.state)}"></span><div><div class="cell-title">${esc(x.name)}</div><div class="cell-sub mono">${esc(x.image)}</div></div></div></td>
+      <td>${U.stateBadge(x.state, x.status)}</td>
+      <td class="cell-mono">${esc(ports || '—')}${extra > 0 ? ` <span class="badge mono">+${extra}</span>` : ''}</td>
+      <td class="cell-mono">${(x.cpuPercent || 0).toFixed(1)}%<div class="cell-sub">${fmtBytes(x.memoryBytes || 0)}</div></td>
+      <td class="cell-nowrap">${esc(x.runningFor || timeAgo(x.createdAt))}</td>
+      <td>${x.compose ? `<button type="button" class="badge tone-violet badge-btn" data-project-only="${esc(x.compose)}" title="Show every container in this project">${esc(x.compose)}${x.service ? `/${esc(x.service)}` : ''}</button>` : '<span class="faint">—</span>'}</td>
+      <td><div class="row-actions" onclick="event.stopPropagation()">
+        ${x.state === 'running'
+          ? U.iconButton({ icon: 'pause', label: 'Pause', attrs: `data-caction="pause" data-cid="${esc(x.id)}"` })
+          : U.iconButton({ icon: 'play', label: 'Start', attrs: `data-caction="start" data-cid="${esc(x.id)}"` })}
+        ${x.state === 'running' ? U.iconButton({ icon: 'rotate-cw', label: 'Restart', attrs: `data-caction="restart" data-cid="${esc(x.id)}"` }) : ''}
+        ${published.length ? U.iconButton({
+          icon: 'globe',
+          label: x.state === 'running' ? `Open in Firefox — ${containerUrl(published[0])}` : 'Start the container to open its address',
+          attrs: `data-caction="firefox" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}" data-cports="${published.join(',')}"${x.state === 'running' ? '' : ' disabled'}`,
+        }) : ''}
+        ${U.iconButton({
+          icon: 'terminal',
+          label: x.state === 'running' ? 'Open shell' : 'Start the container to open a shell',
+          attrs: `data-caction="exec" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"${x.state === 'running' ? '' : ' disabled'}`,
+        })}
+        ${U.iconButton({ icon: 'file-code', label: 'Logs', attrs: `data-caction="logs" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
+        ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-caction="remove" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
+      </div></td>
+    </tr>`;
+  }
+
   function containerRows(items) {
     const filtered = items.filter(containerMatches);
     if (!filtered.length) {
-      return `<tr><td colspan="7">${U.empty({ compact: true, icon: 'search', title: 'No matching containers', body: 'Adjust the search or state filter.' })}</td></tr>`;
+      return `<tr><td colspan="7">${U.empty({ compact: true, icon: 'search', title: 'No matching containers', body: 'Adjust the search, project or state filter.' })}</td></tr>`;
     }
-    return filtered.map((x) => {
-      const ports = (x.ports || []).slice(0, 2).join(' · ');
-      const extra = (x.ports || []).length - 2;
-      return `<tr class="clickable" data-open-container="${esc(x.id)}" data-container-name="${esc(x.name)}">
-        <td><div class="cell-main"><span class="dot-indicator ${esc(x.state)}"></span><div><div class="cell-title">${esc(x.name)}</div><div class="cell-sub mono">${esc(x.image)}</div></div></div></td>
-        <td>${U.stateBadge(x.state, x.status)}</td>
-        <td class="cell-mono">${esc(ports || '—')}${extra > 0 ? ` <span class="badge mono">+${extra}</span>` : ''}</td>
-        <td class="cell-mono">${(x.cpuPercent || 0).toFixed(1)}%<div class="cell-sub">${fmtBytes(x.memoryBytes || 0)}</div></td>
-        <td class="cell-nowrap">${esc(x.runningFor || timeAgo(x.createdAt))}</td>
-        <td>${x.compose ? `<span class="badge tone-violet">${esc(x.compose)}${x.service ? `/${esc(x.service)}` : ''}</span>` : '<span class="faint">—</span>'}</td>
-        <td><div class="row-actions" onclick="event.stopPropagation()">
-          ${x.state === 'running'
-            ? U.iconButton({ icon: 'pause', label: 'Pause', attrs: `data-caction="pause" data-cid="${esc(x.id)}"` })
-            : U.iconButton({ icon: 'play', label: 'Start', attrs: `data-caction="start" data-cid="${esc(x.id)}"` })}
-          ${x.state === 'running' ? U.iconButton({ icon: 'rotate-cw', label: 'Restart', attrs: `data-caction="restart" data-cid="${esc(x.id)}"` }) : ''}
-          ${U.iconButton({
-            icon: 'terminal',
-            label: x.state === 'running' ? 'Open shell' : 'Start the container to open a shell',
-            attrs: `data-caction="exec" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"${x.state === 'running' ? '' : ' disabled'}`,
-          })}
-          ${U.iconButton({ icon: 'file-code', label: 'Logs', attrs: `data-caction="logs" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
-          ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-caction="remove" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
-        </div></td>
-      </tr>`;
+    if (!state.containerFilter.grouped) return filtered.map(containerRow).join('');
+
+    const groups = new Map();
+    for (const item of filtered) {
+      const key = projectKey(item);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    const keys = [...groups.keys()].sort((a, b) => {
+      if (a === '__standalone') return 1;
+      if (b === '__standalone') return -1;
+      return a.localeCompare(b);
+    });
+    return keys.map((key) => {
+      const groupItems = groups.get(key).sort((a, b) => {
+        const service = String(a.service || a.name).localeCompare(String(b.service || b.name));
+        return service !== 0 ? service : String(a.name).localeCompare(String(b.name));
+      });
+      const running = groupItems.filter((x) => x.state === 'running').length;
+      const services = new Set(groupItems.map((x) => x.service).filter(Boolean)).size;
+      return `<tr class="container-group-row" data-group-row="${esc(key)}"><td colspan="7">
+        <div class="container-group-inner">
+          <span class="container-group-icon">${icon(key === '__standalone' ? 'box' : 'boxes', 13)}</span>
+          <span class="container-group-name">${esc(projectLabel(key))}</span>
+          <span class="badge mono">${groupItems.length} container${groupItems.length === 1 ? '' : 's'}</span>
+          ${services ? `<span class="badge mono tone-slate">${services} service${services === 1 ? '' : 's'}</span>` : ''}
+          <span class="container-group-meta"><span class="dot-indicator ${running ? 'running' : 'exited'}"></span>${running} running</span>
+          ${key !== '__standalone' ? `<button type="button" class="btn btn-sm btn-ghost" data-project-only="${esc(key)}">${icon('filter', 11)}<span>Show only this project</span></button>` : ''}
+          <span class="container-group-spacer"></span>
+        </div>
+      </td></tr>${groupItems.map(containerRow).join('')}`;
     }).join('');
   }
 
@@ -280,8 +365,18 @@
       return s ? { ...x, cpuPercent: s.cpuPercent, memoryBytes: s.memoryUsed } : x;
     });
     state.last.containers = items;
+    if (state.containerFilter.grouped == null) {
+      state.containerFilter.grouped = OD.store.state.settings?.groupContainers === true;
+    }
+    if (state.containerFilter.project !== 'all') {
+      const keys = new Set(items.map(projectKey));
+      if (!keys.has(state.containerFilter.project)) state.containerFilter.project = 'all';
+    }
     const counts = { all: items.length, running: 0, exited: 0, paused: 0, created: 0 };
     for (const x of items) counts[x.state] = (counts[x.state] || 0) + 1;
+    const projects = containerProjects(items);
+    const grouped = state.containerFilter.grouped === true;
+    const projectName = state.containerFilter.project === 'all' ? '' : projectLabel(state.containerFilter.project);
     return `<div class="page">
       ${pageHead({
         eyebrow: 'Docker workspace', iconName: 'box', title: 'Containers',
@@ -289,17 +384,22 @@
         actions: `${U.button({ label: 'Run container', icon: 'play', variant: 'primary', attrs: 'data-action="run-container"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}`,
       })}
       <div class="toolbar">
-        <label class="search-box">${icon('search', 14)}<input id="container-search" type="search" placeholder="Search name, image, compose service…" value="${esc(state.containerFilter.q)}" /><span class="kbd">/</span></label>
+        <label class="search-box">${icon('search', 14)}<input id="container-search" type="search" placeholder="Search name, image, project, service…" value="${esc(state.containerFilter.q)}" /><span class="kbd">/</span></label>
         <div class="filter-row">
           ${['all', 'running', 'exited', 'paused', 'created'].map((s) => `<button type="button" class="chip ${state.containerFilter.status === s ? 'active' : ''}" data-cstate="${s}">${esc(titleCase(s))}<span class="chip-count">${counts[s] || 0}</span></button>`).join('')}
         </div>
         <div class="toolbar-spacer"></div>
-        <span class="muted text-xs">${items.length} containers</span>
+        ${projects.length > 1 ? `<label class="field toolbar-field"><span>Project</span><select class="input" id="container-project">
+          <option value="all" ${state.containerFilter.project === 'all' ? 'selected' : ''}>All projects (${items.length})</option>
+          ${projects.map((p) => `<option value="${esc(p.key)}" ${state.containerFilter.project === p.key ? 'selected' : ''}>${esc(projectLabel(p.key))} (${p.total})</option>`).join('')}
+        </select></label>` : ''}
+        ${projects.length > 1 ? `<button type="button" class="btn ${grouped ? 'btn-primary' : 'btn-secondary'} btn-sm" data-container-group-toggle>${icon('boxes', 14)}<span>${grouped ? 'Grouped' : 'Group by project'}</span></button>` : ''}
+        <span class="muted text-xs">${projectName ? `${projectName} · ` : ''}${items.length} containers</span>
       </div>
       <div class="card flush">
         <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Container</th><th>State</th><th>Ports</th><th>CPU / memory</th><th>Uptime</th><th>Compose</th><th></th></tr></thead>
+          <table class="data-table containers-table">
+            <thead><tr><th>Container</th><th>State</th><th>Ports</th><th>CPU / memory</th><th>Uptime</th><th>Project</th><th></th></tr></thead>
             <tbody id="container-tbody">${containerRows(items)}</tbody>
           </table>
         </div>
@@ -540,6 +640,49 @@
     });
   }
 
+  async function launchFirefox(url) {
+    const res = await api.app.openInFirefox(url);
+    if (res?.ok) U.toast('Opening in Firefox', 'success', { description: url });
+    else U.toast('Could not open Firefox', 'error', { description: res?.error || 'Unknown error' });
+  }
+
+  function openContainerInFirefox(item, rawPorts) {
+    const ports = (typeof rawPorts === 'string' ? rawPorts.split(',') : [])
+      .map((value) => Number(value))
+      .filter((port) => Number.isInteger(port) && port > 0 && port < 65536);
+    const unique = [...new Set(ports)].sort((a, b) => a - b);
+    if (!unique.length) {
+      U.toast('No published address', 'info', { description: 'This container does not publish any TCP ports.' });
+      return;
+    }
+    if (unique.length === 1) {
+      launchFirefox(containerUrl(unique[0]));
+      return;
+    }
+    U.modal({
+      title: 'Open container address',
+      subtitle: `${item.name} publishes ${unique.length} TCP ports. Choose the one to open in Firefox.`,
+      eyebrow: 'Published ports',
+      icon: 'globe',
+      width: '540px',
+      body: `<div class="quick-grid">${unique.map((port) => `<button type="button" class="quick-link" data-open-port="${port}">
+        ${icon('external-link', 14)}
+        <span class="mono">localhost:${port}</span>
+        <span class="badge mono">${port === 443 || port === 8443 ? 'https' : 'http'}</span>
+      </button>`).join('')}</div>
+        <div class="muted text-xs mt-3">${icon('info', 12)} Addresses use localhost because the ports are published on this machine.</div>`,
+      actions: [{ id: 'cancel', label: 'Cancel', variant: 'ghost' }],
+      onMount: ({ root, close }) => {
+        root.querySelectorAll('[data-open-port]').forEach((button) => {
+          button.addEventListener('click', () => {
+            close('open');
+            launchFirefox(containerUrl(Number(button.dataset.openPort)));
+          });
+        });
+      },
+    });
+  }
+
   async function showInspect(item) {
     const res = await api.docker.inspectContainer(item.id);
     if (!res.ok) {
@@ -551,6 +694,10 @@
     const mounts = (d.mounts || []).map((m) => `<tr><td class="mono">${esc(m.Destination)}</td><td>${esc(m.Type)}</td><td class="mono">${esc(m.Name || m.Source || '')}</td><td>${m.RW ? 'rw' : 'ro'}</td></tr>`).join('');
     const networks = Object.entries(d.networks || {}).map(([name, n]) => `<tr><td>${esc(name)}</td><td class="mono">${esc(n.IPAddress || '—')}</td><td class="mono">${esc(n.Gateway || '—')}</td><td>${esc(n.MacAddress || '—')}</td></tr>`).join('');
     const env = (d.env || []).map((e) => `<tr><td class="mono">${esc(e.key)}</td><td class="mono">${esc(e.value)}</td></tr>`).join('');
+    const published = publishedTcpPorts(item);
+    const firefoxAction = published.length && item.state === 'running'
+      ? U.button({ label: 'Open in Firefox', icon: 'globe', size: 'sm', variant: 'secondary', attrs: `data-open-firefox="${published.join(',')}"` })
+      : '';
     U.drawer({
       title: d.name || item.name,
       subtitle: d.id,
@@ -586,7 +733,12 @@
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Network</th><th>IP</th><th>Gateway</th><th>MAC</th></tr></thead><tbody>${networks || '<tr><td colspan="4" class="muted">No networks.</td></tr>'}</tbody></table></div>
       <div class="section-head"><div><h2 class="section-title">Labels</h2></div></div>
       <div class="tag-row">${Object.entries(d.labels || {}).map(([k, v]) => `<span class="badge mono">${esc(k)}=${esc(v)}</span>`).join('') || '<span class="muted text-sm">No labels.</span>'}</div>`,
-      footer: `<div class="row gap-2">${learnLink(lesson?.id, 'Explain this container')}${U.button({ label: 'Copy inspect command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker inspect ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      footer: `<div class="row gap-2">${learnLink(lesson?.id, 'Explain this container')}${firefoxAction}${U.button({ label: 'Copy inspect command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker inspect ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      onMount: ({ root }) => {
+        root.querySelector('[data-open-firefox]')?.addEventListener('click', (event) => {
+          openContainerInFirefox(item, event.currentTarget.dataset.openFirefox);
+        });
+      },
     });
   }
 
@@ -1276,6 +1428,15 @@
             title: 'Appearance', icon: 'palette', sub: 'Dark is the default. Light mode is designed, not inverted.',
             body: `<div class="stack-3">
               <div><div class="rail-progress-label"><span>Theme</span></div><div class="filter-row">${themes.map(([v, label, ic]) => `<button type="button" class="chip ${(s.theme || 'dark') === v ? 'active' : ''}" data-theme-set="${v}">${icon(ic, 13)}${label}</button>`).join('')}</div></div>
+              <div>
+                <div class="rail-progress-label"><span>Interface scale</span><span class="mono text-xs" data-zoom-value>${Math.round((OD.store.state.zoomFactor || 1) * 100)}%</span></div>
+                <div class="row gap-2" style="align-items:center">
+                  <button type="button" class="btn btn-sm btn-secondary" data-action="zoom-out" title="Zoom out (Ctrl −)">${icon('zoom-out', 14)}<span>Smaller</span></button>
+                  <button type="button" class="btn btn-sm btn-secondary" data-action="zoom-in" title="Zoom in (Ctrl +)">${icon('zoom-in', 14)}<span>Larger</span></button>
+                  <button type="button" class="btn btn-sm btn-ghost" data-action="zoom-reset" title="Reset to 100% (Ctrl 0)">${icon('rotate-ccw', 13)}<span>Reset</span></button>
+                </div>
+                <div class="text-xs faint mt-2">Ctrl + / Ctrl − / Ctrl 0, or hold Ctrl and scroll. The scale is remembered between launches.</div>
+              </div>
               <label class="row gap-2" style="align-items:center"><input type="checkbox" id="set-motion" ${s.motion === 'reduced' ? 'checked' : ''} /> <span class="text-sm">Reduce motion</span></label>
               <label class="row gap-2" style="align-items:center"><input type="checkbox" id="set-transparency" ${s.reduceTransparency ? 'checked' : ''} /> <span class="text-sm">Reduce transparency and blur</span></label>
               <label class="row gap-2" style="align-items:center"><input type="checkbox" id="set-collapse" ${s.sidebarCollapsed ? 'checked' : ''} /> <span class="text-sm">Collapse the sidebar by default</span></label>
@@ -1370,6 +1531,7 @@
   function mountContainers(root) {
     const tbody = root.querySelector('#container-tbody');
     const search = root.querySelector('#container-search');
+    const projectSelect = root.querySelector('#container-project');
     const items = state.last.containers || [];
     const repaint = () => {
       if (!tbody) return;
@@ -1381,8 +1543,30 @@
       root.querySelectorAll('[data-cstate]').forEach((c) => c.classList.toggle('active', c === chip));
       repaint();
     }));
+    projectSelect?.addEventListener('change', () => {
+      state.containerFilter.project = projectSelect.value || 'all';
+      repaint();
+    });
+    root.querySelector('[data-container-group-toggle]')?.addEventListener('click', (event) => {
+      const button = event.currentTarget;
+      const grouped = state.containerFilter.grouped !== true;
+      state.containerFilter.grouped = grouped;
+      button.classList.toggle('btn-primary', grouped);
+      button.classList.toggle('btn-secondary', !grouped);
+      button.querySelector('span').textContent = grouped ? 'Grouped' : 'Group by project';
+      OD.store.setSetting('groupContainers', grouped).catch(() => {});
+      repaint();
+    });
 
     root.addEventListener('click', async (event) => {
+      const projectOnly = event.target.closest('[data-project-only]');
+      if (projectOnly) {
+        event.stopPropagation();
+        state.containerFilter.project = projectOnly.dataset.projectOnly;
+        if (projectSelect) projectSelect.value = state.containerFilter.project;
+        repaint();
+        return;
+      }
       const actionBtn = event.target.closest('[data-caction]');
       if (actionBtn) {
         event.stopPropagation();
@@ -1391,6 +1575,7 @@
         const action = actionBtn.dataset.caction;
         const item = items.find((x) => x.id === id) || { id, name, state: '' };
         if (action === 'exec') { showExec(item); return; }
+        if (action === 'firefox') { openContainerInFirefox(item, actionBtn.dataset.cports); return; }
         if (action === 'logs') { showLogs(item); return; }
         if (action === 'remove') {
           const ok = await U.confirm({ title: `Remove ${name}?`, message: 'The container and its writable layer are deleted. Named volumes are not removed unless you request it.', detail: `docker rm -f ${id}`, confirmLabel: 'Remove container', tone: 'red' });

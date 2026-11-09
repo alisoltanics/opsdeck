@@ -14,10 +14,15 @@ renderer. Docker commands go through `execFile('docker', ...)` — never a shell
 - Overview with engine health, live samples and reclaimable disk
 - Containers: state, ports, CPU/memory, logs, inspect, start/stop/restart/remove, and an
   in-app shell that streams a live `docker exec` session (bash with automatic sh fallback)
+- Project view for containers: filter by Compose project or group the table by project,
+  with running/service counts on every group
+- Open a container's published TCP address in Firefox straight from its row or inspect drawer
 - Images, volumes and networks with search, filters and safe destructive actions
 - Compose projects: resolved config, logs and lifecycle controls
 - Builds, registries, monitoring, event stream and a validated Docker terminal
-- Settings for theme, motion, transparency, daily goal and progress reset
+- Settings for theme, interface scale, motion, transparency, daily goal and progress reset
+- App-wide zoom from 50% to 250%: `Ctrl/Cmd +`, `Ctrl/Cmd −`, `Ctrl/Cmd 0`, `Ctrl/Cmd` + scroll,
+  the topbar control, Settings or the command palette; the factor persists between launches
 
 **Docker Academy**
 
@@ -163,8 +168,8 @@ reaches the Docker binary.
 
 Dark-first with a designed light theme, custom tokens and components, Inter and
 JetBrains Mono, a collapsible grouped sidebar, `Ctrl/Cmd+K` command palette,
-`Ctrl/Cmd+B` sidebar toggle, `Ctrl/Cmd+Shift+F` Academy search, keyboard navigation
-and reduced-motion support.
+`Ctrl/Cmd+B` sidebar toggle, `Ctrl/Cmd+Shift+F` Academy search, app-wide zoom
+(`Ctrl/Cmd +`, `−`, `0`), keyboard navigation and reduced-motion support.
 
 ## License
 

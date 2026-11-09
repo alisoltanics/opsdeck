@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     openExternal: (url) => invoke('app:open-external', url),
     copy: (text) => invoke('app:copy', text),
     relaunch: () => invoke('app:relaunch'),
+    openInFirefox: (url) => invoke('app:open-firefox', url),
   },
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
@@ -22,6 +23,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     close: () => ipcRenderer.send('window:close'),
     isMaximized: () => invoke('window:is-maximized'),
     state: () => invoke('window:state'),
+    zoom: (action, factor) => invoke('window:zoom', { action, factor }),
   },
   docker: {
     status: () => invoke('docker:status'),
@@ -81,5 +83,6 @@ contextBridge.exposeInMainWorld('opsdeck', {
     lab: (cb) => on('lab:event', cb),
     execData: (cb) => on('docker:exec-data', cb),
     execExit: (cb) => on('docker:exec-exit', cb),
+    zoom: (cb) => on('window:zoom-changed', cb),
   },
 });

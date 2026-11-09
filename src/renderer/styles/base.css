@@ -185,6 +185,23 @@ hr { border: 0; border-top: 1px solid var(--border); margin: var(--s-6) 0; }
 .breadcrumbs svg { color: var(--faint); flex: 0 0 12px; }
 .topbar-spacer { flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: 6px; }
+.zoom-control {
+  display: flex; align-items: center; gap: 1px;
+  height: 28px; padding: 1px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.zoom-control .icon-btn { width: 24px; height: 24px; border: 0; background: transparent; }
+.zoom-control .icon-btn:hover { background: var(--surface-3); }
+.zoom-value {
+  min-width: 44px; height: 24px; padding: 0 5px;
+  border: 0; border-radius: var(--r-xs);
+  background: transparent; color: var(--muted);
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  cursor: pointer;
+}
+.zoom-value:hover { background: var(--surface-3); color: var(--text); }
 .env-pill {
   display: inline-flex; align-items: center; gap: 6px;
   height: 28px; padding: 0 10px;

@@ -199,6 +199,7 @@
       document.getElementById('content').scrollTop = 0;
     }
     applyChrome();
+    paintZoom();
   }
 
   const rerender = debounce(() => { renderRoute({ scroll: false }); }, 20);
@@ -293,6 +294,11 @@
       </button>
       <div class="topbar-actions">
         <a class="env-pill ${ok ? '' : 'offline'}" href="#/terminal" title="${esc(ok ? `Engine ${status.serverVersion || ''}` : (status?.reason || 'Engine offline'))}"><span class="dot"></span>${ok ? 'Engine online' : 'Engine offline'}</a>
+        <div class="zoom-control" title="Interface scale — Ctrl + / Ctrl − / Ctrl 0">
+          <button type="button" class="icon-btn" data-action="zoom-out" aria-label="Zoom out">${icon('minus', 14)}</button>
+          <button type="button" class="zoom-value" data-action="zoom-reset" data-zoom-value aria-label="Reset zoom">${Math.round((store.state.zoomFactor || 1) * 100)}%</button>
+          <button type="button" class="icon-btn" data-action="zoom-in" aria-label="Zoom in">${icon('plus', 14)}</button>
+        </div>
         <button type="button" class="icon-btn" data-action="toggle-theme" title="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">${icon(theme === 'dark' ? 'sun' : 'moon', 15)}</button>
         <button type="button" class="icon-btn" data-action="toggle-sidebar" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">${icon('panel-left', 15)}</button>
         <a class="icon-btn" href="#/academy" title="Academy" aria-label="Academy">${icon('graduation-cap', 15)}</a>
@@ -316,6 +322,25 @@
 
   function refreshChrome() { applyChrome(); }
 
+  // ------------------------------------------------------------------ zoom
+
+  function applyZoomState(payload) {
+    if (!payload || !payload.ok) return;
+    store.state.zoomFactor = payload.factor || 1;
+    paintZoom();
+  }
+
+  function paintZoom() {
+    const percent = `${Math.round((store.state.zoomFactor || 1) * 100)}%`;
+    document.querySelectorAll('[data-zoom-value]').forEach((el) => { el.textContent = percent; });
+  }
+
+  async function changeZoom(action, factor) {
+    const res = await api.window.zoom(action, factor);
+    applyZoomState(res);
+    return res;
+  }
+
   // ------------------------------------------------------------------ command palette
 
   function paletteActions() {
@@ -336,6 +361,9 @@
       { title: 'Academy search', sub: 'Search every lesson, command and guide', type: 'Navigate', icon: 'search', href: '#/academy/search' },
       { title: 'Settings', sub: 'Appearance, goals and security', type: 'Navigate', icon: 'settings', href: '#/settings' },
       { title: `Switch to ${store.resolvedTheme() === 'dark' ? 'light' : 'dark'} theme`, sub: 'Change the interface appearance', type: 'Action', icon: store.resolvedTheme() === 'dark' ? 'sun' : 'moon', action: 'toggle-theme' },
+      { title: 'Zoom in', sub: 'Increase the interface scale  (Ctrl +)', type: 'Action', icon: 'zoom-in', action: 'zoom-in' },
+      { title: 'Zoom out', sub: 'Decrease the interface scale  (Ctrl −)', type: 'Action', icon: 'zoom-out', action: 'zoom-out' },
+      { title: 'Reset zoom', sub: 'Return the interface to 100%  (Ctrl 0)', type: 'Action', icon: 'rotate-ccw', action: 'zoom-reset' },
       { title: `${store.state.sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`, sub: 'More room for content', type: 'Action', icon: 'panel-left', action: 'toggle-sidebar' },
       { title: 'Check Docker engine', sub: 'Refresh connection status', type: 'Action', icon: 'refresh', action: 'retry-status' },
       { title: 'Reset Academy progress', sub: 'Open settings to reset local data', type: 'Navigate', icon: 'rotate-ccw', href: '#/settings' },
@@ -455,6 +483,13 @@
       await store.setSetting('sidebarCollapsed', !store.state.sidebarCollapsed);
       applySidebar();
       applyChrome();
+    } else if (action === 'zoom-in') {
+      await changeZoom('in');
+    } else if (action === 'zoom-out') {
+      await changeZoom('out');
+    } else if (action === 'zoom-reset') {
+      await changeZoom('reset');
+      U.toast('Interface scale reset', 'success', { description: 'Zoom is back to 100%.' });
     } else if (action === 'retry-status') {
       await store.refreshStatus();
       applyChrome();
@@ -507,7 +542,7 @@
       return;
     }
     const globalAction = event.target.closest('[data-action]');
-    if (globalAction && ['toggle-theme', 'toggle-sidebar', 'retry-status', 'retry-route', 'open-workspace'].includes(globalAction.dataset.action)) {
+    if (globalAction && ['toggle-theme', 'toggle-sidebar', 'zoom-in', 'zoom-out', 'zoom-reset', 'retry-status', 'retry-route', 'open-workspace'].includes(globalAction.dataset.action)) {
       event.preventDefault();
       runGlobalAction(globalAction.dataset.action);
       return;
@@ -590,6 +625,18 @@
       renderRoute();
     });
 
+    let lastWheelZoom = 0;
+    window.addEventListener('wheel', (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastWheelZoom < 90) return;
+      lastWheelZoom = now;
+      runGlobalAction(event.deltaY < 0 ? 'zoom-in' : 'zoom-out');
+    }, { passive: false });
+
+    api.events.zoom(applyZoomState);
+
     window.addEventListener('error', (event) => {
       if (!event?.message) return;
       U.toast('Renderer error', 'error', { description: String(event.message).slice(0, 180) });
@@ -629,6 +676,7 @@
     setupGlobalEvents();
     renderSidebar();
     renderTopbar();
+    api.window.zoom('get').then(applyZoomState).catch(() => {});
     try {
       await store.boot();
     } catch (error) {

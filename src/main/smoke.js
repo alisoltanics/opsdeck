@@ -140,6 +140,47 @@ function rendererScript(routes) {
     document.querySelector('[data-action="toggle-sidebar"]')?.click();
     await waitFor(() => app.dataset.collapsed === collapsedBefore, 2500);
 
+    // Zoom controls round-trip through the real IPC bridge.
+    const zoomStart = await window.opsdeck.window.zoom('get');
+    const zoomIn = await window.opsdeck.window.zoom('in');
+    if (!zoomIn?.ok || zoomIn.factor <= (zoomStart?.factor || 1)) failures.push('zoom: in did not increase the factor');
+    const zoomOut = await window.opsdeck.window.zoom('out');
+    if (!zoomOut?.ok || zoomOut.factor >= zoomIn.factor) failures.push('zoom: out did not decrease the factor');
+    const zoomReset = await window.opsdeck.window.zoom('reset');
+    if (!zoomReset?.ok || zoomReset.factor !== 1) failures.push('zoom: reset did not return to 100%');
+    const zoomRestore = await window.opsdeck.window.zoom('set', zoomStart?.factor || 1);
+    if (!zoomRestore?.ok || Math.abs(zoomRestore.factor - (zoomStart?.factor || 1)) > 0.01) failures.push('zoom: could not restore the original factor');
+
+    // Firefox hand-off is exercised only when a stub is on PATH.
+    if (${JSON.stringify(Boolean(process.env.OPSDECK_TEST_FIREFOX))}) {
+      const firefox = await window.opsdeck.app.openInFirefox('http://localhost:65535/opsdeck-smoke');
+      if (!firefox?.ok) failures.push('firefox: ' + (firefox?.error || 'could not spawn firefox'));
+    }
+
+    // Container projects: filter and grouping when compose projects exist.
+    location.hash = '#/containers';
+    await waitFor(() => !!document.querySelector('#container-tbody'), 8000);
+    const projectButton = document.querySelector('#container-tbody [data-project-only]');
+    if (projectButton) {
+      const project = projectButton.dataset.projectOnly;
+      projectButton.click();
+      const filter = document.querySelector('#container-project');
+      if (!filter || filter.value !== project) failures.push('projects: filter did not apply');
+      if (filter) {
+        filter.value = 'all';
+        filter.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+    const groupToggle = document.querySelector('[data-container-group-toggle]');
+    if (groupToggle) {
+      const groupedBefore = !!document.querySelector('.container-group-row');
+      groupToggle.click();
+      const changed = await waitFor(() => !!document.querySelector('.container-group-row') !== groupedBefore, 2000);
+      if (!changed) failures.push('projects: grouping toggle did nothing');
+      groupToggle.click();
+      await waitFor(() => !!document.querySelector('.container-group-row') === groupedBefore, 2000);
+    }
+
     // Container shell: open a real session when Docker has a running container.
     location.hash = '#/containers';
     await waitFor(() => !!document.querySelector('#container-tbody'), 8000);
