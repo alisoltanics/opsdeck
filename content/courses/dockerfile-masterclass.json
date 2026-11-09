@@ -1,0 +1,723 @@
+{
+  "id": "dockerfile-masterclass",
+  "order": 6,
+  "title": "Dockerfile Masterclass",
+  "subtitle": "From first instruction to production-grade image",
+  "level": "Intermediate",
+  "duration": "2h 30m",
+  "icon": "file-code",
+  "accent": "blue",
+  "description": "Learn to write Dockerfiles that are small, reproducible, secure and fast to rebuild. This is the highest-leverage skill in everyday Docker work.",
+  "outcomes": [
+    "Choose the right instruction for each layer",
+    "Use multi-stage builds to ship only runtime artifacts",
+    "Order layers and .dockerignore for effective caching",
+    "Harden images with non-root users and read-only patterns"
+  ],
+  "modules": [
+    {
+      "id": "dockerfile-basics",
+      "title": "Instructions and semantics",
+      "summary": "The grammar of a Dockerfile and the instructions that matter.",
+      "lessons": [
+        {
+          "id": "dockerfile-anatomy",
+          "title": "Dockerfile anatomy",
+          "duration": "12 min",
+          "summary": "Every instruction is a decision about layers, build context, or runtime defaults.",
+          "objectives": [
+            "Distinguish build-time from runtime instructions",
+            "Explain COPY vs ADD and RUN vs CMD",
+            "Write a minimal correct Dockerfile"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A recipe, executed top to bottom",
+              "body": "A Dockerfile is a sequence of instructions executed by the builder. Filesystem-changing instructions (`RUN`, `COPY`, `ADD`) create layers. Metadata instructions (`ENV`, `EXPOSE`, `LABEL`, `WORKDIR`, `USER`) update the image config. `FROM` starts a new build stage.\n\nOnly files in the **build context** can be copied. The context is sent to the builder, so a large context slows every build even if the file is not copied."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1\nFROM node:20-alpine\n\nWORKDIR /app\n\n# Dependencies first: this layer is cached until the lockfile changes\nCOPY package.json package-lock.json ./\nRUN npm ci --omit=dev\n\n# Application code second\nCOPY . .\n\nENV NODE_ENV=production\nEXPOSE 3000\nUSER node\nCMD [\"node\", \"server.js\"]",
+              "title": null,
+              "output": null,
+              "note": "The `# syntax` directive pins the Dockerfile frontend, enabling modern features consistently across engines."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Instruction",
+                "Phase",
+                "Creates layer"
+              ],
+              "rows": [
+                [
+                  "FROM",
+                  "Build",
+                  "Starts stage"
+                ],
+                [
+                  "RUN",
+                  "Build",
+                  "Yes"
+                ],
+                [
+                  "COPY / ADD",
+                  "Build",
+                  "Yes"
+                ],
+                [
+                  "ENV / ARG",
+                  "Build + runtime / build only",
+                  "No"
+                ],
+                [
+                  "WORKDIR",
+                  "Both",
+                  "No"
+                ],
+                [
+                  "USER",
+                  "Runtime",
+                  "No"
+                ],
+                [
+                  "CMD / ENTRYPOINT",
+                  "Runtime",
+                  "No"
+                ],
+                [
+                  "EXPOSE",
+                  "Documentation",
+                  "No"
+                ],
+                [
+                  "HEALTHCHECK",
+                  "Runtime",
+                  "No"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Prefer COPY over ADD",
+              "body": "ADD has extra behaviours (URLs, auto-extraction) that are surprising and bypass .dockerignore expectations. Use COPY unless you specifically need ADD."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Minimal Dockerfile",
+              "prompt": "Write a Dockerfile that runs a static file server using nginx:alpine and copies ./site into the web root.",
+              "command": null,
+              "expected": "FROM nginx:alpine; COPY site/ /usr/share/nginx/html/; EXPOSE 80.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Find the anti-pattern",
+              "prompt": "Explain why COPY . . before npm ci is bad for rebuild speed.",
+              "command": null,
+              "expected": "Any source change invalidates the dependency layer, forcing a full reinstall.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which instructions create filesystem layers?",
+                "options": [
+                  "ENV and EXPOSE",
+                  "RUN, COPY and ADD",
+                  "CMD and ENTRYPOINT",
+                  "WORKDIR and USER"
+                ],
+                "answer": 1,
+                "explain": "Only instructions that change the filesystem produce layers."
+              },
+              {
+                "question": "Why is build context size important?",
+                "options": [
+                  "It changes the base image",
+                  "The whole context is sent to the builder",
+                  "It increases image tags",
+                  "It disables caching"
+                ],
+                "answer": 1,
+                "explain": "A large context is transferred even if unused."
+              },
+              {
+                "question": "What does WORKDIR do?",
+                "options": [
+                  "Copies files",
+                  "Sets the working directory for following instructions and runtime",
+                  "Creates a volume",
+                  "Changes the base image"
+                ],
+                "answer": 1,
+                "explain": "It is both a build and runtime setting."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "layer-caching",
+            "multi-stage-builds",
+            "production-dockerfile"
+          ],
+          "tags": [
+            "dockerfile",
+            "build"
+          ],
+          "commands": [
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "Dockerfile reference",
+              "url": "https://docs.docker.com/reference/dockerfile/"
+            },
+            {
+              "title": "Building images",
+              "url": "https://docs.docker.com/get-started/docker-concepts/building-images/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "entrypoint-vs-cmd",
+          "title": "ENTRYPOINT vs CMD",
+          "duration": "10 min",
+          "summary": "The two runtime instructions, exec form vs shell form, and how arguments flow.",
+          "objectives": [
+            "Predict what runs for every combination of ENTRYPOINT and CMD",
+            "Use exec form for correct signal handling",
+            "Override defaults without rebuilding"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Defaults versus the executable",
+              "body": "`ENTRYPOINT` sets the executable. `CMD` sets default arguments (or the whole command if there is no ENTRYPOINT). `docker run image arg` replaces CMD but keeps ENTRYPOINT. That is the contract that makes images configurable without a rebuild.\n\nUse **exec form** (`[\"node\",\"server.js\"]`) so the process is PID 1 and receives signals directly. Shell form (`node server.js`) wraps the command in `/bin/sh -c`; the shell becomes PID 1 and may not forward SIGTERM."
+            },
+            {
+              "type": "table",
+              "head": [
+                "ENTRYPOINT",
+                "CMD",
+                "Result"
+              ],
+              "rows": [
+                [
+                  "[\"nginx\",\"-g\",\"daemon off;\"]",
+                  "none",
+                  "nginx -g daemon off;"
+                ],
+                [
+                  "[\"node\"]",
+                  "[\"server.js\"]",
+                  "node server.js"
+                ],
+                [
+                  "none",
+                  "[\"node\",\"server.js\"]",
+                  "node server.js"
+                ],
+                [
+                  "[\"node\"]",
+                  "[\"server.js\"]",
+                  "docker run img worker.js → node worker.js"
+                ]
+              ]
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "FROM node:20-alpine\nWORKDIR /app\nCOPY . .\n# Exec form: node is PID 1 and receives SIGTERM\nENTRYPOINT [\"node\"]\nCMD [\"server.js\"]",
+              "title": null,
+              "output": null,
+              "note": "Now `docker run IMAGE worker.js` runs the worker without changing the image."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Do not use shell form for services",
+              "body": "Shell form hides signal handling behind /bin/sh. If you need shell features at startup, use an entrypoint script that ends with `exec \"$@\"`."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Fix the signals",
+              "prompt": "Rewrite CMD node server.js in exec form.",
+              "command": null,
+              "expected": "CMD [\"node\", \"server.js\"]",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Entrypoint script",
+              "prompt": "Write the final line of an entrypoint script that preserves signal handling.",
+              "command": null,
+              "expected": "exec \"$@\"",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What happens to CMD when you pass arguments to docker run?",
+                "options": [
+                  "It is appended",
+                  "It is replaced",
+                  "It is ignored only with -it",
+                  "It becomes an env var"
+                ],
+                "answer": 1,
+                "explain": "Runtime arguments replace CMD, not ENTRYPOINT."
+              },
+              {
+                "question": "Which form gives PID 1 signal handling?",
+                "options": [
+                  "Shell form",
+                  "Exec form",
+                  "Both are identical",
+                  "Only with --init"
+                ],
+                "answer": 1,
+                "explain": "Exec form runs the binary directly."
+              },
+              {
+                "question": "How do you make a reusable base image that accepts a command?",
+                "options": [
+                  "Set CMD only",
+                  "Set ENTRYPOINT to the binary and CMD to defaults",
+                  "Use RUN",
+                  "Use ADD"
+                ],
+                "answer": 1,
+                "explain": "ENTRYPOINT + CMD is the standard contract."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "dockerfile-anatomy",
+            "production-dockerfile"
+          ],
+          "tags": [
+            "dockerfile",
+            "runtime"
+          ],
+          "commands": [
+            "docker run"
+          ],
+          "sources": [
+            {
+              "title": "ENTRYPOINT",
+              "url": "https://docs.docker.com/reference/dockerfile/#entrypoint"
+            },
+            {
+              "title": "CMD",
+              "url": "https://docs.docker.com/reference/dockerfile/#cmd"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "multi-stage-builds",
+          "title": "Multi-stage builds",
+          "duration": "12 min",
+          "summary": "Build with a full toolchain, ship only the artifact. The single biggest image-size win.",
+          "objectives": [
+            "Separate build and runtime stages",
+            "Copy artifacts with COPY --from",
+            "Use stage targeting for development"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Stages are named build environments",
+              "body": "Each `FROM ... AS name` starts a stage. Only the final stage becomes the image. Files can be copied from earlier stages with `COPY --from=name`. Build tools, caches, source and test dependencies stay behind.\n\nThis works for compiled languages, but also for Node: install dev dependencies and build, then copy `dist` and production `node_modules` into a slim runtime stage."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1\nFROM node:20-alpine AS deps\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\n\nFROM deps AS build\nCOPY . .\nRUN npm run build && npm prune --omit=dev\n\nFROM node:20-alpine AS runtime\nENV NODE_ENV=production\nWORKDIR /app\nCOPY --from=build /app/node_modules ./node_modules\nCOPY --from=build /app/dist ./dist\nCOPY package.json ./\nUSER node\nEXPOSE 3000\nCMD [\"node\", \"dist/server.js\"]",
+              "title": null,
+              "output": null,
+              "note": "The runtime stage contains no source, dev dependencies, or build cache."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Build only a specific stage for debugging\ndocker build --target build -t app:debug .\n\n# Compare sizes\ndocker image ls app",
+              "title": null,
+              "output": "app   debug    ...   1.12GB\napp   latest   ...   184MB",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Use --target in development",
+              "body": "A `dev` stage can include hot reload and test tools while CI builds the minimal runtime stage. One Dockerfile, different targets."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Go multi-stage",
+              "prompt": "Convert a single-stage Go build into builder + scratch runtime.",
+              "command": null,
+              "expected": "Builder stage uses golang and builds a static binary; runtime FROM scratch or distroless, COPY --from=builder the binary.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Debug stage",
+              "prompt": "Build only the deps stage of a Dockerfile.",
+              "command": "docker build --target deps -t app:deps .",
+              "expected": "docker build --target deps -t app:deps .",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which stage becomes the final image?",
+                "options": [
+                  "The first",
+                  "The last",
+                  "Every stage",
+                  "The one named runtime"
+                ],
+                "answer": 1,
+                "explain": "Unless --target is used, the final stage is the output."
+              },
+              {
+                "question": "How do you copy a build artifact?",
+                "options": [
+                  "COPY --from=build /app/dist ./dist",
+                  "ADD build:/app",
+                  "RUN cp",
+                  "VOLUME"
+                ],
+                "answer": 0,
+                "explain": "COPY --from references a previous stage."
+              },
+              {
+                "question": "What is --target used for?",
+                "options": [
+                  "Choosing a registry",
+                  "Stopping the build at a named stage",
+                  "Setting the platform",
+                  "Cleaning cache"
+                ],
+                "answer": 1,
+                "explain": "It builds up to the named stage."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "dockerfile-anatomy",
+            "production-dockerfile",
+            "multi-platform-bake"
+          ],
+          "tags": [
+            "dockerfile",
+            "optimization"
+          ],
+          "commands": [
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "Multi-stage builds",
+              "url": "https://docs.docker.com/build/building/multi-stage/"
+            },
+            {
+              "title": "COPY",
+              "url": "https://docs.docker.com/reference/dockerfile/#copy"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "layer-caching",
+          "title": "Layer caching and .dockerignore",
+          "duration": "11 min",
+          "summary": "Why the same Dockerfile rebuilds in two seconds for one person and two minutes for another.",
+          "objectives": [
+            "Order instructions for cache hits",
+            "Use .dockerignore to shrink context",
+            "Diagnose cache invalidation"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Cache keys",
+              "body": "The builder caches each layer keyed by the parent layer, the instruction, and the input files. If the parent or input changes, that layer and every later layer miss. This is why dependency manifests are copied before source code: source changes should not invalidate dependency installation.\n\nFor `COPY`, the cache key includes file metadata and content. A changed lockfile correctly invalidates `npm ci`. A changed README should not invalidate it if the README is excluded or copied later."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN --mount=type=cache,target=/root/.npm npm ci\nCOPY . .\nRUN npm run build",
+              "title": null,
+              "output": null,
+              "note": "BuildKit cache mounts keep the package manager cache between builds without baking it into a layer."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# .dockerignore\nnode_modules\n.git\n.env\ndist\ncoverage\n*.log",
+              "title": null,
+              "output": null,
+              "note": "Excluding node_modules is critical: the host copy can shadow the container install and is often platform-specific."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "A cache hit is not always correct",
+              "body": "If a build depends on a remote URL or unpinned package version, the cache may hide an update. Use `--no-cache` for deliberate refreshes and pin versions for reproducibility."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Reorder for speed",
+              "prompt": "Put npm ci before COPY . . and explain the cache effect.",
+              "command": null,
+              "expected": "Source edits no longer reinstall dependencies.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Shrink context",
+              "prompt": "Write a .dockerignore for a Node project that excludes node_modules, .git, .env, dist and logs.",
+              "command": null,
+              "expected": "List each pattern on its own line.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why copy package.json before the source?",
+                "options": [
+                  "To reduce image size",
+                  "To keep dependency layers cached when source changes",
+                  "To set permissions",
+                  "To enable BuildKit"
+                ],
+                "answer": 1,
+                "explain": "Only changed layers and their descendants are rebuilt."
+              },
+              {
+                "question": "What does .dockerignore affect?",
+                "options": [
+                  "Runtime file access",
+                  "The build context sent to the builder",
+                  "Registry pushes",
+                  "Container networking"
+                ],
+                "answer": 1,
+                "explain": "It filters the build context."
+              },
+              {
+                "question": "Which flag forces a full rebuild?",
+                "options": [
+                  "--pull",
+                  "--no-cache",
+                  "--force",
+                  "--fresh"
+                ],
+                "answer": 1,
+                "explain": "--no-cache bypasses the build cache."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "dockerfile-anatomy",
+            "build-cache",
+            "multi-stage-builds"
+          ],
+          "tags": [
+            "dockerfile",
+            "performance"
+          ],
+          "commands": [
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "Build cache",
+              "url": "https://docs.docker.com/build/cache/"
+            },
+            {
+              "title": ".dockerignore",
+              "url": "https://docs.docker.com/build/building/context/#dockerignore-files"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "production-dockerfile",
+          "title": "Production Dockerfile patterns",
+          "duration": "12 min",
+          "summary": "Non-root, pinned bases, health checks, labels and a build that fails closed.",
+          "objectives": [
+            "Harden the runtime user and filesystem",
+            "Pin and document the base image",
+            "Add health checks and OCI labels"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Production checklist",
+              "body": "A production image should run as a non-root user, use a minimal pinned base, avoid build tools, handle signals, expose only what is needed, and carry provenance labels. Add a health check so orchestrators can distinguish \"process alive\" from \"service ready\"."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1.7\nFROM node:20.18-alpine3.20 AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN --mount=type=cache,target=/root/.npm npm ci\nCOPY . .\nRUN npm run build && npm prune --omit=dev\n\nFROM node:20.18-alpine3.20\nLABEL org.opencontainers.image.title=\"acme/api\" \\\n      org.opencontainers.image.source=\"https://github.com/acme/api\" \\\n      org.opencontainers.image.version=\"1.4.0\"\nENV NODE_ENV=production\nWORKDIR /app\nCOPY --from=build --chown=node:node /app/node_modules ./node_modules\nCOPY --from=build --chown=node:node /app/dist ./dist\nCOPY --chown=node:node package.json ./\nUSER node\nEXPOSE 3000\nHEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \\\n  CMD node -e \"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"\nCMD [\"node\", \"dist/server.js\"]",
+              "title": null,
+              "output": null,
+              "note": "Use distroless or scratch equivalents where possible. Alpine is shown for familiarity, not as a universal best choice."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Concern",
+                "Pattern"
+              ],
+              "rows": [
+                [
+                  "User",
+                  "USER node / numeric UID"
+                ],
+                [
+                  "Filesystem",
+                  "Read-only root + tmpfs for writable paths"
+                ],
+                [
+                  "Base image",
+                  "Pin version and digest in regulated environments"
+                ],
+                [
+                  "Build tools",
+                  "Keep them in a builder stage only"
+                ],
+                [
+                  "Secrets",
+                  "BuildKit secret mounts; never ARG or COPY .env"
+                ],
+                [
+                  "Provenance",
+                  "OCI labels + signed images"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Never bake secrets into layers",
+              "body": "Anything in a layer can be extracted even if deleted in a later layer. BuildKit `--mount=type=secret` keeps secrets out of history."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Harden it",
+              "prompt": "Add a non-root user and HEALTHCHECK to a Node Dockerfile.",
+              "command": null,
+              "expected": "Create/use an existing user, set USER, add a HEALTHCHECK command that exits non-zero on failure.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Secret mount",
+              "prompt": "Write a RUN using a BuildKit secret named npmrc.",
+              "command": "docker build --secret id=npmrc,src=$HOME/.npmrc .",
+              "expected": "RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which user should a production process run as?",
+                "options": [
+                  "root",
+                  "A non-root user",
+                  "Nobody only during build",
+                  "It does not matter"
+                ],
+                "answer": 1,
+                "explain": "Non-root limits the blast radius of a compromise."
+              },
+              {
+                "question": "How do you use a secret during build without persisting it?",
+                "options": [
+                  "ARG SECRET",
+                  "ENV SECRET",
+                  "RUN --mount=type=secret",
+                  "COPY .env"
+                ],
+                "answer": 2,
+                "explain": "BuildKit secret mounts are not stored in layers."
+              },
+              {
+                "question": "What does a HEALTHCHECK enable?",
+                "options": [
+                  "Faster builds",
+                  "Readiness/liveness decisions by the runtime",
+                  "Smaller images",
+                  "Automatic TLS"
+                ],
+                "answer": 1,
+                "explain": "It lets Docker and orchestrators detect unhealthy containers."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "multi-stage-builds",
+            "container-security",
+            "secrets-management"
+          ],
+          "tags": [
+            "dockerfile",
+            "security",
+            "production"
+          ],
+          "commands": [
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "Best practices for Dockerfiles",
+              "url": "https://docs.docker.com/build/building/best-practices/"
+            },
+            {
+              "title": "Build secrets",
+              "url": "https://docs.docker.com/build/building/secrets/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-images"
+  ]
+}

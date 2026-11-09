@@ -1,0 +1,710 @@
+{
+  "id": "docker-fundamentals",
+  "order": 1,
+  "title": "Docker Fundamentals",
+  "subtitle": "The mental model behind containers, images and registries",
+  "level": "Beginner",
+  "duration": "2h 05m",
+  "icon": "box",
+  "accent": "blue",
+  "description": "Start from zero and build a durable understanding of what Docker is, why it exists, and how images, containers and registries fit together. Every later course builds on these ideas.",
+  "outcomes": [
+    "Explain the difference between a container and a virtual machine",
+    "Install and verify Docker Engine and Compose",
+    "Describe the image → container → registry relationship",
+    "Run, inspect and remove your first containers confidently"
+  ],
+  "modules": [
+    {
+      "id": "fundamentals-model",
+      "title": "The container model",
+      "summary": "Why containers exist and the three objects you use every day.",
+      "lessons": [
+        {
+          "id": "what-is-docker",
+          "title": "What Docker actually is",
+          "duration": "9 min",
+          "summary": "Docker is packaging plus isolation: a portable filesystem and process model that runs the same way on your laptop and in production.",
+          "objectives": [
+            "Define a container without marketing language",
+            "Compare containers with virtual machines",
+            "Identify the three core Docker objects"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A container is an isolated process",
+              "body": "A container is not a tiny virtual machine. It is one or more Linux processes running on the host kernel, isolated with namespaces and constrained with cgroups. What makes it feel like a machine is the filesystem: the container sees its own root filesystem, built from an image.\n\nThat distinction explains most container behaviour. Containers start in milliseconds because no operating system boots. They share the host kernel, so a Linux container cannot run on a Windows kernel without a Linux VM underneath. And when the main process exits, the container exits — there is no init system by default keeping it alive."
+            },
+            {
+              "type": "diagram",
+              "diagram": "docker-architecture",
+              "caption": "The Docker client talks to a daemon, which uses containerd and runc to start isolated processes."
+            },
+            {
+              "type": "text",
+              "title": "Images, containers and registries",
+              "body": "An **image** is an immutable, layered filesystem plus metadata such as the default command, environment and exposed ports. A **container** is a running (or stopped) instance of an image with a thin writable layer on top. A **registry** stores and distributes images by name and digest.\n\nThe relationship is one-directional: you build or pull an image, then create containers from it. Changes inside a container do not modify the image. To keep changes, commit them or — far better — update the Dockerfile and rebuild."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Object",
+                "What it is",
+                "Lifetime"
+              ],
+              "rows": [
+                [
+                  "Image",
+                  "Immutable layered filesystem + config",
+                  "Until deleted or replaced"
+                ],
+                [
+                  "Container",
+                  "An isolated process + writable layer",
+                  "Until removed (stopped containers persist)"
+                ],
+                [
+                  "Volume",
+                  "Persistent storage managed by Docker",
+                  "Until removed explicitly"
+                ],
+                [
+                  "Registry",
+                  "Remote image distribution service",
+                  "External service"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "The one-sentence version",
+              "body": "Docker gives a process a private filesystem and a predictable environment, then ships that filesystem as a versioned artifact you can run anywhere the engine runs."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Explain it back",
+              "prompt": "In two sentences, explain why two containers can run different Node.js versions on the same host without conflict.",
+              "command": null,
+              "expected": "Each image carries its own filesystem, including its own Node.js binary; the host kernel is shared but userland is not.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Identify the objects",
+              "prompt": "You run `docker run -d nginx`. Name the image, the container, and where the image came from.",
+              "command": "docker run -d --name demo-nginx nginx:alpine",
+              "expected": "Image: nginx:latest. Container: a new instance with a writable layer. Source: Docker Hub registry unless cached locally.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the main difference between a container and a VM?",
+                "options": [
+                  "Containers share the host kernel; VMs run a full guest OS",
+                  "Containers cannot run Linux software",
+                  "VMs start faster than containers",
+                  "Containers require a hypervisor"
+                ],
+                "answer": 0,
+                "explain": "Containers are isolated processes on the host kernel. VMs boot an entire guest operating system."
+              },
+              {
+                "question": "Which object is immutable?",
+                "options": [
+                  "A running container",
+                  "An image",
+                  "A container writable layer",
+                  "A process"
+                ],
+                "answer": 1,
+                "explain": "Images are immutable. Containers add a writable layer on top."
+              },
+              {
+                "question": "A container stops when…",
+                "options": [
+                  "The Docker daemon restarts",
+                  "Its main process exits",
+                  "You close the terminal",
+                  "It runs out of layers"
+                ],
+                "answer": 1,
+                "explain": "The container lifecycle is tied to PID 1 inside the container."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "install-and-verify",
+            "images-containers-registries"
+          ],
+          "tags": [
+            "concepts",
+            "architecture"
+          ],
+          "commands": [
+            "docker run",
+            "docker ps"
+          ],
+          "sources": [
+            {
+              "title": "Docker overview",
+              "url": "https://docs.docker.com/get-started/overview/"
+            },
+            {
+              "title": "What is a container?",
+              "url": "https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "install-and-verify",
+          "title": "Install and verify Docker",
+          "duration": "10 min",
+          "summary": "A working engine, a working Compose plugin, and the five commands that prove your installation is healthy.",
+          "objectives": [
+            "Check that the client and daemon are both reachable",
+            "Read the output of docker version and docker info",
+            "Recognise the most common Linux permission problem"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Client and daemon are two programs",
+              "body": "`docker version` reports both halves of the system. The **Client** section is the CLI you just ran. The **Server** section is the daemon. If the client prints but the server section errors, Docker is installed but the engine is not running or your user cannot reach it."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker version\ndocker info\ndocker compose version\ndocker run --rm hello-world",
+              "title": null,
+              "output": "Client: Docker Engine 29.x\nServer: Docker Engine 29.x\nDocker Compose version v5.x\n\nHello from Docker!\nThis message shows that your installation appears to be working correctly.",
+              "note": "`hello-world` is the smallest useful smoke test: it pulls an image, creates a container, runs it, and exits."
+            },
+            {
+              "type": "text",
+              "title": "The permission problem",
+              "body": "On Linux the daemon listens on a Unix socket owned by root. Adding your user to the `docker` group grants effective root-equivalent access:\n\n```bash\nsudo usermod -aG docker $USER\n```\n\nLog out and back in for the group change to apply. Treat docker-group membership as root access — it is not a sandbox boundary. For stronger isolation, use rootless mode."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Never expose the daemon over unauthenticated TCP",
+              "body": "A plain `tcp://0.0.0.0:2375` endpoint gives anyone who can reach it full control of the host. Use SSH contexts or mutual TLS instead."
+            },
+            {
+              "type": "steps",
+              "items": [
+                {
+                  "title": "Verify the engine",
+                  "body": "Run `docker info` and confirm the Server Version and Storage Driver are populated."
+                },
+                {
+                  "title": "Verify Compose",
+                  "body": "Run `docker compose version`. Compose v2 is a plugin: `docker compose`, not `docker-compose`."
+                },
+                {
+                  "title": "Run a smoke test",
+                  "body": "Run `docker run --rm hello-world` and confirm the exit message."
+                }
+              ]
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Health check",
+              "prompt": "Run the three commands that prove client, daemon and Compose are healthy.",
+              "command": "docker version && docker info --format \"{{.ServerVersion}}\" && docker compose version",
+              "expected": "docker version, docker info, docker compose version all return server/plugin details.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Smoke test",
+              "prompt": "Run hello-world without leaving a stopped container behind.",
+              "command": "docker run --rm hello-world",
+              "expected": "The container runs and is removed automatically.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "docker version shows a Client section but the Server section fails. What is the most likely cause?",
+                "options": [
+                  "The CLI is outdated",
+                  "The daemon is not running or is not reachable",
+                  "The image is missing",
+                  "Compose is not installed"
+                ],
+                "answer": 1,
+                "explain": "The CLI and daemon are separate; a missing Server section means the client cannot reach the engine."
+              },
+              {
+                "question": "What does adding a user to the docker group effectively grant?",
+                "options": [
+                  "Read-only access to images",
+                  "Root-equivalent control of the host",
+                  "Network isolation",
+                  "A separate kernel"
+                ],
+                "answer": 1,
+                "explain": "The daemon can mount host paths and start privileged containers, so socket access is root-equivalent."
+              },
+              {
+                "question": "Which command proves Compose v2 is installed?",
+                "options": [
+                  "docker-compose --version",
+                  "docker compose version",
+                  "docker version --compose",
+                  "docker plugin ls"
+                ],
+                "answer": 1,
+                "explain": "Compose v2 is invoked as a Docker CLI plugin: `docker compose version`."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "client-server-architecture",
+            "first-container"
+          ],
+          "tags": [
+            "setup",
+            "cli"
+          ],
+          "commands": [
+            "docker version",
+            "docker info",
+            "docker compose version"
+          ],
+          "sources": [
+            {
+              "title": "Install Docker Engine",
+              "url": "https://docs.docker.com/engine/install/"
+            },
+            {
+              "title": "Linux post-installation steps",
+              "url": "https://docs.docker.com/engine/install/linux-postinstall/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "images-containers-registries",
+          "title": "Images, containers and registries",
+          "duration": "10 min",
+          "summary": "How a name becomes a running process: tags, digests, pulls and the local image store.",
+          "objectives": [
+            "Read an image reference such as nginx:1.27-alpine",
+            "Explain tags versus digests",
+            "Trace the pull → create → run path"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Anatomy of an image reference",
+              "body": "A reference has up to four parts: `registry/repository:tag`. `nginx:1.27-alpine` uses Docker Hub, the official `nginx` repository and the `1.27-alpine` tag. `ghcr.io/acme/api:v2` uses the GitHub Container Registry. When the registry is omitted, Docker Hub is assumed.\n\nA **tag** is a mutable pointer. A **digest** (`sha256:…`) is the immutable content identity. Production systems should pin digests when reproducibility matters, or at minimum use specific version tags rather than `latest`."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker pull nginx:1.27-alpine\ndocker image ls nginx\ndocker image inspect nginx:1.27-alpine --format '{{.RepoDigests}}'\ndocker run -d --name web -p 8080:80 nginx:1.27-alpine\ndocker ps\ndocker stop web && docker rm web",
+              "title": null,
+              "output": "REPOSITORY   TAG            IMAGE ID       SIZE\nnginx        1.27-alpine    a1b2c3d4e5f6   48.2MB\n[nginx@sha256:9f1e...]",
+              "note": null
+            },
+            {
+              "type": "diagram",
+              "diagram": "image-layers",
+              "caption": "Each Dockerfile instruction that changes the filesystem adds a layer. Layers are shared between images."
+            },
+            {
+              "type": "text",
+              "title": "Pull is not always a download",
+              "body": "If the image and all layers already exist locally, `docker run` skips the pull. When layers are shared, only missing layers are downloaded. The writable container layer is always new and is deleted with the container unless you use a volume."
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "Images are content-addressed",
+              "body": "The same layer is stored once even if ten images reference it. That is why `docker system df` can show a large shared size and a smaller unique size."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Read the reference",
+              "prompt": "Decompose `registry.example.com/team/api:2.4.1` into registry, repository, and tag.",
+              "command": null,
+              "expected": "registry.example.com / team/api / 2.4.1",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Pin a digest",
+              "prompt": "Inspect nginx:1.27-alpine and copy its RepoDigest.",
+              "command": "docker image inspect nginx:1.27-alpine --format '{{index .RepoDigests 0}}'",
+              "expected": "The inspect output includes a RepoDigests entry with an immutable sha256 digest.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "In ghcr.io/acme/api:v2, what is the registry?",
+                "options": [
+                  "acme",
+                  "api",
+                  "ghcr.io",
+                  "v2"
+                ],
+                "answer": 2,
+                "explain": "The first component is the registry host when it contains a dot."
+              },
+              {
+                "question": "Which identifier is immutable?",
+                "options": [
+                  "A tag",
+                  "A digest",
+                  "A repository name",
+                  "latest"
+                ],
+                "answer": 1,
+                "explain": "Tags can be moved; a digest identifies exact content."
+              },
+              {
+                "question": "When you delete a container, what happens to its writable layer?",
+                "options": [
+                  "It becomes a new image",
+                  "It is removed with the container",
+                  "It is stored in the registry",
+                  "It moves to a volume automatically"
+                ],
+                "answer": 1,
+                "explain": "The writable layer belongs to the container and is deleted with it. Use volumes for persistence."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "image-anatomy",
+            "docker-workflow"
+          ],
+          "tags": [
+            "images",
+            "registries"
+          ],
+          "commands": [
+            "docker pull",
+            "docker image ls",
+            "docker image inspect"
+          ],
+          "sources": [
+            {
+              "title": "Image reference",
+              "url": "https://docs.docker.com/reference/cli/docker/image/"
+            },
+            {
+              "title": "Docker Hub",
+              "url": "https://docs.docker.com/docker-hub/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "docker-workflow",
+          "title": "The build → ship → run workflow",
+          "duration": "9 min",
+          "summary": "The loop you will repeat for the rest of your career, from a Dockerfile in your editor to a running service.",
+          "objectives": [
+            "Describe the build, ship and run phases",
+            "Know which artifact moves between environments",
+            "Avoid rebuilding for every environment"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Build once, run everywhere",
+              "body": "The canonical workflow has three phases. **Build** turns a Dockerfile and build context into an image. **Ship** pushes that image to a registry. **Run** pulls the exact image and starts containers wherever it is needed.\n\nThe important discipline is that the same image moves through environments. Configuration — database URLs, feature flags, secrets — is injected at runtime as environment variables, mounted files or secret objects. Rebuilding for staging versus production destroys the guarantee you are testing the artifact you will deploy."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# 1. Build\ndocker build -t acme/api:1.4.0 .\n\n# 2. Ship (tag + push)\ndocker tag acme/api:1.4.0 registry.example.com/team/api:1.4.0\ndocker push registry.example.com/team/api:1.4.0\n\n# 3. Run\ndocker run -d --name api \\\n  -p 3000:3000 \\\n  -e NODE_ENV=production \\\n  -e DATABASE_URL=postgres://db:5432/app \\\n  registry.example.com/team/api:1.4.0",
+              "title": null,
+              "output": null,
+              "note": "In Compose the same phases are `docker compose build`, `docker compose push`, and `docker compose up -d`."
+            },
+            {
+              "type": "diagram",
+              "diagram": "delivery-flow",
+              "caption": "A registry is the hand-off point between build systems and runtime environments."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Environment parity",
+              "body": "Use the same base image family across development and production. Alpine in production and Debian locally is a common source of subtle native-module differences."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Map the phases",
+              "prompt": "For `docker compose up -d --build`, identify the build, ship and run parts.",
+              "command": null,
+              "expected": "Build: --build. Ship: pull/push happens separately; Compose pulls missing images. Run: up -d creates containers.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Write the loop",
+              "prompt": "Write the three commands that build, push, and run an image named app:v1 in a registry.",
+              "command": null,
+              "expected": "docker build -t REGISTRY/app:v1 . ; docker push REGISTRY/app:v1 ; docker run -d REGISTRY/app:v1",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What should move from staging to production?",
+                "options": [
+                  "The Dockerfile",
+                  "The built image",
+                  "The source tree",
+                  "The build cache"
+                ],
+                "answer": 1,
+                "explain": "Deploy the identical image; configuration is injected at runtime."
+              },
+              {
+                "question": "Which phase publishes an image?",
+                "options": [
+                  "Build",
+                  "Ship",
+                  "Run",
+                  "Prune"
+                ],
+                "answer": 1,
+                "explain": "Shipping means tagging and pushing to a registry."
+              },
+              {
+                "question": "Where should database passwords live?",
+                "options": [
+                  "Baked into the image",
+                  "In a build argument",
+                  "Injected at runtime as secrets",
+                  "In the image tag"
+                ],
+                "answer": 2,
+                "explain": "Secrets must never be in layers or build arguments that persist in image history."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "first-container",
+            "image-anatomy",
+            "compose-services"
+          ],
+          "tags": [
+            "workflow",
+            "registry"
+          ],
+          "commands": [
+            "docker build",
+            "docker push",
+            "docker run"
+          ],
+          "sources": [
+            {
+              "title": "Docker concepts",
+              "url": "https://docs.docker.com/get-started/docker-concepts/the-basics/"
+            },
+            {
+              "title": "Build, tag and publish",
+              "url": "https://docs.docker.com/get-started/workshop/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "first-container",
+          "title": "Lab: your first container",
+          "duration": "14 min",
+          "summary": "Run nginx, read its logs, exec into it, publish a port, and clean up without leaving a mess.",
+          "objectives": [
+            "Run a detached container with a name and port mapping",
+            "Read logs and execute a command inside a container",
+            "Remove containers and images deliberately"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The exercise",
+              "body": "You will start an nginx web server, verify it over HTTP, inspect its logs, open a shell inside it, then remove everything. Use the integrated lab when Docker is available; the commands are identical to a normal terminal."
+            },
+            {
+              "type": "steps",
+              "items": [
+                {
+                  "title": "Start the server",
+                  "body": "Run nginx detached, give it the name `ops-web`, and publish host port 8080 to container port 80."
+                },
+                {
+                  "title": "Verify",
+                  "body": "Request http://localhost:8080 and confirm the default nginx welcome page."
+                },
+                {
+                  "title": "Observe",
+                  "body": "Read the last 50 log lines. Then run `hostname` inside the container."
+                },
+                {
+                  "title": "Clean up",
+                  "body": "Stop and remove the container, then remove the image if it is not needed."
+                }
+              ]
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name ops-web -p 8080:80 nginx:alpine\ncurl -I http://localhost:8080\ndocker logs --tail 50 ops-web\ndocker exec -it ops-web hostname\ndocker stop ops-web\ndocker rm ops-web",
+              "title": null,
+              "output": "HTTP/1.1 200 OK\nServer: nginx/1.27.x\n...\n3f9c2a1b7d4e",
+              "note": "`docker exec` starts a second process in the container namespace. `hostname` returns the container id prefix by default."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Stop is not remove",
+              "body": "A stopped container still exists and still holds its writable layer, name and port reservation. `docker ps` hides it; `docker ps -a` shows it. Remove with `docker rm` when finished."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Publish on loopback only",
+              "prompt": "Start nginx so it is reachable on 127.0.0.1:8088, not on every interface.",
+              "command": "docker run -d --name ops-web-local -p 127.0.0.1:8088:80 nginx:alpine",
+              "expected": "The port binding is restricted to loopback.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Find the PID",
+              "prompt": "Use inspect to find the host PID of the container main process.",
+              "command": "docker inspect ops-web --format '{{.State.Pid}}'",
+              "expected": "State.Pid in docker inspect output.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does -p 8080:80 mean?",
+                "options": [
+                  "Container port 8080 maps to host 80",
+                  "Host port 8080 maps to container port 80",
+                  "Two containers share port 8080",
+                  "The container listens on 8080 only"
+                ],
+                "answer": 1,
+                "explain": "The syntax is HOST:CONTAINER."
+              },
+              {
+                "question": "Which command opens an interactive shell in a running container?",
+                "options": [
+                  "docker run -it",
+                  "docker exec -it",
+                  "docker attach",
+                  "docker logs -f"
+                ],
+                "answer": 1,
+                "explain": "`docker exec` starts an additional process in a running container."
+              },
+              {
+                "question": "Why does docker ps not show the container after docker stop?",
+                "options": [
+                  "It was removed",
+                  "docker ps shows running containers only",
+                  "The image was deleted",
+                  "The name expired"
+                ],
+                "answer": 1,
+                "explain": "Use `docker ps -a` to include stopped containers."
+              }
+            ]
+          },
+          "lab": {
+            "id": "first-container",
+            "title": "Run and inspect nginx",
+            "brief": "Complete the four steps using the lab terminal. The lab constrains resources and disables host mounts.",
+            "steps": [
+              {
+                "instruction": "Start nginx:alpine detached on port 8080 with the name ops-web.",
+                "command": "docker run -d --name ops-web -p 8080:80 nginx:alpine"
+              },
+              {
+                "instruction": "List running containers and confirm the port mapping.",
+                "command": "docker ps"
+              },
+              {
+                "instruction": "Read the container logs.",
+                "command": "docker logs --tail 20 ops-web"
+              },
+              {
+                "instruction": "Run hostname inside the container.",
+                "command": "docker exec ops-web hostname"
+              },
+              {
+                "instruction": "Stop and remove the container.",
+                "command": "docker rm -f ops-web"
+              }
+            ]
+          },
+          "related": [
+            "run-exec-logs",
+            "container-lifecycle",
+            "ports-and-publishing"
+          ],
+          "tags": [
+            "lab",
+            "containers"
+          ],
+          "commands": [
+            "docker run",
+            "docker logs",
+            "docker exec",
+            "docker rm"
+          ],
+          "sources": [
+            {
+              "title": "Run a container",
+              "url": "https://docs.docker.com/get-started/docker-concepts/the-basics/"
+            },
+            {
+              "title": "docker run",
+              "url": "https://docs.docker.com/reference/cli/docker/container/run/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": []
+}

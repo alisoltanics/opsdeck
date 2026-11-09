@@ -1,0 +1,153 @@
+'use strict';
+
+const node = (id, label, sub, x, y, w, h, kind, detail, lesson = null) => ({ id, label, sub, x, y, w, h, kind, detail, lesson });
+const edge = (from, to, label = '', style = 'solid') => ({ from, to, label, style });
+
+const diagrams = {
+  'docker-architecture': {
+    title: 'Docker architecture',
+    description: 'The CLI talks to the daemon over an API. The daemon stores images and delegates container execution to containerd, shims and runc.',
+    width: 960, height: 440,
+    nodes: [
+      node('client', 'Docker CLI', 'docker run / build / ps', 30, 170, 160, 86, 'client', 'Parses commands and calls the Docker API. It is a client, not the engine.', 'client-server-architecture'),
+      node('daemon', 'dockerd', 'API · images · networks · volumes', 260, 170, 190, 86, 'daemon', 'The long-running daemon that owns Docker objects and serves the API.', 'client-server-architecture'),
+      node('containerd', 'containerd', 'container lifecycle', 520, 170, 170, 86, 'runtime', 'Prepares snapshots and delegates execution to an OCI runtime.', 'daemon-containerd-runc'),
+      node('shim', 'containerd-shim', 'supervises the process', 750, 170, 175, 86, 'runtime', 'Keeps the container alive if containerd restarts and reports exit status.', 'daemon-containerd-runc'),
+      node('registry', 'Registry', 'image distribution', 520, 40, 170, 76, 'registry', 'Stores and distributes image manifests and layer blobs.', 'images-containers-registries'),
+      node('layer', 'Image store', 'content-addressed layers', 260, 330, 190, 76, 'image', 'Local layer store. Shared layers are stored once.', 'image-anatomy'),
+      node('container', 'Container process', 'namespaces + cgroups', 750, 330, 175, 76, 'container', 'An isolated process using the host kernel, constrained by cgroups.', 'namespaces-cgroups'),
+    ],
+    edges: [
+      edge('client', 'daemon', 'HTTP API'),
+      edge('daemon', 'registry', 'pull / push'),
+      edge('daemon', 'containerd', 'gRPC'),
+      edge('containerd', 'shim', 'start'),
+      edge('shim', 'container', 'supervise'),
+      edge('daemon', 'layer', 'store'),
+    ],
+  },
+  'image-layers': {
+    title: 'Image layers and copy-on-write',
+    description: 'Read-only layers are shared between images. A container adds one writable layer on top.',
+    width: 960, height: 460,
+    nodes: [
+      node('writable', 'Writable container layer', 'deleted with the container', 300, 30, 360, 66, 'writable', 'Changes at runtime are written here using copy-on-write. It is not part of the image.', 'container-lifecycle'),
+      node('app', 'Application layer', 'COPY . . / build output', 300, 112, 360, 66, 'layer', 'Your application and build output.', 'image-anatomy'),
+      node('deps', 'Dependency layer', 'npm ci / pip install', 300, 194, 360, 66, 'layer', 'Installed dependencies. Cache this layer independently of source edits.', 'layer-caching'),
+      node('runtime', 'Runtime layer', 'node / python / JRE', 300, 276, 360, 66, 'layer', 'Language runtime and system packages.', 'image-anatomy'),
+      node('base', 'Base layer', 'alpine / debian / distroless', 300, 358, 360, 66, 'base', 'The base image filesystem. Pin its version for reproducibility.', 'production-dockerfile'),
+      node('image', 'Image', 'immutable', 710, 194, 200, 140, 'image', 'The image is the stack of read-only layers plus config metadata.', 'image-anatomy'),
+    ],
+    edges: [edge('base', 'runtime', 'FROM'), edge('runtime', 'deps', 'RUN'), edge('deps', 'app', 'COPY'), edge('app', 'writable', 'container start', 'dashed'), edge('app', 'image', 'manifest', 'dashed')],
+  },
+  'container-lifecycle': {
+    title: 'Container lifecycle',
+    description: 'A container is created, runs while PID 1 lives, and remains in the exited state until removed.',
+    width: 960, height: 420,
+    nodes: [
+      node('created', 'Created', 'config + writable layer', 30, 160, 150, 82, 'idle', 'docker create allocates the container without starting it.', 'container-commands'),
+      node('running', 'Running', 'PID 1 alive', 230, 160, 150, 82, 'running', 'The main process is running. Exec starts extra processes.', 'container-lifecycle'),
+      node('paused', 'Paused', 'freezer cgroup', 430, 50, 150, 82, 'paused', 'Processes are frozen but state is preserved.', 'container-lifecycle'),
+      node('restarting', 'Restarting', 'policy', 430, 280, 150, 82, 'warning', 'A restart policy is restarting the container.', 'config-and-resources'),
+      node('exited', 'Exited', 'exit code recorded', 630, 160, 150, 82, 'exited', 'PID 1 terminated. The writable layer and name remain.', 'container-exits'),
+      node('removed', 'Removed', 'irreversible', 820, 160, 120, 82, 'removed', 'docker rm deletes the container and its writable layer.', 'cleanup-and-pruning'),
+    ],
+    edges: [
+      edge('created', 'running', 'start'),
+      edge('running', 'paused', 'pause'),
+      edge('paused', 'running', 'unpause'),
+      edge('running', 'restarting', 'exit + policy'),
+      edge('restarting', 'running', 'restart'),
+      edge('running', 'exited', 'stop / crash'),
+      edge('exited', 'running', 'start'),
+      edge('exited', 'removed', 'rm'),
+    ],
+  },
+  'runtime-stack': {
+    title: 'Runtime stack',
+    description: 'Each layer has a narrow responsibility. Runc is short-lived; the shim supervises the process.',
+    width: 960, height: 400,
+    nodes: [
+      node('cli', 'docker CLI', 'client', 40, 150, 140, 80, 'client', 'Sends API requests.', 'client-server-architecture'),
+      node('dockerd', 'dockerd', 'API + orchestration', 230, 150, 160, 80, 'daemon', 'Owns Docker objects.', 'daemon-containerd-runc'),
+      node('containerd', 'containerd', 'lifecycle + images', 440, 150, 160, 80, 'runtime', 'Delegates execution.', 'daemon-containerd-runc'),
+      node('shim', 'shim', 'process supervisor', 650, 150, 150, 80, 'runtime', 'Outlives containerd.', 'daemon-containerd-runc'),
+      node('runc', 'runc', 'creates namespaces/cgroups', 440, 300, 160, 70, 'tool', 'Execs the container process and exits.', 'namespaces-cgroups'),
+      node('process', 'container process', 'PID 1 inside', 760, 300, 160, 70, 'container', 'The application process.', 'container-lifecycle'),
+    ],
+    edges: [edge('cli', 'dockerd', 'API'), edge('dockerd', 'containerd', 'gRPC'), edge('containerd', 'shim', 'start'), edge('containerd', 'runc', 'exec', 'dashed'), edge('runc', 'process', 'exec'), edge('shim', 'process', 'supervise')],
+  },
+  'delivery-flow': {
+    title: 'Build, ship, run',
+    description: 'The same immutable image moves through environments. Configuration is injected at runtime.',
+    width: 960, height: 400,
+    nodes: [
+      node('source', 'Source + Dockerfile', 'build context', 30, 150, 165, 80, 'source', 'Code, Dockerfile and .dockerignore define the build.', 'dockerfile-anatomy'),
+      node('build', 'Build', 'docker build / buildx', 235, 150, 160, 80, 'build', 'Produces an immutable image.', 'buildkit-architecture'),
+      node('image', 'Image', 'tag + digest', 435, 150, 150, 80, 'image', 'The artifact that is promoted.', 'push-pull-digests'),
+      node('registry', 'Registry', 'distribution', 625, 150, 150, 80, 'registry', 'Stores and serves the image.', 'registry-auth'),
+      node('run', 'Run', 'dev / staging / prod', 815, 150, 115, 80, 'running', 'Containers from the same image in every environment.', 'production-readiness'),
+      node('config', 'Runtime config', 'env · secrets', 625, 300, 150, 60, 'config', 'Configuration is injected at runtime, never rebuilt into the image.', 'secrets-management'),
+    ],
+    edges: [edge('source', 'build'), edge('build', 'image'), edge('image', 'registry', 'push'), edge('registry', 'run', 'pull'), edge('config', 'run', 'inject', 'dashed')],
+  },
+  'network-topology': {
+    title: 'Bridge network topology',
+    description: 'Containers attach to a host bridge. User-defined bridges provide embedded DNS and isolation.',
+    width: 960, height: 440,
+    nodes: [
+      node('internet', 'Internet', 'external', 40, 170, 140, 80, 'cloud', 'Traffic reaches published ports through host NAT.', 'ports-and-publishing'),
+      node('host', 'Host network', 'eth0 + NAT', 240, 170, 170, 80, 'host', 'The host routes and NATs container traffic.', 'networking-drivers'),
+      node('bridge', 'docker0 / app-net', 'Linux bridge', 480, 170, 190, 80, 'network', 'A virtual switch. User-defined bridges provide DNS.', 'bridge-dns'),
+      node('api', 'api', '172.20.0.2', 740, 70, 160, 66, 'container', 'Reachable by name on the network.', 'bridge-dns'),
+      node('db', 'db', '172.20.0.3', 740, 170, 160, 66, 'container', 'Not exposed to the host unless published.', 'compose-networks-volumes'),
+      node('proxy', 'proxy', '172.20.0.4', 740, 270, 160, 66, 'container', 'Only the proxy publishes 80/443.', 'project-reverse-proxy'),
+    ],
+    edges: [edge('internet', 'host', '443'), edge('host', 'bridge', 'veth'), edge('bridge', 'api'), edge('bridge', 'db'), edge('bridge', 'proxy'), edge('proxy', 'api', 'frontend', 'dashed'), edge('api', 'db', 'backend', 'dashed')],
+  },
+  'compose-architecture': {
+    title: 'Compose project model',
+    description: 'A Compose file resolves into a project. Resource names are prefixed with the project name.',
+    width: 960, height: 430,
+    nodes: [
+      node('file', 'compose.yaml', 'services · networks · volumes', 40, 160, 200, 90, 'source', 'Declarative model, optionally merged with override files.', 'compose-architecture'),
+      node('cli', 'Compose CLI', 'config · up · down', 300, 160, 170, 90, 'client', 'Resolves variables, validates and calls the Docker API.', 'compose-architecture'),
+      node('project', 'Project', 'name: acme', 540, 160, 160, 90, 'daemon', 'The isolation boundary. Resource names are prefixed.', 'compose-architecture'),
+      node('services', 'Services', 'api · db · proxy', 760, 40, 160, 66, 'container', 'Containers with configuration, dependencies and health.', 'compose-services'),
+      node('networks', 'Networks', 'frontend · backend', 760, 130, 160, 66, 'network', 'Project networks and external networks.', 'compose-networks-volumes'),
+      node('volumes', 'Volumes', 'pgdata', 760, 220, 160, 66, 'volume', 'Persistent storage declared by the project.', 'compose-networks-volumes'),
+      node('secrets', 'Secrets / configs', '/run/secrets', 760, 310, 160, 66, 'config', 'Files mounted at runtime, not baked into images.', 'compose-environment-secrets'),
+    ],
+    edges: [edge('file', 'cli', 'parse'), edge('cli', 'project', 'create'), edge('project', 'services'), edge('project', 'networks'), edge('project', 'volumes'), edge('project', 'secrets')],
+  },
+  'volume-storage': {
+    title: 'Where container data lives',
+    description: 'The writable layer is disposable. Volumes and bind mounts persist; tmpfs lives in memory.',
+    width: 960, height: 430,
+    nodes: [
+      node('container', 'Container', 'process + mounts', 60, 160, 180, 100, 'container', 'Sees mount points as ordinary paths.', 'storage-and-volumes'),
+      node('writable', 'Writable layer', 'deleted with container', 330, 40, 220, 76, 'writable', 'Copied-on-write files. Not persistent.', 'storage-and-volumes'),
+      node('volume', 'Named volume', 'Docker-managed', 330, 150, 220, 76, 'volume', 'Lives under the Docker root, survives containers.', 'storage-and-volumes'),
+      node('bind', 'Bind mount', 'host path', 330, 260, 220, 76, 'host', 'Direct host path. UID/GID and permissions are shared.', 'bind-mounts'),
+      node('tmpfs', 'tmpfs', 'memory only', 330, 350, 220, 60, 'memory', 'RAM-backed, removed on stop. Good for secrets and scratch space.', 'storage-and-volumes'),
+      node('backup', 'Backup', 'tar / pg_dump', 700, 150, 180, 76, 'artifact', 'Back up volumes with a helper container and test restores.', 'volume-backup'),
+    ],
+    edges: [edge('container', 'writable', 'ephemeral'), edge('container', 'volume', 'persist'), edge('container', 'bind', 'dev / config'), edge('container', 'tmpfs', 'scratch', 'dashed'), edge('volume', 'backup', 'tar'), edge('bind', 'backup', 'host copy', 'dashed')],
+  },
+  'build-process': {
+    title: 'BuildKit build pipeline',
+    description: 'The Dockerfile is parsed into a DAG. Independent steps run in parallel and results are content-addressed in the cache.',
+    width: 960, height: 420,
+    nodes: [
+      node('context', 'Build context', '.dockerignore filtered', 30, 150, 170, 80, 'source', 'Files sent to the builder. Smaller is faster.', 'layer-caching'),
+      node('dockerfile', 'Dockerfile', 'instructions', 230, 150, 160, 80, 'source', 'Parsed into build operations.', 'dockerfile-anatomy'),
+      node('dag', 'Build DAG', 'parallel operations', 430, 150, 170, 80, 'build', 'Independent stages can run concurrently.', 'buildkit-architecture'),
+      node('cache', 'Cache store', 'layers + mounts', 430, 300, 170, 70, 'artifact', 'Content-addressed layer cache and persistent cache mounts.', 'build-cache'),
+      node('image', 'Image', 'manifest + config', 650, 150, 150, 80, 'image', 'The final stage output.', 'image-anatomy'),
+      node('registry', 'Registry', 'push / cache', 830, 150, 110, 80, 'registry', 'Multi-platform results are pushed as an index.', 'multi-platform-bake'),
+    ],
+    edges: [edge('context', 'dag'), edge('dockerfile', 'dag', 'parse'), edge('dag', 'cache', 'read/write'), edge('dag', 'image', 'commit'), edge('image', 'registry', 'push'), edge('cache', 'registry', 'cache export', 'dashed')],
+  },
+};
+
+module.exports = { diagrams };

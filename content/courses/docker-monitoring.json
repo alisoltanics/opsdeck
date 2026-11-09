@@ -1,0 +1,494 @@
+{
+  "id": "docker-monitoring",
+  "order": 14,
+  "title": "Docker Monitoring",
+  "subtitle": "Logs, metrics, events and health",
+  "level": "Intermediate",
+  "duration": "1h 25m",
+  "icon": "activity",
+  "accent": "cyan",
+  "description": "A running container is not the same as a healthy service. Learn the signals Docker exposes and how to turn them into a monitoring stack you can trust.",
+  "outcomes": [
+    "Use stats, events and health checks effectively",
+    "Configure logging drivers with rotation",
+    "Build a cAdvisor + Prometheus + Grafana stack",
+    "Alert on symptoms that matter"
+  ],
+  "modules": [
+    {
+      "id": "observability",
+      "title": "Observability",
+      "summary": "The signals and the stack.",
+      "lessons": [
+        {
+          "id": "stats-events",
+          "title": "Stats and events",
+          "duration": "10 min",
+          "summary": "The built-in telemetry: resource usage snapshots and the Docker event stream.",
+          "objectives": [
+            "Read docker stats and docker events",
+            "Filter events by type and object",
+            "Know the limits of built-in metrics"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Events tell the story",
+              "body": "`docker events` streams daemon-level events: container start/die/oom, image pull, network connect, volume mount. Filter with `--filter type=container --filter event=die` or by label. Events are essential for correlating a failure with a deployment or OOM kill.\n\nStats are point-in-time resource samples. Neither is a long-term metrics store; export to Prometheus or your platform if you need retention and alerting."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker events --filter type=container --filter event=die --format '{{json .}}'\ndocker events --since 1h --until now --filter label=com.docker.compose.project=acme\ndocker stats --no-stream\ndocker inspect --format '{{.State.OOMKilled}} {{.State.ExitCode}}' api",
+              "title": null,
+              "output": "{\"Type\":\"container\",\"Action\":\"die\",\"Actor\":{\"ID\":\"...\",\"Attributes\":{\"exitCode\":\"137\",...}},\"time\":...}",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "Event retention is short",
+              "body": "The daemon keeps only recent events. If you need history, ship them to a log pipeline or use Prometheus-style metrics."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Watch a crash",
+              "prompt": "Stream events and kill a container in another terminal.",
+              "command": null,
+              "expected": "A die event with exitCode 137/143 appears.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Snapshot",
+              "prompt": "Capture one stats sample for all running containers.",
+              "command": null,
+              "expected": "docker stats --no-stream",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which event indicates an OOM kill?",
+                "options": [
+                  "start",
+                  "die with exitCode 137",
+                  "pull",
+                  "connect"
+                ],
+                "answer": 1,
+                "explain": "Exit 137 plus OOMKilled=true."
+              },
+              {
+                "question": "Are docker stats persisted?",
+                "options": [
+                  "Yes, for 30 days",
+                  "No, they are live snapshots",
+                  "Only with Compose",
+                  "Only in Swarm"
+                ],
+                "answer": 1,
+                "explain": "Use an external metrics store for retention."
+              },
+              {
+                "question": "How do you filter events to one Compose project?",
+                "options": [
+                  "--filter project=",
+                  "--filter label=com.docker.compose.project=NAME",
+                  "--name",
+                  "--scope"
+                ],
+                "answer": 1,
+                "explain": "Labels identify Compose resources."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "monitoring-stack",
+            "container-exits",
+            "logging-drivers"
+          ],
+          "tags": [
+            "monitoring",
+            "events"
+          ],
+          "commands": [
+            "docker events",
+            "docker stats",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "docker events",
+              "url": "https://docs.docker.com/reference/cli/docker/system/events/"
+            },
+            {
+              "title": "docker stats",
+              "url": "https://docs.docker.com/reference/cli/docker/container/stats/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "logging-drivers",
+          "title": "Logging drivers and rotation",
+          "duration": "11 min",
+          "summary": "Where stdout goes, how to rotate it, and why JSON files fill disks.",
+          "objectives": [
+            "Choose a logging driver",
+            "Configure rotation for json-file",
+            "Ship logs centrally"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "stdout is the contract",
+              "body": "Applications should log to stdout/stderr. The daemon captures those streams with a logging driver. The default `json-file` writes files under `/var/lib/docker/containers/<id>/`; without rotation they can fill the disk.\n\n`local` is a better default for many installations. `journald`, `syslog`, `fluentd`, `gelf` and cloud drivers ship logs elsewhere. Driver support differs by platform."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name api \\\n  --log-driver json-file \\\n  --log-opt max-size=10m \\\n  --log-opt max-file=3 \\\n  acme/api:1.4\n\ndocker inspect api --format '{{json .HostConfig.LogConfig}}'\ndocker logs --since 15m --tail 200 api\n\n# Daemon-wide default in /etc/docker/daemon.json\n# { \"log-driver\": \"local\", \"log-opts\": { \"max-size\": \"10m\" } }",
+              "title": null,
+              "output": null,
+              "note": "Changing the daemon default does not rewrite existing containers; recreate them."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "docker logs only works with local drivers",
+              "body": "If you ship logs with a remote driver, `docker logs` may return nothing. Query the central system instead."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Rotate",
+              "prompt": "Run a container with 5 MB logs and 2 files.",
+              "command": null,
+              "expected": "--log-opt max-size=5m --log-opt max-file=2",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Audit driver",
+              "prompt": "Check the logging driver of a running container.",
+              "command": null,
+              "expected": "docker inspect --format \"{{.HostConfig.LogConfig.Type}}\" NAME",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Where does json-file store logs?",
+                "options": [
+                  "/var/log/docker",
+                  "/var/lib/docker/containers/<id>/",
+                  "/tmp",
+                  "The image"
+                ],
+                "answer": 1,
+                "explain": "Per-container JSON files live under the Docker root."
+              },
+              {
+                "question": "Why set max-size and max-file?",
+                "options": [
+                  "Faster logs",
+                  "Prevent unbounded disk growth",
+                  "Encrypt logs",
+                  "Enable DNS"
+                ],
+                "answer": 1,
+                "explain": "Rotation caps disk usage."
+              },
+              {
+                "question": "Which driver is a good local default?",
+                "options": [
+                  "none",
+                  "local",
+                  "syslog only",
+                  "fluentd"
+                ],
+                "answer": 1,
+                "explain": "local is designed as a better default than json-file."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "stats-events",
+            "monitoring-stack",
+            "disk-space"
+          ],
+          "tags": [
+            "monitoring",
+            "logging"
+          ],
+          "commands": [
+            "docker logs",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Logging drivers",
+              "url": "https://docs.docker.com/config/containers/logging/configure/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "healthchecks",
+          "title": "Health checks that mean something",
+          "duration": "10 min",
+          "summary": "A port check is not a health check. Design probes that test the service contract.",
+          "objectives": [
+            "Write effective HEALTHCHECK / compose healthcheck",
+            "Tune interval, timeout, retries and start period",
+            "Avoid health checks that damage the service"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What should be checked",
+              "body": "A good health check exercises the dependency path that matters: database connectivity, cache availability, or a `/health/ready` endpoint that verifies downstreams. A shallow TCP check only proves the process is listening. A deep check on every probe can overload dependencies — separate liveness (is the process alive?) from readiness (can it serve traffic?)."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \\\n  CMD node -e \"fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+              "title": null,
+              "output": null,
+              "note": "The command must exit 0 for healthy and non-zero for unhealthy. Output is stored in the health log."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker inspect --format '{{json .State.Health}}' api\ndocker ps --filter health=unhealthy",
+              "title": null,
+              "output": "{\"Status\":\"healthy\",\"FailingStreak\":0,\"Log\":[...]}",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Start period prevents restart storms",
+              "body": "Give slow starters time. Without start_period, a legitimate 40-second boot can be marked unhealthy and restarted repeatedly."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Readiness probe",
+              "prompt": "Add a HEALTHCHECK that calls /health/ready with a 20s start period.",
+              "command": null,
+              "expected": "Use CMD with curl/node and --start-period=20s.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Find unhealthy",
+              "prompt": "List unhealthy containers.",
+              "command": null,
+              "expected": "docker ps --filter health=unhealthy",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What exit code marks a container healthy?",
+                "options": [
+                  "0",
+                  "1",
+                  "2",
+                  "200"
+                ],
+                "answer": 0,
+                "explain": "Zero means healthy."
+              },
+              {
+                "question": "Why separate liveness and readiness?",
+                "options": [
+                  "They use different ports",
+                  "A dependency outage should not always restart the process",
+                  "Docker requires it",
+                  "It reduces image size"
+                ],
+                "answer": 1,
+                "explain": "Restarting on a dependency outage can make things worse."
+              },
+              {
+                "question": "What does start_period do?",
+                "options": [
+                  "Delays health failure accounting during startup",
+                  "Stops the container",
+                  "Sets the restart policy",
+                  "Enables logs"
+                ],
+                "answer": 0,
+                "explain": "It gives the app time to initialise."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-health-dependencies",
+            "monitoring-stack",
+            "troubleshooting-method"
+          ],
+          "tags": [
+            "monitoring",
+            "health"
+          ],
+          "commands": [
+            "docker inspect",
+            "docker ps"
+          ],
+          "sources": [
+            {
+              "title": "HEALTHCHECK",
+              "url": "https://docs.docker.com/reference/dockerfile/#healthcheck"
+            },
+            {
+              "title": "Compose healthcheck",
+              "url": "https://docs.docker.com/compose/compose-file/05-services/#healthcheck"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "monitoring-stack",
+          "title": "A cAdvisor + Prometheus + Grafana stack",
+          "duration": "13 min",
+          "summary": "A practical Compose stack for container metrics, with the security caveats called out.",
+          "objectives": [
+            "Deploy cAdvisor, Prometheus and Grafana with Compose",
+            "Scrape container metrics",
+            "Protect the Docker socket exposure"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The standard open-source stack",
+              "body": "cAdvisor reads container cgroups and exposes Prometheus metrics. Prometheus scrapes and stores them. Grafana queries Prometheus and renders dashboards. All three run comfortably in Compose on a single host. cAdvisor needs read access to the Docker socket and host cgroups; treat that access as sensitive and restrict the network."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  cadvisor:\n    image: gcr.io/cadvisor/cadvisor:v0.49.1\n    ports: [\"127.0.0.1:8080:8080\"]\n    volumes:\n      - /:/rootfs:ro\n      - /var/run:/var/run:ro\n      - /sys:/sys:ro\n      - /var/lib/docker/:/var/lib/docker:ro\n    devices:\n      - /dev/kmsg\n    restart: unless-stopped\n    networks: [monitoring]\n\n  prometheus:\n    image: prom/prometheus:v2.55.1\n    volumes:\n      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro\n      - prometheus-data:/prometheus\n    ports: [\"127.0.0.1:9090:9090\"]\n    networks: [monitoring]\n\n  grafana:\n    image: grafana/grafana:11.3.0\n    volumes:\n      - grafana-data:/var/lib/grafana\n    ports: [\"127.0.0.1:3001:3000\"]\n    networks: [monitoring]\n\nnetworks:\n  monitoring:\nvolumes:\n  prometheus-data:\n  grafana-data:",
+              "title": null,
+              "output": null,
+              "note": "This stack is for a trusted host. Do not publish cAdvisor or Prometheus publicly."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "# prometheus.yml\nglobal:\n  scrape_interval: 15s\nscrape_configs:\n  - job_name: cadvisor\n    static_configs:\n      - targets: [\"cadvisor:8080\"]\n  - job_name: docker\n    static_configs:\n      - targets: [\"host.docker.internal:9323\"]",
+              "title": null,
+              "output": null,
+              "note": "The Docker daemon can expose metrics on :9323 when configured with metrics-addr."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Mounting the Docker socket is a privilege",
+              "body": "cAdvisor and many exporters mount it read-only, but the socket is still powerful. Isolate the monitoring network and run the stack on a dedicated host or with a restricted socket proxy."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Deploy the stack",
+              "prompt": "Bring up cAdvisor + Prometheus + Grafana locally.",
+              "command": null,
+              "expected": "Use the compose file and confirm the three containers are running.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Query",
+              "prompt": "In Prometheus, query container_cpu_usage_seconds_total.",
+              "command": null,
+              "expected": "The metric appears for running containers after a scrape interval.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does cAdvisor expose?",
+                "options": [
+                  "Container metrics for Prometheus",
+                  "Container logs",
+                  "TLS certificates",
+                  "Compose files"
+                ],
+                "answer": 0,
+                "explain": "It exposes cgroup and container metrics."
+              },
+              {
+                "question": "Why bind monitoring ports to 127.0.0.1?",
+                "options": [
+                  "Faster",
+                  "Prevent public exposure of metrics and dashboards",
+                  "Enable TLS",
+                  "Reduce memory"
+                ],
+                "answer": 1,
+                "explain": "Monitoring endpoints often lack authentication."
+              },
+              {
+                "question": "What does Prometheus do?",
+                "options": [
+                  "Scrapes and stores time-series metrics",
+                  "Renders dashboards",
+                  "Runs containers",
+                  "Builds images"
+                ],
+                "answer": 0,
+                "explain": "Grafana visualises Prometheus data."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "stats-events",
+            "healthchecks",
+            "production-observability"
+          ],
+          "tags": [
+            "monitoring",
+            "compose"
+          ],
+          "commands": [
+            "docker compose up"
+          ],
+          "sources": [
+            {
+              "title": "Prometheus metrics",
+              "url": "https://docs.docker.com/config/daemon/#metrics-address"
+            },
+            {
+              "title": "cAdvisor",
+              "url": "https://docs.docker.com/https://github.com/google/cadvisor"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-containers",
+    "docker-compose"
+  ]
+}

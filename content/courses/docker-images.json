@@ -1,0 +1,372 @@
+{
+  "id": "docker-images",
+  "order": 5,
+  "title": "Docker Images",
+  "subtitle": "Layers, tags, digests and the local image store",
+  "level": "Beginner",
+  "duration": "1h 10m",
+  "icon": "package",
+  "accent": "green",
+  "description": "Understand what an image really contains, how layers are shared, and how to inspect and manage the local store without wasting disk.",
+  "outcomes": [
+    "Read image metadata, history and digests",
+    "Understand layer sharing and cache implications",
+    "Tag, pull, save and prune images safely"
+  ],
+  "modules": [
+    {
+      "id": "image-model",
+      "title": "The image model",
+      "summary": "What is inside an image and how it is stored.",
+      "lessons": [
+        {
+          "id": "image-anatomy",
+          "title": "Image anatomy and layers",
+          "duration": "10 min",
+          "summary": "An image is a manifest, a config and a stack of content-addressed layers.",
+          "objectives": [
+            "Describe the manifest/config/layer structure",
+            "Explain layer sharing and copy-on-write",
+            "Read an image history"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Not a tarball",
+              "body": "An image is a manifest that references a config JSON and a list of layer blobs. Each layer is a diff of the filesystem. The config holds environment, entrypoint, command, labels, exposed ports, and the history of build instructions.\n\nAt runtime, the layers are composed into a read-only root filesystem and a writable layer is added. Writes use copy-on-write: modifying a file copies it into the writable layer, leaving the image layer untouched."
+            },
+            {
+              "type": "diagram",
+              "diagram": "image-layers",
+              "caption": "Shared read-only layers beneath a per-container writable layer."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker image inspect nginx:alpine --format '{{json .RootFS.Layers}}'\ndocker image history --no-trunc nginx:alpine\ndocker image inspect nginx:alpine --format '{{.Config.Env}}'",
+              "title": null,
+              "output": "[\"sha256:...\",\"sha256:...\",\"sha256:...\",\"sha256:...\"]",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "Layer IDs are content hashes",
+              "body": "Identical instructions on identical inputs produce identical layers. This is why layer order and reproducibility matter."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Count layers",
+              "prompt": "Print the number of layers in nginx:alpine.",
+              "command": "docker image inspect nginx:alpine --format '{{json .RootFS.Layers}}' | jq length",
+              "expected": "Pipe RootFS.Layers to jq length or count the JSON entries.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Read history",
+              "prompt": "Find the instruction that set the nginx entrypoint.",
+              "command": "docker image history --no-trunc nginx:alpine | head",
+              "expected": "docker image history --no-trunc shows the ENTRYPOINT instruction.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does an image manifest reference?",
+                "options": [
+                  "Only a Dockerfile",
+                  "A config and layer blobs",
+                  "A running container",
+                  "A volume"
+                ],
+                "answer": 1,
+                "explain": "The manifest points at the config and content-addressed layers."
+              },
+              {
+                "question": "How are layers shared between images?",
+                "options": [
+                  "By copying",
+                  "By content hash",
+                  "By tag",
+                  "They are not shared"
+                ],
+                "answer": 1,
+                "explain": "The same layer blob is reused by digest."
+              },
+              {
+                "question": "What is the writable layer?",
+                "options": [
+                  "Part of the image",
+                  "A per-container layer created at runtime",
+                  "A registry feature",
+                  "A build cache"
+                ],
+                "answer": 1,
+                "explain": "Each container gets its own writable layer."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "images-containers-registries",
+            "layer-caching"
+          ],
+          "tags": [
+            "images"
+          ],
+          "commands": [
+            "docker image inspect",
+            "docker image history"
+          ],
+          "sources": [
+            {
+              "title": "Image layers",
+              "url": "https://docs.docker.com/get-started/docker-concepts/building-images/"
+            },
+            {
+              "title": "Storage drivers",
+              "url": "https://docs.docker.com/engine/storage/drivers/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "pull-inspect-tag",
+          "title": "Pull, inspect and tag",
+          "duration": "9 min",
+          "summary": "Daily image operations with attention to tags, digests and registry defaults.",
+          "objectives": [
+            "Pull specific versions and platforms",
+            "Inspect config and labels",
+            "Tag images for a registry"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Pull behaviour",
+              "body": "`docker pull` fetches the manifest and missing layers. `--platform` selects an architecture when the image is multi-platform. A pull can be refused because of authentication, rate limits, or a missing tag. The error names the registry and repository; read it literally."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker pull --platform linux/amd64 nginx:1.27-alpine\ndocker image inspect nginx:1.27-alpine --format '{{.Architecture}} {{.Os}}'\ndocker tag nginx:1.27-alpine registry.example.com/web/nginx:1.27-alpine\ndocker image ls --filter reference='registry.example.com/*'",
+              "title": null,
+              "output": "amd64 linux\nREPOSITORY                          TAG            IMAGE ID       SIZE\nregistry.example.com/web/nginx       1.27-alpine    ...            48.2MB",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Tag is local until you push",
+              "body": "`docker tag` only creates another name for the same image ID locally. `docker push` publishes it to the registry named in the tag."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Registry tag",
+              "prompt": "Tag alpine:3.20 for ghcr.io/team/base/alpine:3.20.",
+              "command": "docker tag alpine:3.20 ghcr.io/team/base/alpine:3.20",
+              "expected": "docker tag alpine:3.20 ghcr.io/team/base/alpine:3.20",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Read labels",
+              "prompt": "Inspect the labels of an official image.",
+              "command": null,
+              "expected": "docker image inspect IMAGE --format \"{{json .Config.Labels}}\"",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Does docker tag upload the image?",
+                "options": [
+                  "Yes",
+                  "No, it only adds a local name",
+                  "Only with --push",
+                  "Only for Docker Hub"
+                ],
+                "answer": 1,
+                "explain": "Push is a separate operation."
+              },
+              {
+                "question": "Which flag selects an architecture on a multi-platform image?",
+                "options": [
+                  "--arch",
+                  "--platform",
+                  "--os",
+                  "--target"
+                ],
+                "answer": 1,
+                "explain": "--platform linux/amd64 selects the manifest."
+              },
+              {
+                "question": "A pull fails with \"manifest unknown\". What is wrong?",
+                "options": [
+                  "The daemon is down",
+                  "The tag or repository does not exist",
+                  "The disk is full",
+                  "The network is off"
+                ],
+                "answer": 1,
+                "explain": "The registry has no manifest for that reference."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "image-anatomy",
+            "registry-auth",
+            "push-pull-digests"
+          ],
+          "tags": [
+            "images",
+            "registries"
+          ],
+          "commands": [
+            "docker pull",
+            "docker tag",
+            "docker image inspect"
+          ],
+          "sources": [
+            {
+              "title": "docker pull",
+              "url": "https://docs.docker.com/reference/cli/docker/image/pull/"
+            },
+            {
+              "title": "docker tag",
+              "url": "https://docs.docker.com/reference/cli/docker/image/tag/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "cleanup-and-pruning",
+          "title": "Cleanup, save and prune",
+          "duration": "9 min",
+          "summary": "Reclaim disk with confidence and move images between isolated environments.",
+          "objectives": [
+            "Identify dangling and unused images",
+            "Use save/load for air-gapped transfer",
+            "Prune without deleting what you need"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Know what is reclaimable",
+              "body": "`docker system df` reports Size and Reclaimable per object type. Dangling images (`<none>:<none>`) are intermediate or untagged layers. Unused images are not referenced by any container. Build cache is often the largest consumer."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker system df\ndocker image ls --filter dangling=true\ndocker image prune          # dangling only\ndocker image prune -a       # all unused images\ndocker builder prune\ndocker system prune --volumes\n\ndocker save -o app.tar acme/app:1.0\ndocker load -i app.tar",
+              "title": null,
+              "output": "TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE\nImages          107       10        101.4GB   61.28GB (60%)\nBuild Cache     1089      0         66.72GB   41.33GB (62%)",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Prune is not undoable",
+              "body": "Containers created later cannot use a deleted image without re-pulling. In air-gapped environments, export important images first."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Reclaim safely",
+              "prompt": "Show reclaimable space, then remove only dangling images.",
+              "command": "docker system df && docker image prune -f",
+              "expected": "docker system df followed by docker image prune.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Air-gap transfer",
+              "prompt": "Save alpine:3.20 to a file and load it after removing it locally.",
+              "command": "docker save -o alpine.tar alpine:3.20",
+              "expected": "docker save -o alpine.tar alpine:3.20; docker load -i alpine.tar",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is a dangling image?",
+                "options": [
+                  "An image with no tag",
+                  "A running image",
+                  "An image in a registry",
+                  "A stopped container"
+                ],
+                "answer": 0,
+                "explain": "Dangling images are untagged (<none>:<none>) and safe to prune."
+              },
+              {
+                "question": "Which command transfers an image without a registry?",
+                "options": [
+                  "docker push",
+                  "docker save + docker load",
+                  "docker cp",
+                  "docker export"
+                ],
+                "answer": 1,
+                "explain": "Save writes a tar archive; load imports it."
+              },
+              {
+                "question": "Which prune removes build cache?",
+                "options": [
+                  "docker image prune",
+                  "docker builder prune",
+                  "docker volume prune",
+                  "docker network prune"
+                ],
+                "answer": 1,
+                "explain": "Builder prune targets BuildKit cache."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "build-cache",
+            "system-maintenance"
+          ],
+          "tags": [
+            "images",
+            "cleanup"
+          ],
+          "commands": [
+            "docker image prune",
+            "docker system df",
+            "docker save",
+            "docker load"
+          ],
+          "sources": [
+            {
+              "title": "docker image prune",
+              "url": "https://docs.docker.com/reference/cli/docker/image/prune/"
+            },
+            {
+              "title": "Pruning",
+              "url": "https://docs.docker.com/config/pruning/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-fundamentals"
+  ]
+}

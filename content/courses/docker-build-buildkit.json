@@ -1,0 +1,392 @@
+{
+  "id": "docker-build-buildkit",
+  "order": 10,
+  "title": "Docker Build and BuildKit",
+  "subtitle": "Faster, smarter and multi-platform image builds",
+  "level": "Advanced",
+  "duration": "1h 25m",
+  "icon": "hammer",
+  "accent": "orange",
+  "description": "BuildKit is the default builder and a different architecture from the legacy builder. Learn cache mounts, multi-platform builds, builders and declarative Bake files.",
+  "outcomes": [
+    "Explain BuildKit’s architecture and benefits",
+    "Use cache mounts and registry cache effectively",
+    "Build multi-platform images with buildx",
+    "Automate builds with docker buildx bake"
+  ],
+  "modules": [
+    {
+      "id": "buildkit",
+      "title": "BuildKit in practice",
+      "summary": "The modern builder and its cache.",
+      "lessons": [
+        {
+          "id": "buildkit-architecture",
+          "title": "BuildKit architecture",
+          "duration": "9 min",
+          "summary": "A DAG of build steps, executed concurrently, with content-addressed caching.",
+          "objectives": [
+            "Describe how BuildKit differs from the legacy builder",
+            "Read a build graph",
+            "Know when to use a custom builder"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A graph, not a straight line",
+              "body": "BuildKit parses the Dockerfile into a directed acyclic graph of operations. Independent stages and steps can run in parallel. It uses content-addressed caching, supports secret and SSH mounts, and can emit provenance/SBOM data.\n\nThe **docker** driver builds inside the daemon’s image store. The **docker-container** driver runs BuildKit in a container and unlocks multi-platform builds, registry cache, and isolation from the daemon image store."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker buildx version\ndocker buildx ls\ndocker buildx create --name ci-builder --driver docker-container --use\ndocker buildx inspect --bootstrap\ndocker buildx build --load -t acme/api:dev .",
+              "title": null,
+              "output": "NAME/NODE       DRIVER/ENDPOINT             STATUS      BUILDKIT\ndefault         docker                      running     v0.15\nci-builder*     docker-container            running     v0.15",
+              "note": null
+            },
+            {
+              "type": "diagram",
+              "diagram": "build-process",
+              "caption": "Build context → parse → DAG → parallel execution → layers → image or cache export."
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "BuildKit is the default",
+              "body": "Docker Engine 23.0+ uses BuildKit for `docker build` on Linux. The legacy builder is deprecated; do not build new workflows around it."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Create a builder",
+              "prompt": "Create and bootstrap a docker-container builder named lab-builder.",
+              "command": "docker buildx create --name lab-builder --driver docker-container --use",
+              "expected": "docker buildx create --name lab-builder --driver docker-container --bootstrap",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Inspect",
+              "prompt": "List builders and identify the current one.",
+              "command": null,
+              "expected": "docker buildx ls marks the current builder with *.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the main unit of BuildKit execution?",
+                "options": [
+                  "A shell script",
+                  "A DAG of operations",
+                  "A single layer",
+                  "A container"
+                ],
+                "answer": 1,
+                "explain": "BuildKit builds and executes a dependency graph."
+              },
+              {
+                "question": "Which driver enables multi-platform builds?",
+                "options": [
+                  "docker",
+                  "docker-container",
+                  "remote",
+                  "legacy"
+                ],
+                "answer": 1,
+                "explain": "The docker-container driver runs BuildKit with a driver that supports multi-platform output."
+              },
+              {
+                "question": "Why is BuildKit faster?",
+                "options": [
+                  "It skips validation",
+                  "Parallel execution and better caching",
+                  "It uses the host shell",
+                  "It disables layers"
+                ],
+                "answer": 1,
+                "explain": "Concurrency and content-addressed caching are the main wins."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "build-cache",
+            "multi-platform-bake",
+            "layer-caching"
+          ],
+          "tags": [
+            "buildkit",
+            "build"
+          ],
+          "commands": [
+            "docker buildx",
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "BuildKit",
+              "url": "https://docs.docker.com/build/buildkit/"
+            },
+            {
+              "title": "buildx",
+              "url": "https://docs.docker.com/reference/cli/docker/buildx/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "build-cache",
+          "title": "Cache mounts and registry cache",
+          "duration": "11 min",
+          "summary": "Keep package manager caches across builds and share build cache through a registry.",
+          "objectives": [
+            "Use RUN --mount=type=cache",
+            "Export and import cache with buildx",
+            "Know when cache hurts reproducibility"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Cache mounts vs layer cache",
+              "body": "A layer cache stores the result of an instruction. A **cache mount** persists a directory (npm, pip, Go modules) across builds without adding it to the image layer. This keeps images small while avoiding repeated downloads.\n\nFor CI, export cache to a registry or local directory and import it in later runs with `--cache-to` and `--cache-from`."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1\nFROM node:20-alpine\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN --mount=type=cache,target=/root/.npm \\\n    npm ci --prefer-offline\nCOPY . .\nRUN npm run build",
+              "title": null,
+              "output": null,
+              "note": "The npm cache is not part of the final image; it lives in BuildKit’s cache store keyed by the mount id."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker buildx build \\\n  --cache-to type=registry,ref=registry.example.com/acme/api:cache,mode=max \\\n  --cache-from type=registry,ref=registry.example.com/acme/api:cache \\\n  -t registry.example.com/acme/api:1.4 \\\n  --push .",
+              "title": null,
+              "output": null,
+              "note": "mode=max caches intermediate layers, not only the final image."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Cache can hide supply-chain changes",
+              "body": "A cached `apt-get install` may not see an updated package index. Use `--no-cache` for security rebuilds and pin base images by digest."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Cache mount",
+              "prompt": "Add an npm cache mount to a Dockerfile RUN.",
+              "command": null,
+              "expected": "RUN --mount=type=cache,target=/root/.npm npm ci",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Registry cache",
+              "prompt": "Write a buildx command that imports and exports registry cache.",
+              "command": null,
+              "expected": "--cache-from type=registry,ref=... --cache-to type=registry,ref=...,mode=max",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Does a cache mount add data to the final image?",
+                "options": [
+                  "Yes",
+                  "No",
+                  "Only with --load",
+                  "Only in CI"
+                ],
+                "answer": 1,
+                "explain": "Cache mounts are excluded from layers."
+              },
+              {
+                "question": "Which flag exports build cache?",
+                "options": [
+                  "--cache-to",
+                  "--cache-export",
+                  "--save-cache",
+                  "--cache-mount"
+                ],
+                "answer": 0,
+                "explain": "--cache-to writes cache to a backend."
+              },
+              {
+                "question": "What does mode=max cache?",
+                "options": [
+                  "Only the final image",
+                  "All intermediate layers",
+                  "Only secrets",
+                  "The build context"
+                ],
+                "answer": 1,
+                "explain": "It caches intermediate results too."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "buildkit-architecture",
+            "layer-caching",
+            "project-ci-pipeline"
+          ],
+          "tags": [
+            "buildkit",
+            "cache",
+            "performance"
+          ],
+          "commands": [
+            "docker buildx build"
+          ],
+          "sources": [
+            {
+              "title": "Build cache",
+              "url": "https://docs.docker.com/build/cache/"
+            },
+            {
+              "title": "Cache storage backends",
+              "url": "https://docs.docker.com/build/cache/backends/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "multi-platform-bake",
+          "title": "Multi-platform builds and Bake",
+          "duration": "11 min",
+          "summary": "Build for amd64 and arm64 at once, and define repeatable build targets in a file.",
+          "objectives": [
+            "Create a multi-platform build",
+            "Understand emulation and native builders",
+            "Use docker buildx bake for CI"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Multi-platform output",
+              "body": "Multi-platform builds require a builder that supports them (docker-container driver). BuildKit schedules a build per platform, potentially using QEMU emulation for foreign architectures. Emulation is slow; native runners are faster for large builds.\n\n`--push` or `--load` is required because a multi-platform result is an image index, not a single image loadable into the local store."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker buildx build \\\n  --platform linux/amd64,linux/arm64 \\\n  -t registry.example.com/acme/api:1.4 \\\n  --push .\n\ndocker buildx imagetools inspect registry.example.com/acme/api:1.4",
+              "title": null,
+              "output": "Name: registry.example.com/acme/api:1.4\nMediaType: application/vnd.oci.image.index.v1+json\nManifests:\n  linux/amd64\n  linux/arm64",
+              "note": null
+            },
+            {
+              "type": "code",
+              "language": "hcl",
+              "code": "# docker-bake.hcl\ngroup \"default\" {\n  targets = [\"api\"]\n}\n\ntarget \"api\" {\n  context    = \".\"\n  dockerfile = \"Dockerfile\"\n  platforms  = [\"linux/amd64\", \"linux/arm64\"]\n  tags       = [\"registry.example.com/acme/api:1.4\"]\n  cache-from = [\"type=registry,ref=registry.example.com/acme/api:cache\"]\n  cache-to   = [\"type=registry,ref=registry.example.com/acme/api:cache,mode=max\"]\n}",
+              "title": null,
+              "output": null,
+              "note": "Run with `docker buildx bake` or select targets with `docker buildx bake api`."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Bake is for teams",
+              "body": "A Bake file keeps CI and local builds identical, supports inheritance, and can build several images in parallel."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Multi-arch",
+              "prompt": "Build an image for amd64 and arm64 and push it.",
+              "command": null,
+              "expected": "docker buildx build --platform linux/amd64,linux/arm64 -t REGISTRY/app:tag --push .",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Bake target",
+              "prompt": "Write a Bake target that builds two tags from one context.",
+              "command": null,
+              "expected": "A target with tags = [\"repo/app:1.0\",\"repo/app:latest\"].",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why can a multi-platform image not be --load-ed?",
+                "options": [
+                  "It is encrypted",
+                  "It is an image index with multiple manifests",
+                  "It is too large",
+                  "It requires Swarm"
+                ],
+                "answer": 1,
+                "explain": "The result is a manifest list/index; push it to a registry."
+              },
+              {
+                "question": "What is QEMU used for?",
+                "options": [
+                  "Native compilation",
+                  "Emulating foreign architectures",
+                  "Cache storage",
+                  "TLS"
+                ],
+                "answer": 1,
+                "explain": "BuildKit uses emulation when the host cannot run the target architecture natively."
+              },
+              {
+                "question": "Which command runs a Bake file?",
+                "options": [
+                  "docker buildx bake",
+                  "docker compose bake",
+                  "docker bake",
+                  "docker build --bake"
+                ],
+                "answer": 0,
+                "explain": "buildx bake is the entry point."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "buildkit-architecture",
+            "build-cache",
+            "project-ci-pipeline"
+          ],
+          "tags": [
+            "buildkit",
+            "multi-platform",
+            "ci"
+          ],
+          "commands": [
+            "docker buildx build",
+            "docker buildx bake",
+            "docker buildx imagetools"
+          ],
+          "sources": [
+            {
+              "title": "Multi-platform builds",
+              "url": "https://docs.docker.com/build/building/multi-platform/"
+            },
+            {
+              "title": "Bake",
+              "url": "https://docs.docker.com/build/bake/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-images",
+    "dockerfile-masterclass"
+  ]
+}

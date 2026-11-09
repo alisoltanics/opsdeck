@@ -1,0 +1,398 @@
+{
+  "id": "daemon-config",
+  "order": 17,
+  "title": "Advanced Docker Administration",
+  "subtitle": "Engine configuration, contexts, maintenance and upgrades",
+  "level": "Advanced",
+  "duration": "1h 35m",
+  "icon": "server-cog",
+  "accent": "slate",
+  "description": "Administer the engine itself: daemon configuration, remote contexts, storage layout, upgrades and routine maintenance.",
+  "outcomes": [
+    "Configure the daemon safely",
+    "Manage remote engines with contexts",
+    "Plan storage, upgrades and maintenance windows",
+    "Apply rootless and hardening options"
+  ],
+  "modules": [
+    {
+      "id": "engine-admin",
+      "title": "Engine administration",
+      "summary": "The host-level concerns.",
+      "lessons": [
+        {
+          "id": "daemon-config",
+          "title": "Daemon configuration and storage",
+          "duration": "12 min",
+          "summary": "daemon.json, data-root, live-restore, metrics and safe reloads.",
+          "objectives": [
+            "Configure daemon.json correctly",
+            "Move the Docker data root safely",
+            "Use live-restore during upgrades"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "One configuration file",
+              "body": "On Linux, the daemon reads `/etc/docker/daemon.json` (or the path in the systemd unit). Changes require a reload or restart; validate first. `live-restore` keeps containers running while the daemon restarts, which reduces the impact of upgrades on workloads that tolerate a brief control-plane gap."
+            },
+            {
+              "type": "code",
+              "language": "json",
+              "code": "{\n  \"data-root\": \"/var/lib/docker\",\n  \"log-driver\": \"local\",\n  \"log-opts\": { \"max-size\": \"10m\", \"max-file\": \"3\" },\n  \"live-restore\": true,\n  \"metrics-addr\": \"127.0.0.1:9323\",\n  \"icc\": false,\n  \"no-new-privileges\": true,\n  \"default-address-pools\": [\n    { \"base\": \"172.30.0.0/16\", \"size\": 24 }\n  ]\n}",
+              "title": null,
+              "output": null,
+              "note": "Put metrics on loopback unless Prometheus runs on another host and the network is protected."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "sudo dockerd --validate --config-file /etc/docker/daemon.json\nsudo systemctl reload docker\n\n# Storage usage by category\ndocker system df -v\ndu -sh /var/lib/docker/* | sort -h",
+              "title": null,
+              "output": null,
+              "note": "A reload applies supported options; some require a full restart. Check the docs for each key."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Changing data-root with containers running",
+              "body": "Stop the daemon and workloads, move the directory preserving ownership, update the config, then start. Never copy a live store."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Validate",
+              "prompt": "Validate a daemon.json on a Linux host.",
+              "command": null,
+              "expected": "sudo dockerd --validate --config-file /etc/docker/daemon.json",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Metrics",
+              "prompt": "Expose daemon metrics on loopback:9323.",
+              "command": null,
+              "expected": "Add metrics-addr 127.0.0.1:9323 and reload.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does live-restore do?",
+                "options": [
+                  "Restarts containers",
+                  "Keeps containers running while the daemon restarts",
+                  "Backs up volumes",
+                  "Enables TLS"
+                ],
+                "answer": 1,
+                "explain": "It reduces upgrade disruption."
+              },
+              {
+                "question": "How do you validate daemon.json before restarting?",
+                "options": [
+                  "dockerd --validate --config-file",
+                  "docker info",
+                  "docker compose config",
+                  "jq"
+                ],
+                "answer": 0,
+                "explain": "The daemon can validate the file."
+              },
+              {
+                "question": "Which setting changes where images and containers are stored?",
+                "options": [
+                  "data-root",
+                  "storage-driver",
+                  "log-driver",
+                  "metrics-addr"
+                ],
+                "answer": 0,
+                "explain": "data-root is the Docker root directory."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "daemon-security",
+            "system-maintenance",
+            "monitoring-stack"
+          ],
+          "tags": [
+            "administration",
+            "daemon"
+          ],
+          "commands": [
+            "docker info",
+            "docker system df"
+          ],
+          "sources": [
+            {
+              "title": "Daemon configuration",
+              "url": "https://docs.docker.com/reference/cli/dockerd/"
+            },
+            {
+              "title": "Live restore",
+              "url": "https://docs.docker.com/config/containers/live-restore/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "contexts",
+          "title": "Contexts and remote engines",
+          "duration": "10 min",
+          "summary": "Switch between local, SSH and remote engines without changing your workflow.",
+          "objectives": [
+            "Create and use Docker contexts",
+            "Connect over SSH safely",
+            "Understand DOCKER_HOST precedence"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A context is a named endpoint",
+              "body": "A context stores a daemon endpoint, TLS material and metadata. `docker context use` changes the active endpoint for all subsequent commands. SSH contexts are the safest way to reach a remote engine: they use your existing SSH identity and do not expose a TCP port."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker context ls\ndocker context create staging --docker \"host=ssh://deploy@staging.example.com\"\ndocker context use staging\ndocker info --format '{{.Name}} {{.ServerVersion}}'\ndocker ps\n\ndocker context use default\nDOCKER_CONTEXT=staging docker ps",
+              "title": null,
+              "output": null,
+              "note": "DOCKER_CONTEXT overrides the active context for a single command environment."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Contexts are privileged endpoints",
+              "body": "Switching to a production context and running `docker system prune` is one keystroke from disaster. Use distinct shell prompts and read the context name before destructive commands."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Create a context",
+              "prompt": "Create an SSH context named lab.",
+              "command": null,
+              "expected": "docker context create lab --docker \"host=ssh://user@host\"",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "One-off",
+              "prompt": "Run docker ps against a context without switching.",
+              "command": null,
+              "expected": "DOCKER_CONTEXT=lab docker ps",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the safest remote engine connection?",
+                "options": [
+                  "TCP 2375",
+                  "SSH context",
+                  "HTTP",
+                  "A shared socket"
+                ],
+                "answer": 1,
+                "explain": "SSH uses existing secure authentication."
+              },
+              {
+                "question": "Which command shows the active context?",
+                "options": [
+                  "docker context show",
+                  "docker info --context",
+                  "docker ps",
+                  "docker version"
+                ],
+                "answer": 0,
+                "explain": "context show prints the current name."
+              },
+              {
+                "question": "What overrides the active context for one command?",
+                "options": [
+                  "DOCKER_HOST file",
+                  "DOCKER_CONTEXT env var",
+                  "--remote flag",
+                  "docker switch"
+                ],
+                "answer": 1,
+                "explain": "The environment variable takes precedence."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "client-server-architecture",
+            "daemon-security",
+            "system-maintenance"
+          ],
+          "tags": [
+            "administration",
+            "contexts"
+          ],
+          "commands": [
+            "docker context",
+            "docker info"
+          ],
+          "sources": [
+            {
+              "title": "Contexts",
+              "url": "https://docs.docker.com/engine/context/working-with-contexts/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "system-maintenance",
+          "title": "Maintenance, upgrades and rootless",
+          "duration": "12 min",
+          "summary": "A routine that keeps an engine healthy across months and versions.",
+          "objectives": [
+            "Plan disk and version maintenance",
+            "Upgrade the engine without surprise downtime",
+            "Evaluate rootless mode"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A maintenance routine",
+              "body": "Weekly: inspect disk usage, prune with retention, review daemon logs. Monthly: apply security updates to the engine and base images, verify backups. Quarterly: rehearse restore, review access to the socket and contexts, audit running capabilities.\n\nUpgrade paths matter: read release notes, pin a version in package managers, and test in a staging host. Engine upgrades can change storage drivers, cgroup versions and default behaviours."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Weekly\ndocker system df\ndocker system events --since 24h --filter event=die\njournalctl -u docker --since '7 days ago' --no-pager | grep -i error | tail -50\n\n# Controlled cleanup\ndocker builder prune --keep-storage 10GB\ndocker image prune -a --filter \"until=168h\"\ndocker volume prune\n\n# Version inventory\ndocker version --format '{{.Server.Version}}'\napt list --installed 2>/dev/null | grep -E 'docker|containerd'",
+              "title": null,
+              "output": null,
+              "note": "Use your distribution’s package manager or Docker’s official repository; do not mix sources."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Cadence",
+                "Task"
+              ],
+              "rows": [
+                [
+                  "Daily",
+                  "Alerts, failed containers, disk trend"
+                ],
+                [
+                  "Weekly",
+                  "Prune with retention, log review"
+                ],
+                [
+                  "Monthly",
+                  "Engine/base image updates, access review"
+                ],
+                [
+                  "Quarterly",
+                  "Restore drill, capability audit, upgrade test"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Rootless is a strong default for developer hosts",
+              "body": "It reduces daemon privilege, but some networking/storage features and privileged ports differ. Validate your workloads before standardising."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Maintenance plan",
+              "prompt": "Write a weekly maintenance checklist.",
+              "command": null,
+              "expected": "df, prune with filters, logs, failed units, backup verification.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Rootless check",
+              "prompt": "Find out whether a host is running rootless Docker.",
+              "command": null,
+              "expected": "docker info --format \"{{.SecurityOptions}}\" and check for rootless.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is a safe prune retention strategy?",
+                "options": [
+                  "Delete everything weekly",
+                  "Prune with age/size filters",
+                  "Never prune",
+                  "Delete /var/lib/docker"
+                ],
+                "answer": 1,
+                "explain": "Retention filters avoid removing needed artifacts."
+              },
+              {
+                "question": "What should you do before an engine upgrade?",
+                "options": [
+                  "Delete volumes",
+                  "Read release notes and test on staging",
+                  "Disable health checks",
+                  "Switch to host networking"
+                ],
+                "answer": 1,
+                "explain": "Upgrades can change behaviour."
+              },
+              {
+                "question": "What does rootless mode change?",
+                "options": [
+                  "The daemon runs as a non-root user",
+                  "The kernel",
+                  "The image format",
+                  "Networking is disabled"
+                ],
+                "answer": 0,
+                "explain": "It reduces daemon privilege."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "daemon-config",
+            "daemon-security",
+            "disk-space"
+          ],
+          "tags": [
+            "administration",
+            "maintenance"
+          ],
+          "commands": [
+            "docker system",
+            "docker version"
+          ],
+          "sources": [
+            {
+              "title": "Rootless",
+              "url": "https://docs.docker.com/engine/security/rootless/"
+            },
+            {
+              "title": "Upgrade",
+              "url": "https://docs.docker.com/engine/install/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-architecture",
+    "docker-security"
+  ]
+}

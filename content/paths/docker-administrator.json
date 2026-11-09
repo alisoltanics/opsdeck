@@ -1,0 +1,68 @@
+{
+  "id": "docker-administrator",
+  "title": "Docker Administrator",
+  "subtitle": "Own the engine, hosts, contexts and maintenance",
+  "level": "Advanced",
+  "duration": "13h 50m",
+  "icon": "server-cog",
+  "accent": "amber",
+  "description": "For platform and infrastructure administrators responsible for Docker hosts, security, storage and maintenance.",
+  "prerequisites": [
+    "docker-beginner"
+  ],
+  "outcomes": [
+    "Harden the daemon and containers",
+    "Manage contexts and remote engines",
+    "Plan disk and upgrade maintenance",
+    "Recover from failures with evidence"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "docker-architecture",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "docker-networking",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "docker-security",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "docker-performance",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "docker-monitoring",
+      "description": ""
+    },
+    {
+      "title": "Stage 6",
+      "courseId": "docker-troubleshooting",
+      "description": ""
+    },
+    {
+      "title": "Stage 7",
+      "courseId": "daemon-config",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "docker-architecture",
+      "docker-networking",
+      "docker-security",
+      "docker-performance",
+      "docker-monitoring",
+      "docker-troubleshooting",
+      "daemon-config"
+    ]
+  }
+}

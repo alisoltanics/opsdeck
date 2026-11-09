@@ -1,0 +1,68 @@
+{
+  "id": "devops-engineer",
+  "title": "DevOps Engineer",
+  "subtitle": "Build, publish, observe and operate container workloads",
+  "level": "Advanced",
+  "duration": "14h 20m",
+  "icon": "git-branch",
+  "accent": "cyan",
+  "description": "The full delivery path: image builds, registries, Compose deployments, monitoring, troubleshooting and production practices.",
+  "prerequisites": [
+    "docker-developer"
+  ],
+  "outcomes": [
+    "Build and publish multi-platform images",
+    "Run a monitoring stack",
+    "Diagnose production failures",
+    "Operate a single-host deployment with backups"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "dockerfile-masterclass",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "docker-build-buildkit",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "docker-compose",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "docker-registry",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "docker-monitoring",
+      "description": ""
+    },
+    {
+      "title": "Stage 6",
+      "courseId": "docker-production",
+      "description": ""
+    },
+    {
+      "title": "Stage 7",
+      "courseId": "docker-troubleshooting",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "dockerfile-masterclass",
+      "docker-build-buildkit",
+      "docker-compose",
+      "docker-registry",
+      "docker-monitoring",
+      "docker-production",
+      "docker-troubleshooting"
+    ]
+  }
+}

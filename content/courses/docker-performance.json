@@ -1,0 +1,398 @@
+{
+  "id": "docker-performance",
+  "order": 13,
+  "title": "Docker Performance",
+  "subtitle": "Measure, limit and optimise containers and builds",
+  "level": "Advanced",
+  "duration": "1h 10m",
+  "icon": "gauge",
+  "accent": "amber",
+  "description": "Performance work starts with measurement. Learn how CPU, memory, I/O and build time behave under Docker and where the real bottlenecks are.",
+  "outcomes": [
+    "Apply resource limits without starving services",
+    "Reduce image size and startup time",
+    "Profile build and runtime performance",
+    "Interpret docker stats correctly"
+  ],
+  "modules": [
+    {
+      "id": "performance-model",
+      "title": "Performance model",
+      "summary": "Limits, footprint and measurement.",
+      "lessons": [
+        {
+          "id": "resource-limits",
+          "title": "CPU, memory and I/O limits",
+          "duration": "11 min",
+          "summary": "What the flags actually do, and why limits without requests can hurt.",
+          "objectives": [
+            "Translate --cpus and --memory into cgroup behaviour",
+            "Avoid OOM kills and CPU throttling surprises",
+            "Set PID limits against fork bombs"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Limits are ceilings, not reservations",
+              "body": "`--cpus 1.5` sets a CPU quota (150% of one core). `--memory 512m` is a hard limit; exceeding it triggers the OOM killer. `--pids-limit` caps processes and threads. `--blkio-weight` is a relative share, not a bandwidth guarantee.\n\nA container with a CPU quota that is too low will be throttled even when the host is idle. Watch `cpu.stat` (nr_throttled, throttled_time) when latency is unexplained."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name api \\\n  --cpus 1.5 \\\n  --memory 512m --memory-swap 512m \\\n  --pids-limit 256 \\\n  --blkio-weight 500 \\\n  acme/api:1.4\n\ndocker stats --no-stream\ndocker inspect api --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.PidsLimit}}'",
+              "title": null,
+              "output": "1500000000 536870912 256",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Java and Node need heap awareness",
+              "body": "A JVM may see host memory unless you set -XX:MaxRAMPercentage or use container-aware defaults. Node’s default heap can also exceed a small container limit."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Set limits",
+              "prompt": "Run nginx with 1 CPU and 256 MB hard memory.",
+              "command": "docker run -d --cpus 1 --memory 256m --memory-swap 256m nginx:alpine",
+              "expected": "docker run --cpus 1 --memory 256m --memory-swap 256m nginx:alpine",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Read throttling",
+              "prompt": "Find the cgroup for a container and read cpu.stat.",
+              "command": null,
+              "expected": "Use the container id under /sys/fs/cgroup and inspect nr_throttled/throttled_usec.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does --cpus 0.5 mean?",
+                "options": [
+                  "50% of all host cores",
+                  "Half of one CPU core",
+                  "Half a gigabyte of RAM",
+                  "Priority 0.5"
+                ],
+                "answer": 1,
+                "explain": "It sets a quota equal to half a core."
+              },
+              {
+                "question": "A container exceeds --memory. What happens?",
+                "options": [
+                  "It is throttled",
+                  "The kernel OOM killer may terminate processes",
+                  "Docker raises the limit",
+                  "It restarts automatically"
+                ],
+                "answer": 1,
+                "explain": "Memory is a hard limit."
+              },
+              {
+                "question": "What does --pids-limit protect against?",
+                "options": [
+                  "Port exhaustion",
+                  "Fork bombs and runaway threads",
+                  "DNS failures",
+                  "Disk bloat"
+                ],
+                "answer": 1,
+                "explain": "It caps the number of processes/threads."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "runtime-performance",
+            "config-and-resources",
+            "namespaces-cgroups"
+          ],
+          "tags": [
+            "performance",
+            "resources"
+          ],
+          "commands": [
+            "docker run",
+            "docker stats",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Resource constraints",
+              "url": "https://docs.docker.com/engine/containers/resource_constraints/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "image-size-startup",
+          "title": "Image size and startup",
+          "duration": "10 min",
+          "summary": "Smaller images pull faster, start faster and have a smaller attack surface — but size is not the only goal.",
+          "objectives": [
+            "Measure image size and layer contribution",
+            "Choose base images deliberately",
+            "Reduce startup time without breaking signals"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Where size comes from",
+              "body": "Most oversized images contain build tools, package caches, documentation or duplicate dependencies. Multi-stage builds and cache mounts remove build-time bytes. `docker image history` shows which instruction contributed which layer; `dive` gives a file-level view.\n\nDo not chase the smallest possible image blindly. A distroless image is harder to debug; Alpine uses musl, which can break native modules. Optimise for the operational model you can support."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker image ls --format 'table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}'\ndocker image history --no-trunc acme/api:1.4\ndocker run --rm acme/api:1.4 du -sh /app /usr/local/lib/node_modules 2>/dev/null\n\n# Compare a shell-form vs exec-form startup\ndocker inspect acme/api:1.4 --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'",
+              "title": null,
+              "output": null,
+              "note": "A smaller image is not automatically faster at runtime; startup is dominated by process initialisation and health checks."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Change",
+                "Size",
+                "Startup",
+                "Trade-off"
+              ],
+              "rows": [
+                [
+                  "Multi-stage",
+                  "↓↓",
+                  "~",
+                  "Build complexity"
+                ],
+                [
+                  "Alpine base",
+                  "↓",
+                  "↓",
+                  "musl compatibility"
+                ],
+                [
+                  "distroless",
+                  "↓↓",
+                  "↓",
+                  "Harder debugging"
+                ],
+                [
+                  "Remove dev deps",
+                  "↓",
+                  "↓",
+                  "Separate test image"
+                ],
+                [
+                  "Precompile assets",
+                  "↓",
+                  "↓↓",
+                  "Build time"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Measure pull time in your network",
+              "body": "A 1 GB image is painful on a slow link even if it is fine in a datacenter. Optimise for the slowest environment that must run it."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Layer audit",
+              "prompt": "Find the largest layer in an image.",
+              "command": null,
+              "expected": "docker image history --no-trunc IMAGE and compare sizes.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Measure startup",
+              "prompt": "Time a container from start to healthy.",
+              "command": null,
+              "expected": "Use time docker run with a health check, or inspect StartedAt and health status.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which command shows per-layer size contribution?",
+                "options": [
+                  "docker image ls",
+                  "docker image history",
+                  "docker ps",
+                  "docker stats"
+                ],
+                "answer": 1,
+                "explain": "History lists layer sizes and commands."
+              },
+              {
+                "question": "What is a trade-off of distroless images?",
+                "options": [
+                  "They are larger",
+                  "They lack a shell and debugging tools",
+                  "They cannot run Node",
+                  "They require root"
+                ],
+                "answer": 1,
+                "explain": "Debugging requires ephemeral containers or a debug variant."
+              },
+              {
+                "question": "Why can Alpine break Node native modules?",
+                "options": [
+                  "It uses musl instead of glibc",
+                  "It has no kernel",
+                  "It disables DNS",
+                  "It uses Windows containers"
+                ],
+                "answer": 0,
+                "explain": "Prebuilt native binaries may target glibc."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "multi-stage-builds",
+            "runtime-performance",
+            "production-dockerfile"
+          ],
+          "tags": [
+            "performance",
+            "images"
+          ],
+          "commands": [
+            "docker image history",
+            "docker image ls"
+          ],
+          "sources": [
+            {
+              "title": "Best practices",
+              "url": "https://docs.docker.com/build/building/best-practices/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "runtime-performance",
+          "title": "Runtime performance and stats",
+          "duration": "11 min",
+          "summary": "Read docker stats correctly, distinguish host and container load, and find the real bottleneck.",
+          "objectives": [
+            "Interpret CPU %, memory usage and I/O counters",
+            "Recognise noisy-neighbour effects",
+            "Use cgroup data when stats is not enough"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What docker stats reports",
+              "body": "CPU % is relative to one core on most platforms, so 250% means 2.5 cores. Memory usage includes page cache for the cgroup; it is not the same as application heap. Network and block I/O are cumulative counters, so compare deltas over time rather than absolute values."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker stats --no-stream --format 'table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}\\t{{.NetIO}}\\t{{.BlockIO}}\\t{{.PIDs}}'\n\n# Host-level view of a container cgroup\ncat /sys/fs/cgroup/system.slice/docker-<id>.scope/memory.current\ncat /sys/fs/cgroup/system.slice/docker-<id>.scope/cpu.stat\n\n# Process tree\ndocker top CONTAINER",
+              "title": null,
+              "output": "NAME   CPU %   MEM USAGE / LIMIT   NET I/O         BLOCK I/O     PIDS\napi    0.42%   82.1MiB / 512MiB    1.2MB / 840kB   0B / 4.1kB   7",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "A container is not a VM",
+              "body": "Host CPU steal, memory pressure and disk I/O affect every container. If all containers are slow, look at the host before tuning individual limits."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Baseline",
+              "prompt": "Capture three stats samples 5 seconds apart for one container.",
+              "command": null,
+              "expected": "Run docker stats --no-stream repeatedly and compare counters.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Cgroup memory",
+              "prompt": "Read memory.current for a container.",
+              "command": null,
+              "expected": "Use the cgroup path from docker inspect or systemd-cgls.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "CPU 250% in docker stats means…",
+                "options": [
+                  "250 host cores",
+                  "2.5 cores worth of CPU",
+                  "250 MB",
+                  "A throttle"
+                ],
+                "answer": 1,
+                "explain": "Percent is relative to a single core."
+              },
+              {
+                "question": "Memory usage includes…",
+                "options": [
+                  "Only heap",
+                  "Cgroup memory including page cache",
+                  "Only RSS",
+                  "Only swap"
+                ],
+                "answer": 1,
+                "explain": "Cgroup accounting includes page cache."
+              },
+              {
+                "question": "What is the first step in performance debugging?",
+                "options": [
+                  "Increase limits",
+                  "Measure and identify the bottleneck",
+                  "Restart containers",
+                  "Add replicas"
+                ],
+                "answer": 1,
+                "explain": "Optimise based on evidence."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "resource-limits",
+            "monitoring-stack",
+            "image-size-startup"
+          ],
+          "tags": [
+            "performance",
+            "monitoring"
+          ],
+          "commands": [
+            "docker stats",
+            "docker top"
+          ],
+          "sources": [
+            {
+              "title": "docker stats",
+              "url": "https://docs.docker.com/reference/cli/docker/container/stats/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-containers"
+  ]
+}

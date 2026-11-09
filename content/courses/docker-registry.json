@@ -1,0 +1,408 @@
+{
+  "id": "docker-registry",
+  "order": 11,
+  "title": "Docker Registry",
+  "subtitle": "Publishing, distributing and trusting images",
+  "level": "Intermediate",
+  "duration": "1h 20m",
+  "icon": "cloud",
+  "accent": "blue",
+  "description": "A registry is the boundary between build and runtime. Learn authentication, tags and digests, private registries, and the supply-chain controls that make images trustworthy.",
+  "outcomes": [
+    "Authenticate and push to registries safely",
+    "Use tags and digests correctly",
+    "Run a private registry with TLS and storage",
+    "Understand scanning, SBOM and signing"
+  ],
+  "modules": [
+    {
+      "id": "registry-operations",
+      "title": "Registry operations",
+      "summary": "Auth, publishing and private registries.",
+      "lessons": [
+        {
+          "id": "registry-auth",
+          "title": "Registries and authentication",
+          "duration": "10 min",
+          "summary": "Docker Hub, GHCR, ECR and self-hosted registries all speak the same distribution API.",
+          "objectives": [
+            "Log in without leaking passwords",
+            "Understand credential stores",
+            "Configure access for CI"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "One API, many providers",
+              "body": "A registry implements the OCI Distribution API. Docker Hub, GitHub Container Registry, Amazon ECR, Google Artifact Registry and Harbor all accept `docker login`, `push` and `pull`. Image references encode the registry host, so `ghcr.io/acme/api` never goes to Docker Hub."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Never pass the password as an argument: it lands in shell history.\nprintf '%s' \"$GHCR_TOKEN\" | docker login ghcr.io -u \"$GHCR_USER\" --password-stdin\n\n# Inspect the credential configuration (hosts only, not secrets)\ndocker info --format '{{json .RegistryConfig}}'\ncat ~/.docker/config.json\n\ndocker logout ghcr.io",
+              "title": null,
+              "output": null,
+              "note": "Docker stores credentials in a credential helper (desktop, pass, secretservice) when configured; otherwise config.json contains base64 auth, not encryption."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "config.json is not encrypted",
+              "body": "Base64 is encoding, not encryption. Use a credential helper or short-lived tokens, and never commit ~/.docker/config.json."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Safe login",
+              "prompt": "Write a login command using an environment token.",
+              "command": null,
+              "expected": "printf '%s' \"$TOKEN\" | docker login REGISTRY -u USER --password-stdin",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Find the store",
+              "prompt": "Check whether a credsStore is configured.",
+              "command": null,
+              "expected": "Read ~/.docker/config.json and look for credsStore.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why use --password-stdin?",
+                "options": [
+                  "It is faster",
+                  "It avoids exposing the password in process lists and history",
+                  "It encrypts the password",
+                  "It creates a token"
+                ],
+                "answer": 1,
+                "explain": "stdin keeps the secret out of argv and shell history."
+              },
+              {
+                "question": "How does Docker know which registry to push to?",
+                "options": [
+                  "A global setting",
+                  "The registry host in the image reference",
+                  "The Dockerfile",
+                  "The container name"
+                ],
+                "answer": 1,
+                "explain": "The first reference component selects the registry."
+              },
+              {
+                "question": "What does a credential helper do?",
+                "options": [
+                  "Stores credentials in an external secure store",
+                  "Encrypts image layers",
+                  "Signs images",
+                  "Runs a proxy"
+                ],
+                "answer": 0,
+                "explain": "Helpers delegate storage to OS keychains or secret managers."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "push-pull-digests",
+            "private-registry",
+            "project-ci-pipeline"
+          ],
+          "tags": [
+            "registry",
+            "security"
+          ],
+          "commands": [
+            "docker login",
+            "docker logout"
+          ],
+          "sources": [
+            {
+              "title": "Registry authentication",
+              "url": "https://docs.docker.com/reference/cli/docker/login/"
+            },
+            {
+              "title": "Credential helpers",
+              "url": "https://docs.docker.com/engine/security/trust/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "push-pull-digests",
+          "title": "Tags, digests and publishing",
+          "duration": "11 min",
+          "summary": "Tags are convenient and mutable. Digests are precise and immutable. Production needs both, used deliberately.",
+          "objectives": [
+            "Tag an image for a registry",
+            "Push and verify a digest",
+            "Pull by digest for reproducibility"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The publishing sequence",
+              "body": "Build with a local name, tag it with the full registry path, push, then read back the digest. The digest is the content identity; deploy by digest when you need an auditable guarantee that the artifact did not change."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker build -t acme/api:1.4.0 .\ndocker tag acme/api:1.4.0 ghcr.io/acme/api:1.4.0\ndocker push ghcr.io/acme/api:1.4.0\n\ndocker inspect --format '{{index .RepoDigests 0}}' ghcr.io/acme/api:1.4.0\n# ghcr.io/acme/api@sha256:...\n\ndocker pull ghcr.io/acme/api@sha256:abc123...\ndocker run --rm ghcr.io/acme/api@sha256:abc123... --version",
+              "title": null,
+              "output": "The push refers to repository [ghcr.io/acme/api]\n1.4.0: digest: sha256:abc123... size: 1573",
+              "note": null
+            },
+            {
+              "type": "table",
+              "head": [
+                "Reference",
+                "Mutable",
+                "Use"
+              ],
+              "rows": [
+                [
+                  "app:latest",
+                  "Yes",
+                  "Local experiments only"
+                ],
+                [
+                  "app:1.4.0",
+                  "Usually",
+                  "Human-friendly releases"
+                ],
+                [
+                  "app@sha256:…",
+                  "No",
+                  "Auditable production deploys"
+                ],
+                [
+                  "app:1.4.0@sha256:…",
+                  "No",
+                  "Readable and exact"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "latest is not a version",
+              "body": "It is a tag that moves. Deploying latest makes rollbacks ambiguous and caching unpredictable."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Publish",
+              "prompt": "Tag and push an image to a registry path.",
+              "command": null,
+              "expected": "docker tag app:1.0 REGISTRY/team/app:1.0 && docker push REGISTRY/team/app:1.0",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Pin",
+              "prompt": "Write a run command pinned to a digest.",
+              "command": null,
+              "expected": "docker run --rm REGISTRY/team/app@sha256:...",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which reference is immutable?",
+                "options": [
+                  "app:latest",
+                  "app:1.4.0",
+                  "app@sha256:...",
+                  "app"
+                ],
+                "answer": 2,
+                "explain": "A digest pins exact content."
+              },
+              {
+                "question": "Does docker tag push the image?",
+                "options": [
+                  "Yes",
+                  "No",
+                  "Only to Docker Hub",
+                  "Only with --push"
+                ],
+                "answer": 1,
+                "explain": "Push is separate."
+              },
+              {
+                "question": "What does RepoDigests contain?",
+                "options": [
+                  "Local image IDs",
+                  "Registry digests for the image",
+                  "Tags",
+                  "Layer sizes"
+                ],
+                "answer": 1,
+                "explain": "It maps repository references to content digests."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "registry-auth",
+            "image-provenance",
+            "zero-downtime"
+          ],
+          "tags": [
+            "registry",
+            "digests"
+          ],
+          "commands": [
+            "docker tag",
+            "docker push",
+            "docker pull"
+          ],
+          "sources": [
+            {
+              "title": "Push",
+              "url": "https://docs.docker.com/reference/cli/docker/image/push/"
+            },
+            {
+              "title": "Digests",
+              "url": "https://docs.docker.com/reference/cli/docker/image/pull/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "private-registry",
+          "title": "Run a private registry",
+          "duration": "11 min",
+          "summary": "Deploy registry:2 behind TLS, persist its storage, and understand when a managed registry is the better choice.",
+          "objectives": [
+            "Run a registry with persistent storage",
+            "Configure TLS or a reverse proxy",
+            "Push and pull from the local registry"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A registry is a stateless-looking HTTP service",
+              "body": "The reference `registry:2` image implements the distribution API. It stores blobs on the filesystem by default; production deployments put that path on a volume or object storage and terminate TLS in front of it. Without TLS, Docker refuses to authenticate except to localhost."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  registry:\n    image: registry:2.8\n    restart: unless-stopped\n    ports:\n      - \"127.0.0.1:5000:5000\"\n    environment:\n      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry\n      REGISTRY_HTTP_ADDR: 0.0.0.0:5000\n    volumes:\n      - registry-data:/var/lib/registry\n\nvolumes:\n  registry-data:",
+              "title": null,
+              "output": null,
+              "note": "Localhost HTTP is treated as insecure-but-allowed. For remote access, add TLS or put Caddy/nginx in front."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker compose up -d\ndocker tag alpine:3.20 localhost:5000/team/alpine:3.20\ndocker push localhost:5000/team/alpine:3.20\ncurl http://localhost:5000/v2/_catalog\ncurl http://localhost:5000/v2/team/alpine/tags/list",
+              "title": null,
+              "output": "{\"repositories\":[\"team/alpine\"]}\n{\"name\":\"team/alpine\",\"tags\":[\"3.20\"]}",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "The registry has no authentication by default",
+              "body": "Anyone who can reach the port can push and pull. Put authentication, authorization, TLS and rate limiting in front before exposing it beyond localhost."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Local registry",
+              "prompt": "Run registry:2 on 127.0.0.1:5000 with a named volume.",
+              "command": null,
+              "expected": "Use the compose file above and verify /v2/_catalog.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Push to it",
+              "prompt": "Tag alpine and push it to localhost:5000/team/alpine:3.20.",
+              "command": null,
+              "expected": "docker tag + docker push, then check the catalog.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why does Docker refuse a remote HTTP registry?",
+                "options": [
+                  "HTTP is slower",
+                  "It requires TLS for authenticated remote access",
+                  "The registry image lacks HTTP",
+                  "It needs Swarm"
+                ],
+                "answer": 1,
+                "explain": "Insecure registries must be explicitly allow-listed, which is discouraged."
+              },
+              {
+                "question": "Where should registry blobs live in production?",
+                "options": [
+                  "Container writable layer",
+                  "A volume or object storage",
+                  "The image",
+                  "tmpfs"
+                ],
+                "answer": 1,
+                "explain": "The writable layer is deleted with the container."
+              },
+              {
+                "question": "Which endpoint lists repositories?",
+                "options": [
+                  "/v2/_catalog",
+                  "/v2/repos",
+                  "/_api/repositories",
+                  "/health"
+                ],
+                "answer": 0,
+                "explain": "The catalog endpoint is part of the distribution API."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "registry-auth",
+            "production-compose",
+            "image-provenance"
+          ],
+          "tags": [
+            "registry",
+            "self-hosted"
+          ],
+          "commands": [
+            "docker push",
+            "docker pull",
+            "docker compose"
+          ],
+          "sources": [
+            {
+              "title": "Deploy a registry server",
+              "url": "https://docs.docker.com/registry/deploying/"
+            },
+            {
+              "title": "Registry configuration",
+              "url": "https://docs.docker.com/registry/configuration/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-images"
+  ]
+}

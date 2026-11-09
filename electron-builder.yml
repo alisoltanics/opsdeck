@@ -1,0 +1,54 @@
+appId: com.opsdeck.studio
+productName: OpsDeck
+copyright: Copyright © 2026 OpsDeck
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - main.js
+  - preload.js
+  - package.json
+  - src/**/*
+  - assets/icon.png
+  - assets/fonts/**/*
+  - "!scripts/**/*"
+  - "!test/**/*"
+  - "!**/*.map"
+  - "!**/.DS_Store"
+
+extraResources:
+  - from: content
+    to: content
+
+asar: true
+asarUnpack:
+  - node_modules/sql.js/dist/**/*
+
+linux:
+  target:
+    - dir
+    - AppImage
+  executableName: opsdeck
+  category: Development
+  icon: assets/icon.png
+  synopsis: Operations Studio for Docker
+  description: >-
+    OpsDeck is a local-first operations studio for Docker with a complete
+    interactive Docker Academy: courses, labs, command reference and
+    troubleshooting guides.
+  desktop:
+    entry:
+      Name: OpsDeck
+      GenericName: Operations Studio
+      Comment: Docker control plane and interactive Docker Academy
+      Categories: Development;
+      Keywords: docker;containers;compose;devops;kubernetes;academy;learning;
+      StartupWMClass: OpsDeck
+      StartupNotify: "true"
+      Terminal: "false"
+      Type: Application
+
+appImage:
+  artifactName: OpsDeck-${version}-${arch}.${ext}

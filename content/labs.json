@@ -1,0 +1,556 @@
+{
+  "labs": [
+    {
+      "id": "lab-first-contact",
+      "title": "First contact",
+      "subtitle": "Run, inspect and remove a container",
+      "level": "Beginner",
+      "duration": "8 min",
+      "icon": "play",
+      "accent": "green",
+      "description": "A five-step introduction to the container lifecycle using images that are already approved for the sandbox.",
+      "objectives": [
+        "Run a detached container",
+        "Read its state with docker ps",
+        "Read logs and remove it cleanly"
+      ],
+      "steps": [
+        {
+          "instruction": "Run hello-world and read the output.",
+          "command": "docker run --rm hello-world",
+          "hint": "The image prints a short explanation and exits.",
+          "expect": "docker run --rm hello-world",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Run an nginx container named lab-web in the background.",
+          "command": "docker run -d --name lab-web nginx:1.27-alpine",
+          "hint": "",
+          "expect": "docker run -d --name lab-web nginx:1.27-alpine",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Confirm it is running.",
+          "command": "docker ps",
+          "hint": "Look for lab-web and its published port.",
+          "expect": "docker ps",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Read the container logs.",
+          "command": "docker logs lab-web",
+          "hint": "nginx logs requests and startup messages.",
+          "expect": "docker logs lab-web",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Remove the container.",
+          "command": "docker rm -f lab-web",
+          "hint": "Force removal stops the running container first.",
+          "expect": "docker rm -f lab-web",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": [
+        "The lab adds resource limits, drops capabilities and applies an opsdeck.lab label automatically."
+      ]
+    },
+    {
+      "id": "lab-lifecycle",
+      "title": "Lifecycle control",
+      "subtitle": "Stop, start and inspect state",
+      "level": "Beginner",
+      "duration": "7 min",
+      "icon": "rotate-cw",
+      "accent": "blue",
+      "description": "Practice graceful stop and restart while watching the recorded state and exit code.",
+      "objectives": [
+        "Stop a container without deleting it",
+        "Start it again",
+        "Inspect the recorded exit code"
+      ],
+      "steps": [
+        {
+          "instruction": "Create a named background container.",
+          "command": "docker run -d --name lab-cycle alpine sleep 600",
+          "hint": "The command keeps PID 1 alive for ten minutes.",
+          "expect": "docker run -d --name lab-cycle alpine sleep 600",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Stop it gracefully.",
+          "command": "docker stop lab-cycle",
+          "hint": "SIGTERM is sent first; the process exits.",
+          "expect": "docker stop lab-cycle",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Show all containers including stopped ones.",
+          "command": "docker ps -a",
+          "hint": "lab-cycle is now Exited (0).",
+          "expect": "docker ps -a",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Inspect the exit code.",
+          "command": "docker inspect lab-cycle --format '{{.State.ExitCode}}'",
+          "hint": "A graceful stop records exit code 0.",
+          "expect": "docker inspect lab-cycle --format '{{.State.ExitCode}}'",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Start it again.",
+          "command": "docker start lab-cycle",
+          "hint": "Starting preserves the writable layer.",
+          "expect": "docker start lab-cycle",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Clean up.",
+          "command": "docker rm -f lab-cycle",
+          "hint": "",
+          "expect": "docker rm -f lab-cycle",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "lab-images",
+      "title": "Image anatomy",
+      "subtitle": "Pull, inspect and compare images",
+      "level": "Beginner",
+      "duration": "9 min",
+      "icon": "layers",
+      "accent": "violet",
+      "description": "Look inside an image: its repository, digest, size, history and configuration.",
+      "objectives": [
+        "Pull a pinned image",
+        "Read image metadata with inspect",
+        "Read layer history"
+      ],
+      "steps": [
+        {
+          "instruction": "Pull a small, pinned image.",
+          "command": "docker pull alpine:3.20",
+          "hint": "",
+          "expect": "docker pull alpine:3.20",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "List local images.",
+          "command": "docker images",
+          "hint": "",
+          "expect": "docker images",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Inspect the image configuration.",
+          "command": "docker image inspect alpine:3.20 --format '{{.Id}} {{.Os}}/{{.Architecture}}'",
+          "hint": "",
+          "expect": "docker image inspect alpine:3.20 --format '{{.Id}} {{.Os}}/{{.Architecture}}'",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Read the layer history.",
+          "command": "docker image history alpine:3.20",
+          "hint": "The history shows what each build instruction added.",
+          "expect": "docker image history alpine:3.20",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Run a one-off command from the image.",
+          "command": "docker run --rm alpine:3.20 uname -a",
+          "hint": "",
+          "expect": "docker run --rm alpine:3.20 uname -a",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": [
+        "Image history can reveal build arguments. Never treat a layer as a secret store."
+      ]
+    },
+    {
+      "id": "lab-volumes",
+      "title": "Persistent volumes",
+      "subtitle": "Data that survives a container",
+      "level": "Intermediate",
+      "duration": "10 min",
+      "icon": "database",
+      "accent": "orange",
+      "description": "Create a named volume, write data from one container and read it back from a different one.",
+      "objectives": [
+        "Create a labelled volume",
+        "Write data as a non-root user",
+        "Prove the data survives container removal"
+      ],
+      "steps": [
+        {
+          "instruction": "Create a named volume.",
+          "command": "docker volume create lab-data",
+          "hint": "",
+          "expect": "docker volume create lab-data",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Write a file into the volume.",
+          "command": "docker run --rm -v lab-data:/data alpine sh -c \"echo persisted > /data/hello.txt\"",
+          "hint": "Named volumes are mounted by name, not by host path.",
+          "expect": "docker run --rm -v lab-data:/data alpine sh -c \"echo persisted > /data/hello.txt\"",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Read it from a brand-new container.",
+          "command": "docker run --rm -v lab-data:/data alpine cat /data/hello.txt",
+          "hint": "",
+          "expect": "docker run --rm -v lab-data:/data alpine cat /data/hello.txt",
+          "output": "persisted",
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Inspect the volume.",
+          "command": "docker volume inspect lab-data",
+          "hint": "The mountpoint is on the Docker host, not in your home directory.",
+          "expect": "docker volume inspect lab-data",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Remove the volume.",
+          "command": "docker volume rm lab-data",
+          "hint": "Removal is irreversible. In production, back up first.",
+          "expect": "docker volume rm lab-data",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "lab-network",
+      "title": "Private network",
+      "subtitle": "Name resolution on a user-defined bridge",
+      "level": "Intermediate",
+      "duration": "12 min",
+      "icon": "network",
+      "accent": "cyan",
+      "description": "Two containers on a user-defined network resolve each other by name. Nothing is published to the host.",
+      "objectives": [
+        "Create a user-defined bridge",
+        "Resolve a service by name",
+        "Inspect the network membership"
+      ],
+      "steps": [
+        {
+          "instruction": "Create the network.",
+          "command": "docker network create lab-net",
+          "hint": "",
+          "expect": "docker network create lab-net",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Run redis on the network.",
+          "command": "docker run -d --name lab-cache --network lab-net redis:7-alpine",
+          "hint": "",
+          "expect": "docker run -d --name lab-cache --network lab-net redis:7-alpine",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Resolve the name from another container.",
+          "command": "docker run --rm --network lab-net alpine getent hosts lab-cache",
+          "hint": "Embedded DNS answers on user-defined networks.",
+          "expect": "docker run --rm --network lab-net alpine getent hosts lab-cache",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Inspect the network.",
+          "command": "docker network inspect lab-net",
+          "hint": "",
+          "expect": "docker network inspect lab-net",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Clean up the container and network.",
+          "command": "docker rm -f lab-cache",
+          "hint": "",
+          "expect": "docker rm -f lab-cache",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Remove the network.",
+          "command": "docker network rm lab-net",
+          "hint": "",
+          "expect": "docker network rm lab-net",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": [
+        "The default bridge does not provide name resolution. Always create a user-defined network for services."
+      ]
+    },
+    {
+      "id": "lab-compose",
+      "title": "Compose a stack",
+      "subtitle": "Write and run a Compose project",
+      "level": "Intermediate",
+      "duration": "14 min",
+      "icon": "boxes",
+      "accent": "violet",
+      "description": "Author a two-service Compose file in the lab workspace, start it and inspect the resolved project.",
+      "objectives": [
+        "Write a valid Compose file",
+        "Start a project with a sandbox prefix",
+        "Inspect and tear down every resource"
+      ],
+      "steps": [
+        {
+          "instruction": "Write compose.yaml with nginx and redis.",
+          "command": "Write the Compose file",
+          "hint": "Use the editor beside the terminal.",
+          "expect": "Write the Compose file",
+          "output": null,
+          "file": "compose.yaml",
+          "content": "name: lab-stack\nservices:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - \"127.0.0.1:8099:80\"\n  cache:\n    image: redis:7-alpine\n"
+        },
+        {
+          "instruction": "Validate and start the project.",
+          "command": "docker compose up -d",
+          "hint": "OpsDeck injects a project name and directory automatically.",
+          "expect": "docker compose up -d",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "List the running services.",
+          "command": "docker compose ps",
+          "hint": "",
+          "expect": "docker compose ps",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Read the web logs.",
+          "command": "docker compose logs web",
+          "hint": "",
+          "expect": "docker compose logs web",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Tear down the project and its volumes.",
+          "command": "docker compose down -v",
+          "hint": "",
+          "expect": "docker compose down -v",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": [
+        "Compose service names become DNS names on the project network."
+      ]
+    },
+    {
+      "id": "lab-build",
+      "title": "Build an image",
+      "subtitle": "A Dockerfile, a build and a run",
+      "level": "Intermediate",
+      "duration": "14 min",
+      "icon": "hammer",
+      "accent": "orange",
+      "description": "Build a tiny nginx image with a custom page using an isolated build context.",
+      "objectives": [
+        "Write a Dockerfile",
+        "Build with a label",
+        "Run and verify the custom page"
+      ],
+      "steps": [
+        {
+          "instruction": "Write a Dockerfile that copies index.html into nginx.",
+          "command": "Write the Dockerfile",
+          "hint": "Use the editor beside the terminal.",
+          "expect": "Write the Dockerfile",
+          "output": null,
+          "file": "Dockerfile",
+          "content": "FROM nginx:1.27-alpine\nCOPY index.html /usr/share/nginx/html/index.html\n"
+        },
+        {
+          "instruction": "Write index.html for the image.",
+          "command": "Write index.html",
+          "hint": "",
+          "expect": "Write index.html",
+          "output": null,
+          "file": "index.html",
+          "content": "<h1>Built inside an OpsDeck lab</h1>\n"
+        },
+        {
+          "instruction": "Build the image using the lab directory.",
+          "command": "docker build -t lab-page {dir}",
+          "hint": "The context must be inside the lab workspace.",
+          "expect": "docker build -t lab-page {dir}",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Run the image.",
+          "command": "docker run -d --name lab-page -p 127.0.0.1:8098:80 lab-page",
+          "hint": "The build applied an opsdeck.lab label automatically.",
+          "expect": "docker run -d --name lab-page -p 127.0.0.1:8098:80 lab-page",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Verify the page from inside the sandbox.",
+          "command": "docker exec lab-page cat /usr/share/nginx/html/index.html",
+          "hint": "",
+          "expect": "docker exec lab-page cat /usr/share/nginx/html/index.html",
+          "output": "Built inside",
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Clean up the container.",
+          "command": "docker rm -f lab-page",
+          "hint": "",
+          "expect": "docker rm -f lab-page",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": [
+        "Labs may not mount host paths. COPY from the build context is the supported way to add files."
+      ]
+    },
+    {
+      "id": "lab-diagnose",
+      "title": "Diagnose a failure",
+      "subtitle": "Exit codes, logs and evidence",
+      "level": "Advanced",
+      "duration": "12 min",
+      "icon": "wrench",
+      "accent": "amber",
+      "description": "Reproduce a failing container and use evidence to explain it without guessing.",
+      "objectives": [
+        "Reproduce a non-zero exit",
+        "Read the exit code and error",
+        "Recover and clean up"
+      ],
+      "steps": [
+        {
+          "instruction": "Run a container that exits immediately.",
+          "command": "docker run --name lab-fail alpine sh -c \"echo boom >&2; exit 7\"",
+          "hint": "It exits with code 7.",
+          "expect": "docker run --name lab-fail alpine sh -c \"echo boom >&2; exit 7\"",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "List all containers.",
+          "command": "docker ps -a",
+          "hint": "lab-fail is in the Exited state.",
+          "expect": "docker ps -a",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Read the exit code.",
+          "command": "docker inspect lab-fail --format '{{.State.ExitCode}}'",
+          "hint": "Inspect is the source of truth, not the log text.",
+          "expect": "docker inspect lab-fail --format '{{.State.ExitCode}}'",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Read the logs.",
+          "command": "docker logs lab-fail",
+          "hint": "stderr is included by default.",
+          "expect": "docker logs lab-fail",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Run a corrected command.",
+          "command": "docker run --rm alpine sh -c \"echo recovered\"",
+          "hint": "A new container is the normal recovery path.",
+          "expect": "docker run --rm alpine sh -c \"echo recovered\"",
+          "output": null,
+          "file": null,
+          "content": null
+        },
+        {
+          "instruction": "Remove the failed container.",
+          "command": "docker rm lab-fail",
+          "hint": "",
+          "expect": "docker rm lab-fail",
+          "output": null,
+          "file": null,
+          "content": null
+        }
+      ],
+      "notes": [
+        "Exit 137 usually means SIGKILL or an OOM kill. Exit 127 means the command was not found."
+      ]
+    }
+  ]
+}

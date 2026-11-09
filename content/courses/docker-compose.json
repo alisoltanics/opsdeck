@@ -1,0 +1,833 @@
+{
+  "id": "docker-compose",
+  "order": 9,
+  "title": "Docker Compose Complete Course",
+  "subtitle": "Model, run and operate multi-container applications",
+  "level": "Intermediate",
+  "duration": "3h 10m",
+  "icon": "boxes",
+  "accent": "violet",
+  "description": "Compose is the fastest path from a set of containers to a reproducible application. Learn the full specification: services, networks, volumes, configuration, health, profiles and production overrides.",
+  "outcomes": [
+    "Read and write a complete compose.yaml",
+    "Model service dependencies and health checks",
+    "Manage configuration with env files, secrets and configs",
+    "Use profiles and override files for dev/prod workflows"
+  ],
+  "modules": [
+    {
+      "id": "compose-model",
+      "title": "The Compose model",
+      "summary": "Files, projects and the command lifecycle.",
+      "lessons": [
+        {
+          "id": "compose-architecture",
+          "title": "Compose architecture and the file model",
+          "duration": "12 min",
+          "summary": "A Compose file is a declarative description of a project. The CLI turns it into Docker API calls.",
+          "objectives": [
+            "Explain the project model and naming",
+            "Read the top-level sections",
+            "Know the difference between compose.yaml and docker-compose.yml"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "One file, one project",
+              "body": "Compose reads `compose.yaml` (preferred) or `docker-compose.yml`, resolves variables, validates the model, and creates a **project**. Resources are named `<project>_<resource>` by default, so two checkouts can run side by side with `-p`.\n\nThe top-level keys are `services`, `networks`, `volumes`, `secrets`, `configs`, `name`, and `include`. The obsolete top-level `version` key is ignored by modern Compose and should be removed."
+            },
+            {
+              "type": "diagram",
+              "diagram": "compose-architecture",
+              "caption": "Compose resolves the file into a project containing services, networks, volumes, secrets and configs."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "name: acme\n\nservices:\n  api:\n    build: .\n    ports:\n      - \"127.0.0.1:3000:3000\"\n    environment:\n      DATABASE_URL: postgres://app:secret@db:5432/app\n    depends_on:\n      db:\n        condition: service_healthy\n\n  db:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: secret\n      POSTGRES_DB: app\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U app -d app\"]\n      interval: 5s\n      timeout: 3s\n      retries: 10\n\nvolumes:\n  pgdata:",
+              "title": null,
+              "output": null,
+              "note": "Modern Compose does not need a `version:` key. Use `docker compose config` to see the fully resolved model."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Command",
+                "Purpose"
+              ],
+              "rows": [
+                [
+                  "docker compose config",
+                  "Resolve and validate the model"
+                ],
+                [
+                  "docker compose up -d",
+                  "Create/start the project"
+                ],
+                [
+                  "docker compose ps",
+                  "Project container status"
+                ],
+                [
+                  "docker compose logs -f",
+                  "Follow logs"
+                ],
+                [
+                  "docker compose exec SERVICE sh",
+                  "Shell in a running service"
+                ],
+                [
+                  "docker compose down",
+                  "Stop and remove the project"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Always validate before shipping",
+              "body": "`docker compose config --quiet` fails fast on syntax and interpolation errors and is ideal for CI."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Validate",
+              "prompt": "Write a minimal compose.yaml with one nginx service and validate it.",
+              "command": "docker compose config",
+              "expected": "docker compose config --quiet returns success.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Isolate projects",
+              "prompt": "Run the same file twice under project names dev and test.",
+              "command": null,
+              "expected": "Use -p dev and -p test; resources and containers are namespaced.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the preferred default filename?",
+                "options": [
+                  "docker-compose.yml",
+                  "compose.yaml",
+                  "dockerfile",
+                  "compose.json"
+                ],
+                "answer": 1,
+                "explain": "Compose prefers compose.yaml, though docker-compose.yml is still supported."
+              },
+              {
+                "question": "What does the project name control?",
+                "options": [
+                  "Registry login",
+                  "Resource naming and isolation",
+                  "The base image",
+                  "The network driver"
+                ],
+                "answer": 1,
+                "explain": "Resources are prefixed with the project name."
+              },
+              {
+                "question": "Is the top-level version key required?",
+                "options": [
+                  "Yes",
+                  "No, it is obsolete",
+                  "Only for v2",
+                  "Only in production"
+                ],
+                "answer": 1,
+                "explain": "Modern Compose ignores it and recommends removing it."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-services",
+            "compose-profiles-production"
+          ],
+          "tags": [
+            "compose"
+          ],
+          "commands": [
+            "docker compose",
+            "docker compose config"
+          ],
+          "sources": [
+            {
+              "title": "Compose file reference",
+              "url": "https://docs.docker.com/compose/compose-file/"
+            },
+            {
+              "title": "Compose overview",
+              "url": "https://docs.docker.com/compose/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "compose-services",
+          "title": "Services: image, build, ports and commands",
+          "duration": "13 min",
+          "summary": "The service object is the heart of Compose. Learn the fields that define a container.",
+          "objectives": [
+            "Choose between image and build",
+            "Configure ports, environment and commands",
+            "Use develop and watch for local workflows"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "image or build",
+              "body": "A service either pulls an `image` or builds from a `build` context, or both (build and tag as the image). Use `build.context` plus `image` so the built result gets a stable name. `build.args` passes build-time values; they are visible in image history and must not contain secrets."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  api:\n    build:\n      context: .\n      dockerfile: Dockerfile\n      target: runtime\n      args:\n        NODE_VERSION: \"20\"\n    image: acme/api:local\n    ports:\n      - \"127.0.0.1:3000:3000\"\n    environment:\n      NODE_ENV: production\n      LOG_LEVEL: ${LOG_LEVEL:-info}\n    env_file:\n      - path: .env\n        required: false\n    command: [\"node\", \"dist/server.js\"]\n    working_dir: /app\n    user: \"1000:1000\"\n    restart: unless-stopped\n    stop_grace_period: 30s\n    init: true",
+              "title": null,
+              "output": null,
+              "note": "`${VAR:-default}` is Compose interpolation, not shell. `$$` escapes a literal dollar sign."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Field",
+                "Meaning"
+              ],
+              "rows": [
+                [
+                  "image",
+                  "Image reference to pull or tag"
+                ],
+                [
+                  "build",
+                  "Build context and options"
+                ],
+                [
+                  "ports",
+                  "Publish host:container (short or long syntax)"
+                ],
+                [
+                  "expose",
+                  "Document/internal port only"
+                ],
+                [
+                  "environment",
+                  "Map or list of env vars"
+                ],
+                [
+                  "env_file",
+                  "Load variables from files"
+                ],
+                [
+                  "command",
+                  "Override CMD"
+                ],
+                [
+                  "entrypoint",
+                  "Override ENTRYPOINT"
+                ],
+                [
+                  "restart",
+                  "Restart policy"
+                ],
+                [
+                  "init",
+                  "Run a tiny init as PID 1"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Compose interpolation happens before containers start",
+              "body": "Values from your shell and `.env` are substituted into the file. If a variable is missing, Compose warns and substitutes an empty string. Use `${VAR:?error}` to fail fast."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Build and tag",
+              "prompt": "Configure a service to build from . and tag the result acme/web:dev.",
+              "command": null,
+              "expected": "Set build: . and image: acme/web:dev.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Fail fast",
+              "prompt": "Make Compose fail when DATABASE_URL is missing.",
+              "command": null,
+              "expected": "Use ${DATABASE_URL:?DATABASE_URL is required} in the environment.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which field publishes a host port?",
+                "options": [
+                  "expose",
+                  "ports",
+                  "publish",
+                  "listen"
+                ],
+                "answer": 1,
+                "explain": "`ports` creates host bindings; `expose` is internal documentation."
+              },
+              {
+                "question": "Build args are appropriate for…",
+                "options": [
+                  "Secrets",
+                  "Non-secret build-time values",
+                  "Runtime passwords",
+                  "TLS keys"
+                ],
+                "answer": 1,
+                "explain": "Args are stored in image history and must not hold secrets."
+              },
+              {
+                "question": "What does ${VAR:-default} do?",
+                "options": [
+                  "Fails if unset",
+                  "Uses default when unset or empty",
+                  "Escapes the variable",
+                  "Loads .env"
+                ],
+                "answer": 1,
+                "explain": "It provides a fallback value."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-architecture",
+            "compose-environment-secrets",
+            "compose-services"
+          ],
+          "tags": [
+            "compose",
+            "services"
+          ],
+          "commands": [
+            "docker compose build",
+            "docker compose up"
+          ],
+          "sources": [
+            {
+              "title": "Compose services",
+              "url": "https://docs.docker.com/compose/compose-file/05-services/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "compose-networks-volumes",
+          "title": "Networks and volumes in Compose",
+          "duration": "11 min",
+          "summary": "Implicit defaults, explicit topologies, external resources and naming.",
+          "objectives": [
+            "Design a multi-network Compose app",
+            "Declare and reuse named volumes",
+            "Use external and driver options"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Defaults and intent",
+              "body": "Compose creates a default network named `<project>_default` and attaches every service to it. Services can reach each other by service name. Volumes referenced in services but not declared at top level are created as anonymous or project-scoped resources; declare them explicitly for control.\n\nUse multiple networks to separate tiers: a frontend network for the proxy and app, a backend network for app and database. The database is then unreachable from the proxy."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  proxy:\n    image: nginx:1.27-alpine\n    ports: [\"80:80\"]\n    networks: [frontend]\n  api:\n    build: .\n    networks: [frontend, backend]\n  db:\n    image: postgres:16-alpine\n    networks: [backend]\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n\nnetworks:\n  frontend:\n  backend:\n    internal: true\n\nvolumes:\n  pgdata:\n    name: acme_pgdata",
+              "title": null,
+              "output": null,
+              "note": "An internal network has no external connectivity; db can talk to api but cannot reach the internet."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Name production volumes deliberately",
+              "body": "The `name:` field prevents accidental renames when the project name changes, which would otherwise create a new empty volume."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Two-tier network",
+              "prompt": "Write networks so only the proxy can reach the API and only the API can reach the database.",
+              "command": null,
+              "expected": "proxy on frontend; api on frontend+backend; db on backend only.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "External network",
+              "prompt": "Attach a service to a pre-existing network named shared.",
+              "command": null,
+              "expected": "networks: {shared: {external: true}}",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the default Compose network called?",
+                "options": [
+                  "bridge",
+                  "compose_default",
+                  "<project>_default",
+                  "host"
+                ],
+                "answer": 2,
+                "explain": "It is prefixed with the project name."
+              },
+              {
+                "question": "What does internal: true do?",
+                "options": [
+                  "Publishes ports",
+                  "Removes external connectivity from the network",
+                  "Encrypts traffic",
+                  "Enables DNS"
+                ],
+                "answer": 1,
+                "explain": "Internal networks have no gateway to outside networks."
+              },
+              {
+                "question": "Why declare a volume name explicitly?",
+                "options": [
+                  "Faster I/O",
+                  "Stable identity across project renames",
+                  "Encryption",
+                  "Automatic backup"
+                ],
+                "answer": 1,
+                "explain": "The name fixes the volume identity."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-architecture",
+            "compose-environment-secrets",
+            "bridge-dns"
+          ],
+          "tags": [
+            "compose",
+            "networking",
+            "volumes"
+          ],
+          "commands": [
+            "docker compose config"
+          ],
+          "sources": [
+            {
+              "title": "Compose networks",
+              "url": "https://docs.docker.com/compose/compose-file/06-networks/"
+            },
+            {
+              "title": "Compose volumes",
+              "url": "https://docs.docker.com/compose/compose-file/07-volumes/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "compose-environment-secrets",
+          "title": "Environment, secrets and configs",
+          "duration": "13 min",
+          "summary": "Configuration is not one thing. Separate ordinary settings, sensitive values and read-only config files.",
+          "objectives": [
+            "Use .env, env_file and interpolation correctly",
+            "Mount Compose secrets without baking them into images",
+            "Use configs for non-secret files"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Three channels",
+              "body": "**Environment**: ordinary configuration. Compose loads `.env` for interpolation and `env_file` for container environment. Values are visible in inspect.\n\n**Secrets**: sensitive values mounted as files under `/run/secrets/<name>` by default. They are not in the image or environment.\n\n**Configs**: non-secret files (nginx.conf, app config) mounted read-only, with the same declarative model."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  api:\n    image: acme/api:1.4\n    environment:\n      NODE_ENV: production\n    env_file:\n      - .env\n    secrets:\n      - db_password\n      - source: tls_key\n        target: tls.key\n        mode: 0400\n    configs:\n      - source: nginx_conf\n        target: /etc/nginx/conf.d/default.conf\n\nsecrets:\n  db_password:\n    file: ./secrets/db_password.txt\n  tls_key:\n    environment: TLS_KEY\n\nconfigs:\n  nginx_conf:\n    file: ./nginx.conf",
+              "title": null,
+              "output": null,
+              "note": "In a Swarm, secrets and configs are first-class; in Compose they are mounted files. Both keep secrets out of image layers."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Read a secret inside the container\ndocker compose exec api sh -c 'cat /run/secrets/db_password'\n\n# Check what Compose will run without starting it\ndocker compose config",
+              "title": null,
+              "output": null,
+              "note": "Do not print secrets in shared logs. This is for a local verification only."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Environment variables are not secrets",
+              "body": "Anything in the environment is visible through inspect, /proc, crash dumps and child processes. Use secrets for credentials."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Secret mount",
+              "prompt": "Declare a secret from ./secrets/db_password.txt and mount it in api.",
+              "command": null,
+              "expected": "Top-level secrets + service secrets entry; verify with cat /run/secrets/db_password.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Env precedence",
+              "prompt": "Explain the precedence between shell env, .env, env_file and the environment map.",
+              "command": null,
+              "expected": "Shell/.env feed interpolation; env_file loads container values; the service environment map overrides env_file.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Where does a Compose secret appear in the container?",
+                "options": [
+                  "As an env var",
+                  "As a file under /run/secrets",
+                  "In the image layer",
+                  "In the compose file only"
+                ],
+                "answer": 1,
+                "explain": "Secrets are mounted as files by default."
+              },
+              {
+                "question": "What is .env used for?",
+                "options": [
+                  "Container environment automatically",
+                  "Interpolation by the Compose CLI",
+                  "Secrets storage",
+                  "Image build"
+                ],
+                "answer": 1,
+                "explain": "Compose reads .env for variable substitution; env_file sets container env."
+              },
+              {
+                "question": "Configs are appropriate for…",
+                "options": [
+                  "Passwords",
+                  "Non-secret configuration files",
+                  "API keys",
+                  "TLS private keys"
+                ],
+                "answer": 1,
+                "explain": "Configs are for non-sensitive files."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-services",
+            "secrets-management",
+            "production-compose"
+          ],
+          "tags": [
+            "compose",
+            "security",
+            "configuration"
+          ],
+          "commands": [
+            "docker compose config",
+            "docker compose exec"
+          ],
+          "sources": [
+            {
+              "title": "Compose secrets",
+              "url": "https://docs.docker.com/compose/how-tos/use-secrets/"
+            },
+            {
+              "title": "Environment variables",
+              "url": "https://docs.docker.com/compose/how-tos/environment-variables/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "compose-health-dependencies",
+          "title": "Health checks and dependencies",
+          "duration": "12 min",
+          "summary": "depends_on only controls start order unless you attach a health condition. Learn the difference between started and ready.",
+          "objectives": [
+            "Write a service health check",
+            "Use depends_on conditions correctly",
+            "Avoid startup races"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Started is not ready",
+              "body": "By default `depends_on` waits for the dependency container to start, not for its application to accept connections. A database process can be running while still initialising. Use a health check plus `condition: service_healthy` to wait for readiness.\n\nCompose does not restart a dependent service when a dependency later becomes unhealthy. For resilient systems, the application must also retry connections."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  api:\n    build: .\n    depends_on:\n      db:\n        condition: service_healthy\n      cache:\n        condition: service_started\n  db:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_PASSWORD: secret\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]\n      interval: 5s\n      timeout: 3s\n      retries: 12\n      start_period: 5s\n  cache:\n    image: redis:7-alpine\n    healthcheck:\n      test: [\"CMD\", \"redis-cli\", \"ping\"]\n      interval: 5s\n      timeout: 2s\n      retries: 5",
+              "title": null,
+              "output": null,
+              "note": "`start_period` gives slow starters time before failures count."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Condition",
+                "Waits for"
+              ],
+              "rows": [
+                [
+                  "service_started",
+                  "Container started"
+                ],
+                [
+                  "service_healthy",
+                  "Health check passing"
+                ],
+                [
+                  "service_completed_successfully",
+                  "One-shot job exits 0"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Health checks can lie",
+              "body": "A TCP check only proves the port is open. Use an application-level endpoint that verifies dependencies when readiness matters."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Write a health check",
+              "prompt": "Add a pg_isready health check to a Postgres service.",
+              "command": null,
+              "expected": "healthcheck.test: [\"CMD-SHELL\",\"pg_isready -U postgres\"] with interval/timeout/retries.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "One-shot migration",
+              "prompt": "Make api wait for a migrate service that must exit successfully.",
+              "command": null,
+              "expected": "depends_on: migrate: {condition: service_completed_successfully}",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does depends_on do by default?",
+                "options": [
+                  "Waits for readiness",
+                  "Waits for container start",
+                  "Restarts dependencies",
+                  "Creates a network"
+                ],
+                "answer": 1,
+                "explain": "Without a condition it only orders startup."
+              },
+              {
+                "question": "Which condition waits for a health check?",
+                "options": [
+                  "service_started",
+                  "service_healthy",
+                  "service_ready",
+                  "service_completed"
+                ],
+                "answer": 1,
+                "explain": "service_healthy waits for the health check to pass."
+              },
+              {
+                "question": "What is start_period for?",
+                "options": [
+                  "Delaying the first retry accounting for startup",
+                  "Setting the container timeout",
+                  "Restarting the container",
+                  "Publishing ports"
+                ],
+                "answer": 0,
+                "explain": "It gives slow applications time before failures count."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-services",
+            "healthchecks",
+            "container-exits"
+          ],
+          "tags": [
+            "compose",
+            "health"
+          ],
+          "commands": [
+            "docker compose up",
+            "docker compose ps"
+          ],
+          "sources": [
+            {
+              "title": "Compose depends_on",
+              "url": "https://docs.docker.com/compose/compose-file/05-services/#depends_on"
+            },
+            {
+              "title": "Healthcheck",
+              "url": "https://docs.docker.com/compose/compose-file/05-services/#healthcheck"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "compose-profiles-production",
+          "title": "Profiles, overrides and production",
+          "duration": "14 min",
+          "summary": "One project, several contexts: development, testing, production and optional tooling.",
+          "objectives": [
+            "Use profiles to opt into services",
+            "Layer override files for environments",
+            "Run Compose safely in production-like deployments"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Profiles are opt-in service groups",
+              "body": "A service with `profiles: [\"debug\"]` does not start unless the profile is enabled with `--profile debug` or `COMPOSE_PROFILES`. Services without profiles always start. Use profiles for admin tools, seeders, test runners and optional databases."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "# compose.yaml\nservices:\n  api:\n    image: acme/api:1.4\n  db:\n    image: postgres:16-alpine\n  adminer:\n    image: adminer:4\n    profiles: [\"debug\"]\n    ports: [\"8081:8080\"]\n  test:\n    build: { context: ., target: test }\n    profiles: [\"test\"]\n    command: npm test",
+              "title": null,
+              "output": null,
+              "note": "`docker compose --profile debug up -d` starts api, db and adminer."
+            },
+            {
+              "type": "text",
+              "title": "Overrides",
+              "body": "Compose merges multiple `-f` files in order. Put shared definition in `compose.yaml`, production-specific settings in `compose.prod.yaml`, and run `docker compose -f compose.yaml -f compose.prod.yaml up -d`. Lists such as `ports` are appended for some fields; understand merge rules before relying on them."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# validate the merged model\ndocker compose -f compose.yaml -f compose.prod.yaml config\n\n# production-like run\ndocker compose -f compose.yaml -f compose.prod.yaml pull\ndocker compose -f compose.yaml -f compose.prod.yaml up -d --wait\n\n# stop and remove, keeping volumes\ndocker compose -f compose.yaml -f compose.prod.yaml down",
+              "title": null,
+              "output": null,
+              "note": "`--wait` waits for services to be healthy before returning, if health checks are defined."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Compose is not a cluster scheduler",
+              "body": "A single-host Compose deployment has no rescheduling, rolling update or multi-node failover. Use Swarm, Kubernetes or a managed platform when you need those guarantees."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Add a debug tool",
+              "prompt": "Add adminer behind profile debug and start it.",
+              "command": null,
+              "expected": "docker compose --profile debug up -d adminer",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Production override",
+              "prompt": "Create compose.prod.yaml that removes a published port and sets restart: always.",
+              "command": null,
+              "expected": "Use the override file and validate with docker compose config.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "How do you start a service with profile debug?",
+                "options": [
+                  "--profile debug",
+                  "--with debug",
+                  "COMPOSE_DEBUG=1",
+                  "profiles: debug"
+                ],
+                "answer": 0,
+                "explain": "Enable the profile explicitly."
+              },
+              {
+                "question": "What does multiple -f files do?",
+                "options": [
+                  "Runs one project per file",
+                  "Merges files in order",
+                  "Ignores the second",
+                  "Creates two projects"
+                ],
+                "answer": 1,
+                "explain": "Compose merges configuration."
+              },
+              {
+                "question": "Which flag waits for healthy services?",
+                "options": [
+                  "--wait",
+                  "--health",
+                  "--ready",
+                  "--detach"
+                ],
+                "answer": 0,
+                "explain": "--wait waits for running/healthy state."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-architecture",
+            "production-compose",
+            "zero-downtime"
+          ],
+          "tags": [
+            "compose",
+            "production"
+          ],
+          "commands": [
+            "docker compose up",
+            "docker compose config"
+          ],
+          "sources": [
+            {
+              "title": "Compose profiles",
+              "url": "https://docs.docker.com/compose/how-tos/profiles/"
+            },
+            {
+              "title": "Merge",
+              "url": "https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-containers",
+    "docker-networking",
+    "docker-volumes"
+  ]
+}

@@ -1,0 +1,742 @@
+{
+  "id": "docker-production",
+  "order": 16,
+  "title": "Docker Production Best Practices",
+  "subtitle": "Operating containers beyond a laptop",
+  "level": "Advanced",
+  "duration": "2h 05m",
+  "icon": "rocket",
+  "accent": "green",
+  "description": "Production is a set of promises: reproducible artifacts, graceful failure, observable behaviour, safe configuration and tested recovery. This course turns Docker knowledge into operational discipline.",
+  "outcomes": [
+    "Apply twelve-factor and immutable-image principles",
+    "Run a production-grade Compose deployment",
+    "Design for zero-downtime updates",
+    "Instrument, back up and recover a service"
+  ],
+  "modules": [
+    {
+      "id": "production-readiness",
+      "title": "Readiness",
+      "summary": "What \"production-ready\" actually means.",
+      "lessons": [
+        {
+          "id": "production-readiness",
+          "title": "Production readiness checklist",
+          "duration": "12 min",
+          "summary": "The non-negotiables that separate a demo from a service you can operate.",
+          "objectives": [
+            "Evaluate an image and Compose stack against a readiness checklist",
+            "Design graceful shutdown and startup",
+            "Remove environment coupling from images"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Immutable artifacts, mutable configuration",
+              "body": "Build once and promote the same image. Configuration comes from the environment, mounted files or a secret store. The image should not know whether it is in staging or production.\n\nA production service must start without manual steps, expose a readiness signal, log to stdout, handle SIGTERM, bound its resource use, and fail safely when dependencies are unavailable."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Area",
+                "Requirement"
+              ],
+              "rows": [
+                [
+                  "Artifact",
+                  "Pinned base, immutable tag/digest, SBOM/scan"
+                ],
+                [
+                  "Config",
+                  "Environment/secrets, no baked values"
+                ],
+                [
+                  "Process",
+                  "PID 1 signal handling, graceful shutdown"
+                ],
+                [
+                  "Health",
+                  "Readiness + liveness with sensible timings"
+                ],
+                [
+                  "Resources",
+                  "CPU/memory/PID limits and expectations"
+                ],
+                [
+                  "Observability",
+                  "Structured logs, metrics, traces"
+                ],
+                [
+                  "Data",
+                  "Named volumes, tested backup/restore"
+                ],
+                [
+                  "Security",
+                  "Non-root, read-only, dropped caps"
+                ]
+              ]
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# Graceful shutdown requires exec form and a signal-aware app\nENTRYPOINT [\"node\", \"dist/server.js\"]\nSTOPSIGNAL SIGTERM",
+              "title": null,
+              "output": null,
+              "note": "Node, Go, Python and Java all need explicit SIGTERM handling. Docker sends SIGTERM, then SIGKILL after the grace period."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "services:\n  api:\n    image: registry.example.com/acme/api@sha256:...\n    read_only: true\n    tmpfs: [\"/tmp\"]\n    user: \"10001:10001\"\n    cap_drop: [\"ALL\"]\n    security_opt: [\"no-new-privileges:true\"]\n    stop_grace_period: 30s\n    healthcheck:\n      test: [\"CMD\", \"node\", \"healthcheck.js\"]\n      interval: 15s\n      timeout: 3s\n      retries: 3\n      start_period: 20s",
+              "title": null,
+              "output": null,
+              "note": "A production Compose service should read like a policy document."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Do not run a demo stack in production",
+              "body": "The default bridge network, no resource limits, `latest`, root user and no health checks are acceptable for a demo and unacceptable for a service."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Checklist audit",
+              "prompt": "Audit a compose service against five readiness areas.",
+              "command": null,
+              "expected": "Check image pinning, config, resources, health and security.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Graceful shutdown",
+              "prompt": "Add a 30s stop grace period and a SIGTERM handler plan.",
+              "command": null,
+              "expected": "stop_grace_period: 30s plus app-level SIGTERM handling.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What should change between staging and production?",
+                "options": [
+                  "The image",
+                  "Configuration and secrets",
+                  "The base image",
+                  "The application code"
+                ],
+                "answer": 1,
+                "explain": "The artifact stays identical; configuration changes."
+              },
+              {
+                "question": "Why is exec-form ENTRYPOINT important in production?",
+                "options": [
+                  "Smaller image",
+                  "Signals reach the application process",
+                  "It enables TLS",
+                  "It sets the user"
+                ],
+                "answer": 1,
+                "explain": "Exec form avoids a shell masking PID 1 signals."
+              },
+              {
+                "question": "Which is a production requirement for data?",
+                "options": [
+                  "Bind mount to /tmp",
+                  "Tested backup and restore",
+                  "No volumes",
+                  "Root-owned files"
+                ],
+                "answer": 1,
+                "explain": "Untested backups are not a recovery plan."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "production-compose",
+            "zero-downtime",
+            "production-observability"
+          ],
+          "tags": [
+            "production",
+            "operations"
+          ],
+          "commands": [
+            "docker compose",
+            "docker run"
+          ],
+          "sources": [
+            {
+              "title": "Production",
+              "url": "https://docs.docker.com/production/"
+            },
+            {
+              "title": "Best practices",
+              "url": "https://docs.docker.com/build/building/best-practices/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "production-compose",
+          "title": "Production Compose",
+          "duration": "12 min",
+          "summary": "A disciplined single-host deployment: pinned images, explicit policy, secrets, logging and resource limits.",
+          "objectives": [
+            "Write a production Compose file and override",
+            "Pin images and control pull behaviour",
+            "Apply restart, logging and resource policy"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "One host, explicit policy",
+              "body": "Compose is a legitimate production tool for single-host or small deployments when you accept its limits: no rescheduling, no multi-node failover, manual rolling updates. Write policy explicitly instead of relying on defaults."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "name: acme\nservices:\n  api:\n    image: registry.example.com/acme/api:1.4.0\n    pull_policy: always\n    restart: unless-stopped\n    ports: [\"127.0.0.1:3000:3000\"]\n    env_file: [.env.production]\n    secrets: [db_password]\n    read_only: true\n    tmpfs: [\"/tmp\"]\n    cap_drop: [\"ALL\"]\n    security_opt: [\"no-new-privileges:true\"]\n    stop_grace_period: 30s\n    deploy:\n      resources:\n        limits: { cpus: \"1.5\", memory: 512M }\n    logging:\n      driver: json-file\n      options: { max-size: \"10m\", max-file: \"3\" }\n    healthcheck:\n      test: [\"CMD\", \"node\", \"healthcheck.js\"]\n      interval: 15s\n    depends_on:\n      db: { condition: service_healthy }\n\n  db:\n    image: postgres:16.4-alpine\n    restart: unless-stopped\n    volumes: [\"pgdata:/var/lib/postgresql/data\"]\n    environment:\n      POSTGRES_PASSWORD_FILE: /run/secrets/db_password\n    secrets: [db_password]\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]\n      interval: 10s\n\nsecrets:\n  db_password:\n    file: /etc/acme/db_password\nvolumes:\n  pgdata:\n    name: acme_pgdata",
+              "title": null,
+              "output": null,
+              "note": "Compose supports `deploy.resources.limits` on a single host even without Swarm."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker compose -f compose.yaml config --quiet\ndocker compose -f compose.yaml pull\ndocker compose -f compose.yaml up -d --wait\ndocker compose -f compose.yaml ps",
+              "title": null,
+              "output": null,
+              "note": "Run from a versioned deployment directory, not from a developer checkout."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Compose does not reschedule",
+              "body": "If the host dies, the service is down until you intervene. For HA, use an orchestrator or a managed platform."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Pin and cap",
+              "prompt": "Pin an image to a version and add a 512 MB memory limit.",
+              "command": null,
+              "expected": "image: repo/app:1.4.0 and deploy.resources.limits.memory: 512M.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Validate",
+              "prompt": "Validate a production Compose file in CI.",
+              "command": null,
+              "expected": "docker compose -f compose.yaml config --quiet",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which Compose setting controls image pull behaviour?",
+                "options": [
+                  "pull_policy",
+                  "image_pull",
+                  "update",
+                  "refresh"
+                ],
+                "answer": 0,
+                "explain": "pull_policy controls when Compose pulls."
+              },
+              {
+                "question": "What does deploy.resources.limits work on?",
+                "options": [
+                  "Only Swarm",
+                  "Single-host Compose too",
+                  "Only Kubernetes",
+                  "Only Windows"
+                ],
+                "answer": 1,
+                "explain": "Modern Compose supports it locally."
+              },
+              {
+                "question": "What is the main limitation of Compose in production?",
+                "options": [
+                  "No networking",
+                  "No multi-node scheduling/failover",
+                  "No volumes",
+                  "No logs"
+                ],
+                "answer": 1,
+                "explain": "It is single-host and does not reschedule."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "production-readiness",
+            "zero-downtime",
+            "compose-profiles-production"
+          ],
+          "tags": [
+            "production",
+            "compose"
+          ],
+          "commands": [
+            "docker compose up",
+            "docker compose config"
+          ],
+          "sources": [
+            {
+              "title": "Compose in production",
+              "url": "https://docs.docker.com/compose/how-tos/production/"
+            },
+            {
+              "title": "Compose file",
+              "url": "https://docs.docker.com/compose/compose-file/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "zero-downtime",
+          "title": "Zero-downtime updates",
+          "duration": "12 min",
+          "summary": "Rolling a service without dropping requests requires draining, health checks and a proxy that understands readiness.",
+          "objectives": [
+            "Design a safe update sequence",
+            "Drain connections before stopping",
+            "Handle database migrations without breaking old code"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The update sequence",
+              "body": "Start the new version, wait until it is healthy, add it to the proxy, then drain and stop the old version. Compose on a single host cannot do this for a published port by itself; put a reverse proxy in front and use two instances or an orchestrator.\n\nMigrations must be backward compatible: add columns before code needs them, deploy code that writes both shapes, then remove the old shape. A destructive migration in the same release as the code is a downtime guarantee."
+            },
+            {
+              "type": "steps",
+              "items": [
+                {
+                  "title": "Build and push",
+                  "body": "Produce an immutable image and digest."
+                },
+                {
+                  "title": "Start alongside",
+                  "body": "Run the new container on a different internal port."
+                },
+                {
+                  "title": "Wait for readiness",
+                  "body": "Poll the readiness endpoint, not just the port."
+                },
+                {
+                  "title": "Shift traffic",
+                  "body": "Update the proxy upstream and reload gracefully."
+                },
+                {
+                  "title": "Drain and stop",
+                  "body": "Stop accepting new connections, wait for in-flight requests, then stop the old container."
+                }
+              ]
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "# Caddy upstream switch (conceptual)\nreverse_proxy /api/* api-blue:3000 api-green:3000 {\n  lb_policy first\n  health_uri /health/ready\n  health_interval 5s\n  fail_duration 30s\n}",
+              "title": null,
+              "output": null,
+              "note": "In Compose, changing the proxy config and reloading is often the practical traffic switch. Swarm/Kubernetes automate this."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "A health check that only tests port 3000 is not readiness",
+              "body": "Check dependencies and warm-up state; otherwise traffic arrives before the app can serve it."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Blue/green plan",
+              "prompt": "Describe a blue/green update for a Compose service behind Caddy.",
+              "command": null,
+              "expected": "Run green on a new internal port, wait healthy, switch upstream, drain blue.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Safe migration",
+              "prompt": "Write the three-step expand/contract migration sequence.",
+              "command": null,
+              "expected": "Add new column nullable → deploy dual-write/read → remove old column later.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the correct point to send traffic to a new container?",
+                "options": [
+                  "Immediately after start",
+                  "After readiness passes",
+                  "After it logs a request",
+                  "After 60 seconds always"
+                ],
+                "answer": 1,
+                "explain": "Readiness proves it can serve."
+              },
+              {
+                "question": "Why must migrations be backward compatible?",
+                "options": [
+                  "Old and new code run simultaneously",
+                  "Databases cannot be migrated",
+                  "Docker caches schemas",
+                  "It reduces disk"
+                ],
+                "answer": 0,
+                "explain": "During rollout both versions may run."
+              },
+              {
+                "question": "Can Compose alone do zero-downtime on one published port?",
+                "options": [
+                  "Yes",
+                  "No, a proxy/orchestrator is needed",
+                  "Only with Swarm",
+                  "Only with host networking"
+                ],
+                "answer": 1,
+                "explain": "A single published port cannot overlap old and new containers."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "production-compose",
+            "compose-health-dependencies",
+            "production-backup"
+          ],
+          "tags": [
+            "production",
+            "deployment"
+          ],
+          "commands": [
+            "docker compose",
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "Compose production",
+              "url": "https://docs.docker.com/compose/how-tos/production/"
+            },
+            {
+              "title": "Deployment",
+              "url": "https://docs.docker.com/get-started/deployment/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "production-observability",
+          "title": "Observability and SLOs",
+          "duration": "11 min",
+          "summary": "Logs, metrics and traces are not decoration. They are how you know whether the service is keeping its promises.",
+          "objectives": [
+            "Define SLIs and SLOs for a container service",
+            "Structure logs for querying",
+            "Correlate metrics, logs and traces"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Start from user-visible behaviour",
+              "body": "An SLI is a measured signal (request success rate, latency, saturation). An SLO is a target over a window. Dashboards should answer: are users succeeding, and how fast? Container CPU is a supporting signal, not the goal.\n\nUse structured JSON logs with request IDs, stable metric names and trace propagation. Keep high-cardinality data out of metric labels."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Signal",
+                "Use",
+                "Tool"
+              ],
+              "rows": [
+                [
+                  "Logs",
+                  "Discrete events and errors",
+                  "stdout → Loki/ELK/cloud"
+                ],
+                [
+                  "Metrics",
+                  "Aggregates and alerting",
+                  "Prometheus/OTLP"
+                ],
+                [
+                  "Traces",
+                  "Request path across services",
+                  "OTel/Jaeger/Tempo"
+                ],
+                [
+                  "Health",
+                  "Readiness/liveness",
+                  "Docker health checks"
+                ]
+              ]
+            },
+            {
+              "type": "code",
+              "language": "json",
+              "code": "{\"level\":\"error\",\"ts\":\"2026-01-01T12:00:00Z\",\"service\":\"api\",\"requestId\":\"abc\",\"route\":\"/orders\",\"status\":500,\"durationMs\":42,\"error\":\"db_timeout\"}",
+              "title": null,
+              "output": null,
+              "note": "One line per event. Do not log secrets or request bodies by default."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Alert on symptoms, page on burn rate",
+              "body": "A page for every CPU spike destroys trust. Alert when the error budget is burning or a user-visible SLO is at risk."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Define an SLI",
+              "prompt": "Define success rate and p95 latency SLIs for an HTTP API.",
+              "command": null,
+              "expected": "successful_requests/total_requests; p95 latency over a window.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Structured log",
+              "prompt": "Write one JSON log line for a failed request.",
+              "command": null,
+              "expected": "Include level, ts, service, requestId, route, status, durationMs, error.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is an SLO?",
+                "options": [
+                  "A server limit",
+                  "A target for a measured service-level indicator",
+                  "A logging driver",
+                  "A storage class"
+                ],
+                "answer": 1,
+                "explain": "It is an objective for reliability."
+              },
+              {
+                "question": "Which label is dangerous in metrics?",
+                "options": [
+                  "service",
+                  "status",
+                  "request_id",
+                  "region"
+                ],
+                "answer": 2,
+                "explain": "High-cardinality IDs explode time-series storage."
+              },
+              {
+                "question": "What should logs contain?",
+                "options": [
+                  "Structured fields and request IDs",
+                  "Secrets",
+                  "Full request bodies always",
+                  "Only free text"
+                ],
+                "answer": 0,
+                "explain": "Structured logs are queryable and correlatable."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "monitoring-stack",
+            "production-readiness",
+            "healthchecks"
+          ],
+          "tags": [
+            "production",
+            "observability"
+          ],
+          "commands": [
+            "docker logs",
+            "docker stats"
+          ],
+          "sources": [
+            {
+              "title": "Observability",
+              "url": "https://docs.docker.com/config/containers/logging/"
+            },
+            {
+              "title": "Prometheus",
+              "url": "https://docs.docker.com/https://prometheus.io/docs/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "production-backup",
+          "title": "Backup, restore and disaster recovery",
+          "duration": "11 min",
+          "summary": "The recovery plan is the product. Everything else is a backup you hope works.",
+          "objectives": [
+            "Design backups for data and configuration",
+            "Test restore procedures",
+            "Define RPO/RTO and retention"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What must be recoverable",
+              "body": "Application data (volumes or database dumps), secrets/configuration, the Compose files and deployment metadata, and the exact image digests. Without the digest you cannot reproduce the running artifact after a registry change.\n\nDefine RPO (how much data you can lose) and RTO (how long recovery may take). Backup frequency follows RPO; restore drills validate RTO."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Database-consistent backup\ndocker compose exec -T db pg_dump -U app -d app \\\n  | gzip > \"backups/app-$(date +%Y%m%d-%H%M).sql.gz\"\n\n# Volume backup for non-database state\ndocker run --rm -v acme_pgdata:/data:ro -v \"$PWD/backups\":/backup \\\n  alpine tar czf /backup/pgdata-$(date +%Y%m%d).tgz -C /data .\n\n# Restore drill into a throwaway database\ngunzip -c backups/app-20260101.sql.gz | docker compose exec -T db psql -U app -d app_restore",
+              "title": null,
+              "output": null,
+              "note": "`-T` disables TTY allocation so the pipeline works in scripts."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Asset",
+                "Method",
+                "Frequency"
+              ],
+              "rows": [
+                [
+                  "Database",
+                  "Native dump / snapshot",
+                  "Per RPO"
+                ],
+                [
+                  "Volumes",
+                  "tar or storage snapshot",
+                  "Per RPO"
+                ],
+                [
+                  "Compose/config",
+                  "Version control",
+                  "Every change"
+                ],
+                [
+                  "Secrets",
+                  "Secret manager export/escrow",
+                  "On rotation"
+                ],
+                [
+                  "Images",
+                  "Registry retention + digest record",
+                  "Every release"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "A backup stored on the same host is not disaster recovery",
+              "body": "Replicate off-host and test a restore that does not depend on the failed machine."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Backup script",
+              "prompt": "Write a pg_dump backup piped to gzip with a timestamp.",
+              "command": null,
+              "expected": "docker compose exec -T db pg_dump ... | gzip > backups/app-DATE.sql.gz",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Restore drill",
+              "prompt": "Restore into a separate database and run a sanity query.",
+              "command": null,
+              "expected": "psql -d app_restore then SELECT count(*) from a core table.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does RPO measure?",
+                "options": [
+                  "Recovery time",
+                  "Acceptable data loss window",
+                  "Backup size",
+                  "Retention days"
+                ],
+                "answer": 1,
+                "explain": "Recovery point objective."
+              },
+              {
+                "question": "Why record image digests?",
+                "options": [
+                  "To reduce size",
+                  "To reproduce the exact artifact later",
+                  "To enable DNS",
+                  "To speed builds"
+                ],
+                "answer": 1,
+                "explain": "Tags move; digests pin content."
+              },
+              {
+                "question": "What validates a backup?",
+                "options": [
+                  "Its file size",
+                  "A tested restore",
+                  "Its timestamp",
+                  "Compression ratio"
+                ],
+                "answer": 1,
+                "explain": "Only a restore proves recoverability."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "volume-backup",
+            "production-readiness",
+            "system-maintenance"
+          ],
+          "tags": [
+            "production",
+            "backup"
+          ],
+          "commands": [
+            "docker compose exec",
+            "docker run"
+          ],
+          "sources": [
+            {
+              "title": "Volumes backup",
+              "url": "https://docs.docker.com/engine/storage/volumes/"
+            },
+            {
+              "title": "Postgres backup",
+              "url": "https://docs.docker.com/https://www.postgresql.org/docs/current/backup.html"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-compose",
+    "docker-security"
+  ]
+}

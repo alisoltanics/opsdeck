@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>OpsDeck — Operations Studio</title>
+  <link rel="stylesheet" href="./styles/tokens.css">
+  <link rel="stylesheet" href="./styles/base.css">
+  <link rel="stylesheet" href="./styles/components.css">
+  <link rel="stylesheet" href="./styles/academy.css">
+</head>
+<body>
+  <div class="app" id="app" data-collapsed="false">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation"></aside>
+    <div class="main">
+      <header class="topbar" id="topbar"></header>
+      <main class="content" id="content" tabindex="-1">
+        <div class="content-inner" id="view">
+          <div class="boot-screen">
+            <div class="brand-mark boot-mark" aria-hidden="true"></div>
+            <div>
+              <div class="boot-title">OpsDeck</div>
+              <div class="boot-sub">Starting Operations Studio…</div>
+            </div>
+            <div class="boot-bar"><i></i></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="overlay-root"></div>
+  <div id="palette-root"></div>
+  <div class="toast-root" id="toast-root" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="./js/icons.js" defer></script>
+  <script src="./js/utils.js" defer></script>
+  <script src="./js/charts.js" defer></script>
+  <script src="./js/ui.js" defer></script>
+  <script src="./js/store.js" defer></script>
+  <script src="./js/docker-views.js" defer></script>
+  <script src="./js/academy-views.js" defer></script>
+  <script src="./js/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+{
+  "id": "docker-beginner",
+  "title": "Docker Beginner",
+  "subtitle": "Start from zero and run your first real container",
+  "level": "Beginner",
+  "duration": "4h 10m",
+  "icon": "seedling",
+  "accent": "green",
+  "description": "A gentle, complete introduction. Learn the model, install Docker, run containers, work with images and finish with a real project.",
+  "prerequisites": [],
+  "outcomes": [
+    "Explain containers and images",
+    "Run and inspect containers safely",
+    "Build and tag your first image",
+    "Use Compose for a small stack"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "docker-fundamentals",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "docker-containers",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "docker-images",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "docker-compose",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "docker-fundamentals",
+      "docker-containers",
+      "docker-images",
+      "docker-compose"
+    ]
+  }
+}

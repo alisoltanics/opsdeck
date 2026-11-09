@@ -1,0 +1,3871 @@
+{
+  "engine": [
+    {
+      "id": "run",
+      "command": "docker run",
+      "group": "Containers",
+      "summary": "Create and start a new container from an image",
+      "description": "Combines create and start. Pulls the image if it is not present locally, creates a writable layer, configures namespaces and cgroups, and starts the container process. The container stops when its main process exits.",
+      "syntax": "docker run [OPTIONS] IMAGE [COMMAND] [ARG...]",
+      "examples": [
+        {
+          "title": "Detached web server",
+          "command": "docker run -d --name web -p 127.0.0.1:8080:80 nginx:1.27-alpine",
+          "output": "a1b2c3d4e5f6...",
+          "explain": "HOST:CONTAINER maps port 8080 on loopback to 80 in the container."
+        },
+        {
+          "title": "One-off command",
+          "command": "docker run --rm alpine sh -c \"uname -a\"",
+          "output": "Linux ... x86_64 GNU/Linux",
+          "explain": "--rm removes the container when it exits."
+        },
+        {
+          "title": "Interactive shell",
+          "command": "docker run --rm -it alpine sh",
+          "output": "/ #",
+          "explain": "-i keeps stdin open, -t allocates a TTY."
+        }
+      ],
+      "advanced": [
+        {
+          "title": "Hardened service",
+          "command": "docker run -d --name api --user 10001:10001 --cap-drop ALL --read-only --tmpfs /tmp --security-opt no-new-privileges --memory 256m --pids-limit 128 acme/api:1.4",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Runtime configuration",
+          "command": "docker run -d --env-file .env -e LOG_LEVEL=debug --restart unless-stopped acme/api:1.4",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "output": "The container ID is printed on success. Use docker ps to see state and docker logs for output.",
+      "mistakes": [
+        "Using shell form in CMD/ENTRYPOINT hides signals and can leave the container running after the app crashes.",
+        "Publishing a port on 0.0.0.0 when the service should be local-only. Use 127.0.0.1:HOST:CONTAINER.",
+        "Forgetting that a container exits as soon as its main process exits; daemonizing the app stops the container."
+      ],
+      "security": [
+        "Avoid --privileged. Drop capabilities and run as a non-root user.",
+        "Never mount /var/run/docker.sock into an application container."
+      ],
+      "related": [
+        "docker create",
+        "docker start",
+        "docker exec",
+        "docker logs",
+        "docker ps"
+      ],
+      "lesson": "run-exec-logs",
+      "tags": [
+        "containers",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "create",
+      "command": "docker create",
+      "group": "Containers",
+      "summary": "Create a container without starting it",
+      "description": "Allocates the container, writable layer, network configuration and name, but does not start the process. Useful for preparing a container that will be started later or by an external system.",
+      "syntax": "docker create [OPTIONS] IMAGE [COMMAND] [ARG...]",
+      "examples": [
+        {
+          "title": "Prepare a worker",
+          "command": "docker create --name worker -e MODE=batch alpine sleep 3600",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Prints the container ID. The container is in the created state.",
+      "mistakes": [
+        "Expecting the container to run; use docker start or docker run.",
+        "Assuming create validates the command exists inside the image."
+      ],
+      "security": [],
+      "related": [
+        "docker run",
+        "docker start",
+        "docker ps"
+      ],
+      "lesson": "container-commands",
+      "tags": [
+        "containers"
+      ]
+    },
+    {
+      "id": "start",
+      "command": "docker start",
+      "group": "Containers",
+      "summary": "Start one or more stopped containers",
+      "description": "Starts an existing container, reusing its configuration and writable layer. Use -a to attach and -i to keep stdin open.",
+      "syntax": "docker start [OPTIONS] CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Start a stopped container",
+          "command": "docker start web",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Start and attach",
+          "command": "docker start -ai web",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Prints the container name or ID when started.",
+      "mistakes": [
+        "Start does not create a new container; use run for that.",
+        "Attaching to a service with -a can let Ctrl-C terminate it."
+      ],
+      "security": [],
+      "related": [
+        "docker stop",
+        "docker restart",
+        "docker run"
+      ],
+      "lesson": "container-commands",
+      "tags": [
+        "containers",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "stop",
+      "command": "docker stop",
+      "group": "Containers",
+      "summary": "Stop one or more running containers gracefully",
+      "description": "Sends SIGTERM, waits for the timeout (10 seconds by default), then sends SIGKILL. The container remains in the exited state until removed.",
+      "syntax": "docker stop [OPTIONS] CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Graceful stop",
+          "command": "docker stop web",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Custom grace period",
+          "command": "docker stop --time 30 web",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "The container name or ID is printed after it stops.",
+      "mistakes": [
+        "Assuming stop removes the container; it does not.",
+        "Using a grace period shorter than the application shutdown time."
+      ],
+      "security": [
+        "Handle SIGTERM in the application to finish in-flight requests and close connections."
+      ],
+      "related": [
+        "docker start",
+        "docker rm",
+        "docker kill"
+      ],
+      "lesson": "container-lifecycle",
+      "tags": [
+        "containers",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "restart",
+      "command": "docker restart",
+      "group": "Containers",
+      "summary": "Restart one or more containers",
+      "description": "Stop and then start a container. The writable layer and configuration are preserved.",
+      "syntax": "docker restart [OPTIONS] CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Restart a service",
+          "command": "docker restart web",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using restart to apply a new image or environment; recreate the container instead."
+      ],
+      "security": [],
+      "related": [
+        "docker stop",
+        "docker start"
+      ],
+      "lesson": "container-lifecycle",
+      "tags": [
+        "containers"
+      ]
+    },
+    {
+      "id": "exec",
+      "command": "docker exec",
+      "group": "Containers",
+      "summary": "Run a command in a running container",
+      "description": "Starts an additional process inside an existing container’s namespaces. It does not restart or replace the main process. Use -it for an interactive shell.",
+      "syntax": "docker exec [OPTIONS] CONTAINER COMMAND [ARG...]",
+      "examples": [
+        {
+          "title": "Open a shell",
+          "command": "docker exec -it web sh",
+          "output": "/ #",
+          "explain": ""
+        },
+        {
+          "title": "One-off inspection",
+          "command": "docker exec web nginx -t",
+          "output": "nginx: configuration file /etc/nginx/nginx.conf test is successful",
+          "explain": ""
+        }
+      ],
+      "advanced": [
+        {
+          "title": "Run as a specific user",
+          "command": "docker exec -u 10001 api id",
+          "output": "uid=10001 gid=10001",
+          "explain": ""
+        }
+      ],
+      "output": "Streams the command output. The exit code comes from the executed command.",
+      "mistakes": [
+        "Using exec when the container is stopped; it requires a running container.",
+        "Installing debugging tools into production images instead of using an ephemeral debug container."
+      ],
+      "security": [],
+      "related": [
+        "docker run",
+        "docker attach",
+        "docker cp"
+      ],
+      "lesson": "run-exec-logs",
+      "tags": [
+        "containers",
+        "debug"
+      ]
+    },
+    {
+      "id": "logs",
+      "command": "docker logs",
+      "group": "Containers",
+      "summary": "Fetch the logs of a container",
+      "description": "Reads the container’s stdout/stderr through the configured logging driver. Streaming and tailing are supported. Only local drivers keep logs accessible to this command.",
+      "syntax": "docker logs [OPTIONS] CONTAINER",
+      "examples": [
+        {
+          "title": "Recent logs",
+          "command": "docker logs --tail 100 web",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Follow live logs",
+          "command": "docker logs -f --since 10m api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "The application output, optionally timestamped.",
+      "mistakes": [
+        "Expecting logs when the app writes to a file inside the container.",
+        "Forgetting that remote logging drivers may make docker logs empty."
+      ],
+      "security": [],
+      "related": [
+        "docker events",
+        "docker inspect",
+        "docker stats"
+      ],
+      "lesson": "run-exec-logs",
+      "tags": [
+        "containers",
+        "logs"
+      ]
+    },
+    {
+      "id": "ps",
+      "command": "docker ps",
+      "group": "Containers",
+      "summary": "List containers",
+      "description": "Lists running containers by default. Use -a for all states, -s for sizes, and --filter for labels, names, status and health.",
+      "syntax": "docker ps [OPTIONS]",
+      "examples": [
+        {
+          "title": "All containers",
+          "command": "docker ps -a",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Compose project",
+          "command": "docker ps --filter label=com.docker.compose.project=acme",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Machine-readable",
+          "command": "docker ps --format '{{json .}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "CONTAINER ID   IMAGE   COMMAND   CREATED   STATUS   PORTS   NAMES",
+      "mistakes": [
+        "Forgetting -a and concluding a stopped container was deleted.",
+        "Parsing the default table in scripts instead of using --format json."
+      ],
+      "security": [],
+      "related": [
+        "docker container ls",
+        "docker inspect",
+        "docker stats"
+      ],
+      "lesson": "container-commands",
+      "tags": [
+        "containers",
+        "list"
+      ]
+    },
+    {
+      "id": "inspect",
+      "command": "docker inspect",
+      "group": "Containers",
+      "summary": "Return low-level information about Docker objects",
+      "description": "Returns JSON describing a container, image, volume, network or other object. Use --format with Go templates to extract fields. This is the primary diagnostic command.",
+      "syntax": "docker inspect [OPTIONS] NAME|ID [NAME|ID...]",
+      "examples": [
+        {
+          "title": "Container state",
+          "command": "docker inspect web --format '{{.State.Status}} {{.State.ExitCode}}'",
+          "output": "running 0",
+          "explain": ""
+        },
+        {
+          "title": "Port bindings",
+          "command": "docker inspect web --format '{{json .NetworkSettings.Ports}}'",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Health",
+          "command": "docker inspect api --format '{{json .State.Health}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "A JSON array, even for a single object.",
+      "mistakes": [
+        "Forgetting that the output is an array; use index 0 or --format.",
+        "Reading env values that may contain secrets in logs or screenshots."
+      ],
+      "security": [],
+      "related": [
+        "docker ps",
+        "docker logs",
+        "docker stats",
+        "docker events"
+      ],
+      "lesson": "troubleshooting-method",
+      "tags": [
+        "inspect",
+        "debug"
+      ]
+    },
+    {
+      "id": "rm",
+      "command": "docker rm",
+      "group": "Containers",
+      "summary": "Remove one or more containers",
+      "description": "Deletes stopped containers and their writable layers. Use -f to stop and remove a running container, and -v to remove anonymous volumes associated with it.",
+      "syntax": "docker rm [OPTIONS] CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Remove one",
+          "command": "docker rm web",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Force remove running",
+          "command": "docker rm -f web",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Remove with anonymous volumes",
+          "command": "docker rm -v worker",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "The removed container name or ID.",
+      "mistakes": [
+        "Using rm -f in automation where graceful stop matters.",
+        "Assuming named volumes are removed with the container; they are not unless -v or volume prune."
+      ],
+      "security": [
+        "Removal is irreversible. Confirm the container name and that data is in a volume or external store."
+      ],
+      "related": [
+        "docker stop",
+        "docker container prune",
+        "docker volume rm"
+      ],
+      "lesson": "container-commands",
+      "tags": [
+        "containers",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "cp",
+      "command": "docker cp",
+      "group": "Containers",
+      "summary": "Copy files between a container and the host",
+      "description": "Copies files or directories in either direction. The container may be running or stopped. Paths inside the container are resolved relative to its root filesystem.",
+      "syntax": "docker cp [OPTIONS] CONTAINER:SRC_PATH DEST_PATH | SRC_PATH CONTAINER:DEST_PATH",
+      "examples": [
+        {
+          "title": "Copy out a config",
+          "command": "docker cp web:/etc/nginx/nginx.conf ./nginx.conf",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Copy in a file",
+          "command": "docker cp ./config.json api:/app/config.json",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using cp for live database data; use a native dump or volume backup.",
+        "Forgetting ownership: copied files retain UID/GID metadata where supported."
+      ],
+      "security": [],
+      "related": [
+        "docker exec",
+        "docker volume"
+      ],
+      "lesson": "container-commands",
+      "tags": [
+        "containers",
+        "files"
+      ]
+    },
+    {
+      "id": "stats",
+      "command": "docker stats",
+      "group": "Containers",
+      "summary": "Display a live stream of container resource usage",
+      "description": "Shows CPU, memory, network, block I/O and PID counts. Use --no-stream for a single sample. CPU percent is relative to one core on most platforms.",
+      "syntax": "docker stats [OPTIONS] [CONTAINER...]",
+      "examples": [
+        {
+          "title": "One snapshot",
+          "command": "docker stats --no-stream",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Specific containers",
+          "command": "docker stats --no-stream --format 'table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}' api db",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "NAME  CPU %  MEM USAGE / LIMIT  MEM %  NET I/O  BLOCK I/O  PIDS",
+      "mistakes": [
+        "Treating a single snapshot as a baseline.",
+        "Reading cumulative network/block counters as rates without taking deltas."
+      ],
+      "security": [],
+      "related": [
+        "docker top",
+        "docker inspect",
+        "docker events"
+      ],
+      "lesson": "runtime-performance",
+      "tags": [
+        "stats",
+        "monitoring"
+      ]
+    },
+    {
+      "id": "pause",
+      "command": "docker pause",
+      "group": "Containers",
+      "summary": "Pause all processes in a container",
+      "description": "Uses the freezer cgroup to suspend processes. The container keeps its state and can be resumed with unpause.",
+      "syntax": "docker pause CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Pause",
+          "command": "docker pause worker",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Pausing a production service without draining traffic first."
+      ],
+      "security": [],
+      "related": [
+        "docker unpause",
+        "docker stop"
+      ],
+      "lesson": "container-lifecycle",
+      "tags": [
+        "containers"
+      ]
+    },
+    {
+      "id": "unpause",
+      "command": "docker unpause",
+      "group": "Containers",
+      "summary": "Resume paused processes",
+      "description": "Resumes a container previously paused with docker pause.",
+      "syntax": "docker unpause CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Resume",
+          "command": "docker unpause worker",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker pause"
+      ],
+      "lesson": "container-lifecycle",
+      "tags": [
+        "containers"
+      ]
+    },
+    {
+      "id": "port",
+      "command": "docker port",
+      "group": "Containers",
+      "summary": "List port mappings for a container",
+      "description": "Prints the host binding(s) for a container port or all published ports.",
+      "syntax": "docker port CONTAINER [PRIVATE_PORT[/PROTO]]",
+      "examples": [
+        {
+          "title": "All mappings",
+          "command": "docker port web",
+          "output": "80/tcp -> 127.0.0.1:8080",
+          "explain": ""
+        },
+        {
+          "title": "Specific port",
+          "command": "docker port web 80/tcp",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Confusing EXPOSE with published ports; port shows only actual bindings."
+      ],
+      "security": [],
+      "related": [
+        "docker ps",
+        "docker inspect"
+      ],
+      "lesson": "ports-and-publishing",
+      "tags": [
+        "networking"
+      ]
+    },
+    {
+      "id": "update",
+      "command": "docker update",
+      "group": "Containers",
+      "summary": "Update resource limits of a container",
+      "description": "Changes CPU, memory, restart policy and related host configuration on an existing container. Some changes require a restart to take effect.",
+      "syntax": "docker update [OPTIONS] CONTAINER [CONTAINER...]",
+      "examples": [
+        {
+          "title": "Raise memory",
+          "command": "docker update --memory 1g --memory-swap 1g api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Lowering a limit below current usage can trigger OOM kills.",
+        "Assuming every option applies live."
+      ],
+      "security": [],
+      "related": [
+        "docker run",
+        "docker stats"
+      ],
+      "lesson": "resource-limits",
+      "tags": [
+        "resources"
+      ]
+    },
+    {
+      "id": "commit",
+      "command": "docker commit",
+      "group": "Containers",
+      "summary": "Create an image from a container’s changes",
+      "description": "Creates a new image from the container’s writable layer. Useful for debugging or one-off snapshots, not for reproducible production builds.",
+      "syntax": "docker commit [OPTIONS] CONTAINER [REPOSITORY[:TAG]]",
+      "examples": [
+        {
+          "title": "Snapshot",
+          "command": "docker commit web acme/web:debug",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using commit as a build process; changes are not reproducible and history is opaque.",
+        "Committing secrets or temporary files from the container filesystem."
+      ],
+      "security": [
+        "A committed image can contain secrets, SSH keys and temporary files. Prefer a Dockerfile."
+      ],
+      "related": [
+        "docker build",
+        "docker export",
+        "docker save"
+      ],
+      "lesson": "images-containers-registries",
+      "tags": [
+        "images",
+        "containers"
+      ]
+    },
+    {
+      "id": "build",
+      "command": "docker build",
+      "group": "Images",
+      "summary": "Build an image from a Dockerfile",
+      "description": "Builds an image from a Dockerfile and build context using BuildKit by default. Supports target stages, build args, secrets, cache import/export and multi-platform output through buildx.",
+      "syntax": "docker build [OPTIONS] PATH | URL | -",
+      "examples": [
+        {
+          "title": "Local build",
+          "command": "docker build -t acme/api:1.4 .",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Target a stage",
+          "command": "docker build --target build -t acme/api:debug .",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Plain progress",
+          "command": "docker build --progress=plain -t acme/api:debug .",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [
+        {
+          "title": "Build secret",
+          "command": "docker build --secret id=npmrc,src=$HOME/.npmrc -t acme/api:1.4 .",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "No cache",
+          "command": "docker build --no-cache -t acme/api:1.4 .",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "output": "BuildKit step output; the final image ID on success.",
+      "mistakes": [
+        "Copying the whole context before dependency installation, destroying cache hits.",
+        "Passing secrets in --build-arg; they persist in image history.",
+        "Building from a large context without a .dockerignore."
+      ],
+      "security": [
+        "Use --secret for credentials, not ARG/ENV.",
+        "Scan the result and pin base images for production."
+      ],
+      "related": [
+        "docker buildx build",
+        "docker images",
+        "docker history",
+        "docker push"
+      ],
+      "lesson": "dockerfile-anatomy",
+      "tags": [
+        "images",
+        "build"
+      ]
+    },
+    {
+      "id": "buildx build",
+      "command": "docker buildx build",
+      "group": "Images",
+      "summary": "Build with BuildKit and buildx",
+      "description": "The buildx entry point supports multi-platform builds, cache import/export, attestations, and alternate builders. Requires a builder with the appropriate driver for multi-platform output.",
+      "syntax": "docker buildx build [OPTIONS] PATH | URL | -",
+      "examples": [
+        {
+          "title": "Multi-platform push",
+          "command": "docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/acme/api:1.4 --push .",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [
+        {
+          "title": "Registry cache",
+          "command": "docker buildx build --cache-from type=registry,ref=ghcr.io/acme/api:cache --cache-to type=registry,ref=ghcr.io/acme/api:cache,mode=max -t ghcr.io/acme/api:1.4 --push .",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "output": "Build progress; multi-platform images must be pushed or exported, not loaded.",
+      "mistakes": [
+        "Using --load with multiple platforms; an image index cannot be loaded into the local store.",
+        "Forgetting --push for registry output."
+      ],
+      "security": [],
+      "related": [
+        "docker build",
+        "docker buildx bake",
+        "docker buildx ls"
+      ],
+      "lesson": "multi-platform-bake",
+      "tags": [
+        "buildx",
+        "build"
+      ]
+    },
+    {
+      "id": "pull",
+      "command": "docker pull",
+      "group": "Images",
+      "summary": "Pull an image from a registry",
+      "description": "Downloads the manifest and missing layers for a reference. Supports --platform and digest references.",
+      "syntax": "docker pull [OPTIONS] NAME[:TAG|@DIGEST]",
+      "examples": [
+        {
+          "title": "Release tag",
+          "command": "docker pull nginx:1.27-alpine",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Pin digest",
+          "command": "docker pull ghcr.io/acme/api@sha256:...",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Pull progress with layer status; \"Status: Downloaded newer image\" or \"Image is up to date\".",
+      "mistakes": [
+        "Using latest in production; the tag moves.",
+        "Pulling a tag and assuming the digest will not change."
+      ],
+      "security": [
+        "Verify signatures/provenance for sensitive environments; pin digests for reproducibility."
+      ],
+      "related": [
+        "docker push",
+        "docker images",
+        "docker image inspect"
+      ],
+      "lesson": "pull-inspect-tag",
+      "tags": [
+        "images",
+        "registry"
+      ]
+    },
+    {
+      "id": "push",
+      "command": "docker push",
+      "group": "Images",
+      "summary": "Push an image to a registry",
+      "description": "Uploads image layers and the manifest to the registry encoded in the reference. The image must be tagged with the full registry path.",
+      "syntax": "docker push [OPTIONS] NAME[:TAG]",
+      "examples": [
+        {
+          "title": "Push a release",
+          "command": "docker push ghcr.io/acme/api:1.4.0",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Layer upload progress and the resulting digest.",
+      "mistakes": [
+        "Pushing a local name without a registry path; it targets Docker Hub.",
+        "Assuming docker tag uploads the image."
+      ],
+      "security": [
+        "Authenticate with a scoped token via --password-stdin or a credential helper."
+      ],
+      "related": [
+        "docker tag",
+        "docker pull",
+        "docker login"
+      ],
+      "lesson": "push-pull-digests",
+      "tags": [
+        "images",
+        "registry"
+      ]
+    },
+    {
+      "id": "images",
+      "command": "docker images",
+      "group": "Images",
+      "summary": "List images in the local store",
+      "description": "Lists repositories, tags, image IDs, creation time and size. Use --digests for digests, --filter dangling=true for untagged images.",
+      "syntax": "docker images [OPTIONS] [REPOSITORY[:TAG]]",
+      "examples": [
+        {
+          "title": "All images",
+          "command": "docker images",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Dangling only",
+          "command": "docker images --filter dangling=true",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "JSON output",
+          "command": "docker images --format '{{json .}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "REPOSITORY  TAG  IMAGE ID  CREATED  SIZE",
+      "mistakes": [
+        "Confusing shared size with unique size when planning disk cleanup.",
+        "Assuming an image is unused because no container currently runs from it."
+      ],
+      "security": [],
+      "related": [
+        "docker image prune",
+        "docker rmi",
+        "docker system df"
+      ],
+      "lesson": "cleanup-and-pruning",
+      "tags": [
+        "images",
+        "list"
+      ]
+    },
+    {
+      "id": "tag",
+      "command": "docker tag",
+      "group": "Images",
+      "summary": "Create a tag for a source image",
+      "description": "Creates another local name for an existing image. It does not copy layers or upload anything. The target reference can include a registry host.",
+      "syntax": "docker tag SOURCE_IMAGE[:TAG] TARGET_IMAGE[:TAG]",
+      "examples": [
+        {
+          "title": "Tag for registry",
+          "command": "docker tag acme/api:1.4 ghcr.io/acme/api:1.4",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Expecting tag to push or duplicate the image.",
+        "Tagging a local image with a registry path you cannot authenticate to."
+      ],
+      "security": [],
+      "related": [
+        "docker push",
+        "docker images"
+      ],
+      "lesson": "pull-inspect-tag",
+      "tags": [
+        "images",
+        "registry"
+      ]
+    },
+    {
+      "id": "rmi",
+      "command": "docker rmi",
+      "group": "Images",
+      "summary": "Remove one or more images",
+      "description": "Removes an image reference and its layers when not used by other images. Fails if a container (running or stopped) references the image unless forced.",
+      "syntax": "docker rmi [OPTIONS] IMAGE [IMAGE...]",
+      "examples": [
+        {
+          "title": "Remove by tag",
+          "command": "docker rmi nginx:1.27-alpine",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Force",
+          "command": "docker rmi -f acme/api:debug",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Forcing removal of an image used by a running container.",
+        "Assuming a tag removal deletes every layer if another tag shares it."
+      ],
+      "security": [
+        "Removal is irreversible without re-pulling or a saved archive."
+      ],
+      "related": [
+        "docker images",
+        "docker image prune"
+      ],
+      "lesson": "cleanup-and-pruning",
+      "tags": [
+        "images",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "history",
+      "command": "docker image history",
+      "group": "Images",
+      "summary": "Show the history of an image",
+      "description": "Lists layers and the instructions that created them, with sizes and IDs. Use it to find large layers, accidental secrets and unexpected commands.",
+      "syntax": "docker image history [OPTIONS] IMAGE",
+      "examples": [
+        {
+          "title": "Full history",
+          "command": "docker image history --no-trunc nginx:alpine",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "IMAGE  CREATED  CREATED BY  SIZE  COMMENT",
+      "mistakes": [
+        "Assuming every layer is a Dockerfile instruction; metadata and imported history differ."
+      ],
+      "security": [
+        "History can reveal credentials passed in ARG. Never use ARG for secrets."
+      ],
+      "related": [
+        "docker image inspect",
+        "docker build"
+      ],
+      "lesson": "image-anatomy",
+      "tags": [
+        "images",
+        "inspect"
+      ]
+    },
+    {
+      "id": "save",
+      "command": "docker save",
+      "group": "Images",
+      "summary": "Save image(s) to a tar archive",
+      "description": "Exports image layers and metadata to a tar file for offline transfer. Load restores it with docker load.",
+      "syntax": "docker save [OPTIONS] IMAGE [IMAGE...]",
+      "examples": [
+        {
+          "title": "Export",
+          "command": "docker save -o api.tar acme/api:1.4",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using save/load as a registry replacement for large numbers of images; it does not deduplicate across archives."
+      ],
+      "security": [],
+      "related": [
+        "docker load",
+        "docker export"
+      ],
+      "lesson": "cleanup-and-pruning",
+      "tags": [
+        "images",
+        "transfer"
+      ]
+    },
+    {
+      "id": "load",
+      "command": "docker load",
+      "group": "Images",
+      "summary": "Load images from a tar archive",
+      "description": "Imports images created by docker save. Preserves tags and digests where present.",
+      "syntax": "docker load [OPTIONS]",
+      "examples": [
+        {
+          "title": "Import",
+          "command": "docker load -i api.tar",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Loaded image: acme/api:1.4",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker save",
+        "docker images"
+      ],
+      "lesson": "cleanup-and-pruning",
+      "tags": [
+        "images",
+        "transfer"
+      ]
+    },
+    {
+      "id": "volume create",
+      "command": "docker volume create",
+      "group": "Volumes",
+      "summary": "Create a volume",
+      "description": "Creates a named volume managed by Docker. Volumes persist independently of containers and are the recommended storage for application state.",
+      "syntax": "docker volume create [OPTIONS] [VOLUME]",
+      "examples": [
+        {
+          "title": "Create",
+          "command": "docker volume create app-data",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "With driver",
+          "command": "docker volume create --driver local --opt type=tmpfs app-tmp",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Assuming a volume is bound to one container; multiple containers can mount it.",
+        "Using an anonymous volume when you need a stable name."
+      ],
+      "security": [],
+      "related": [
+        "docker volume ls",
+        "docker volume inspect",
+        "docker run"
+      ],
+      "lesson": "storage-and-volumes",
+      "tags": [
+        "volumes"
+      ]
+    },
+    {
+      "id": "volume ls",
+      "command": "docker volume ls",
+      "group": "Volumes",
+      "summary": "List volumes",
+      "description": "Lists named volumes with driver and scope. Anonymous volumes have long hashes and are harder to manage.",
+      "syntax": "docker volume ls [OPTIONS]",
+      "examples": [
+        {
+          "title": "List",
+          "command": "docker volume ls",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Filter",
+          "command": "docker volume ls --filter label=com.docker.compose.project=acme",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker volume inspect",
+        "docker system df"
+      ],
+      "lesson": "storage-and-volumes",
+      "tags": [
+        "volumes",
+        "list"
+      ]
+    },
+    {
+      "id": "volume inspect",
+      "command": "docker volume inspect",
+      "group": "Volumes",
+      "summary": "Show detailed volume information",
+      "description": "Returns the mountpoint, driver, labels, options and scope. The mountpoint is on the Docker host, not inside the container.",
+      "syntax": "docker volume inspect VOLUME",
+      "examples": [
+        {
+          "title": "Inspect",
+          "command": "docker volume inspect app-data",
+          "output": "[{\"Name\":\"app-data\",\"Driver\":\"local\",\"Mountpoint\":\"/var/lib/docker/volumes/app-data/_data\",...}]",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Editing the mountpoint directly while containers are using it; use a container or backup workflow."
+      ],
+      "security": [],
+      "related": [
+        "docker volume ls",
+        "docker run"
+      ],
+      "lesson": "storage-and-volumes",
+      "tags": [
+        "volumes",
+        "inspect"
+      ]
+    },
+    {
+      "id": "volume rm",
+      "command": "docker volume rm",
+      "group": "Volumes",
+      "summary": "Remove one or more volumes",
+      "description": "Deletes volumes that are not in use by a container. Use -f to force removal, which can orphan running containers.",
+      "syntax": "docker volume rm [OPTIONS] VOLUME [VOLUME...]",
+      "examples": [
+        {
+          "title": "Remove",
+          "command": "docker volume rm app-data",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Forcing removal of a volume attached to a running database.",
+        "Assuming down removes volumes; use down -v deliberately."
+      ],
+      "security": [
+        "Irreversible data loss. Back up and verify first."
+      ],
+      "related": [
+        "docker volume prune",
+        "docker compose down"
+      ],
+      "lesson": "volume-backup",
+      "tags": [
+        "volumes",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "volume prune",
+      "command": "docker volume prune",
+      "group": "Volumes",
+      "summary": "Remove unused volumes",
+      "description": "Removes volumes not used by any container. With --all it removes all unused volumes, including named ones.",
+      "syntax": "docker volume prune [OPTIONS]",
+      "examples": [
+        {
+          "title": "Prune unused",
+          "command": "docker volume prune",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Running it on a host with stopped-but-needed data volumes.",
+        "Assuming a detached volume is unused; verify with df -v."
+      ],
+      "security": [
+        "Destructive. Back up and confirm scope."
+      ],
+      "related": [
+        "docker volume ls",
+        "docker system prune"
+      ],
+      "lesson": "cleanup-and-pruning",
+      "tags": [
+        "volumes",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "network create",
+      "command": "docker network create",
+      "group": "Networks",
+      "summary": "Create a network",
+      "description": "Creates a user-defined network. Bridge is the default driver and provides embedded DNS on the network. Options include subnet, gateway and internal.",
+      "syntax": "docker network create [OPTIONS] NETWORK",
+      "examples": [
+        {
+          "title": "Bridge network",
+          "command": "docker network create app-net",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Internal network",
+          "command": "docker network create --internal backend-net",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Custom subnet",
+          "command": "docker network create --subnet 172.28.0.0/16 app-net",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using the default bridge and expecting name resolution; create a user-defined network.",
+        "Overlapping subnets with the host or VPN."
+      ],
+      "security": [],
+      "related": [
+        "docker network ls",
+        "docker network inspect",
+        "docker network connect"
+      ],
+      "lesson": "networking-drivers",
+      "tags": [
+        "networking"
+      ]
+    },
+    {
+      "id": "network ls",
+      "command": "docker network ls",
+      "group": "Networks",
+      "summary": "List networks",
+      "description": "Lists built-in and user-defined networks with driver, scope and labels.",
+      "syntax": "docker network ls [OPTIONS]",
+      "examples": [
+        {
+          "title": "List",
+          "command": "docker network ls",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "JSON",
+          "command": "docker network ls --format '{{json .}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker network inspect",
+        "docker network create"
+      ],
+      "lesson": "bridge-dns",
+      "tags": [
+        "networking",
+        "list"
+      ]
+    },
+    {
+      "id": "network inspect",
+      "command": "docker network inspect",
+      "group": "Networks",
+      "summary": "Show network details",
+      "description": "Returns subnet, gateway, connected containers and their IPs, and options. The fastest way to verify membership and addressing.",
+      "syntax": "docker network inspect NETWORK",
+      "examples": [
+        {
+          "title": "Inspect",
+          "command": "docker network inspect app-net",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Container IPs",
+          "command": "docker network inspect app-net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{\"\\n\"}}{{end}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker network ls",
+        "docker ps"
+      ],
+      "lesson": "network-troubleshooting",
+      "tags": [
+        "networking",
+        "inspect"
+      ]
+    },
+    {
+      "id": "network connect",
+      "command": "docker network connect",
+      "group": "Networks",
+      "summary": "Connect a container to a network",
+      "description": "Attaches a running container to one or more networks. Supports --alias and static IP options.",
+      "syntax": "docker network connect [OPTIONS] NETWORK CONTAINER",
+      "examples": [
+        {
+          "title": "Connect",
+          "command": "docker network connect backend-net api",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Alias",
+          "command": "docker network connect --alias database backend-net api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Assuming the container can resolve names on the new network without checking DNS."
+      ],
+      "security": [],
+      "related": [
+        "docker network disconnect",
+        "docker network inspect"
+      ],
+      "lesson": "bridge-dns",
+      "tags": [
+        "networking"
+      ]
+    },
+    {
+      "id": "network rm",
+      "command": "docker network rm",
+      "group": "Networks",
+      "summary": "Remove one or more networks",
+      "description": "Removes user-defined networks. Fails if containers are still attached.",
+      "syntax": "docker network rm NETWORK [NETWORK...]",
+      "examples": [
+        {
+          "title": "Remove",
+          "command": "docker network rm app-net",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Trying to remove the default bridge/host/none networks."
+      ],
+      "security": [],
+      "related": [
+        "docker network prune",
+        "docker network ls"
+      ],
+      "lesson": "networking-drivers",
+      "tags": [
+        "networking",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "network prune",
+      "command": "docker network prune",
+      "group": "Networks",
+      "summary": "Remove unused networks",
+      "description": "Removes user-defined networks not used by any container.",
+      "syntax": "docker network prune [OPTIONS]",
+      "examples": [
+        {
+          "title": "Prune",
+          "command": "docker network prune",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [
+        "Verify no external containers depend on the network."
+      ],
+      "related": [
+        "docker network ls",
+        "docker system prune"
+      ],
+      "lesson": "cleanup-and-pruning",
+      "tags": [
+        "networking",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "info",
+      "command": "docker info",
+      "group": "System",
+      "summary": "Display system-wide information",
+      "description": "Reports engine version, storage driver, cgroup driver, kernel, CPU/memory, container counts, plugins, security options and warnings.",
+      "syntax": "docker info [OPTIONS]",
+      "examples": [
+        {
+          "title": "Summary",
+          "command": "docker info",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "JSON field",
+          "command": "docker info --format '{{.ServerVersion}} {{.Driver}} {{.CgroupDriver}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Server: Docker Engine ... Storage Driver: overlayfs ...",
+      "mistakes": [
+        "Ignoring the Warnings section; it often explains degraded behaviour."
+      ],
+      "security": [],
+      "related": [
+        "docker version",
+        "docker system df"
+      ],
+      "lesson": "install-and-verify",
+      "tags": [
+        "system",
+        "inspect"
+      ]
+    },
+    {
+      "id": "version",
+      "command": "docker version",
+      "group": "System",
+      "summary": "Show Docker client and server versions",
+      "description": "Prints client and server version, API version, Go version, OS/arch and build details. A missing Server section means the client cannot reach the daemon.",
+      "syntax": "docker version [OPTIONS]",
+      "examples": [
+        {
+          "title": "Full",
+          "command": "docker version",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "JSON",
+          "command": "docker version --format '{{json .}}'",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "Client: ... Version: 29.x ... Server: ... Version: 29.x",
+      "mistakes": [
+        "Assuming a client-only output is a complete installation."
+      ],
+      "security": [],
+      "related": [
+        "docker info"
+      ],
+      "lesson": "install-and-verify",
+      "tags": [
+        "system"
+      ]
+    },
+    {
+      "id": "events",
+      "command": "docker events",
+      "group": "System",
+      "summary": "Stream Docker events",
+      "description": "Streams daemon events for containers, images, networks, volumes and more. Filter by type, event, label, container or image. The daemon keeps only recent events.",
+      "syntax": "docker events [OPTIONS]",
+      "examples": [
+        {
+          "title": "Container deaths",
+          "command": "docker events --filter type=container --filter event=die --format '{{json .}}'",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Time window",
+          "command": "docker events --since 1h --until now",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Expecting long-term history; ship events to a log pipeline for retention.",
+        "Forgetting that --until now is evaluated when the command starts."
+      ],
+      "security": [],
+      "related": [
+        "docker logs",
+        "docker inspect",
+        "docker stats"
+      ],
+      "lesson": "stats-events",
+      "tags": [
+        "events",
+        "monitoring"
+      ]
+    },
+    {
+      "id": "system df",
+      "command": "docker system df",
+      "group": "System",
+      "summary": "Show Docker disk usage",
+      "description": "Summarizes size and reclaimable space for images, containers, volumes and build cache. Use -v for per-object detail.",
+      "syntax": "docker system df [OPTIONS]",
+      "examples": [
+        {
+          "title": "Summary",
+          "command": "docker system df",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Verbose",
+          "command": "docker system df -v",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE",
+      "mistakes": [
+        "Equating shared image size with unique disk usage."
+      ],
+      "security": [],
+      "related": [
+        "docker image prune",
+        "docker builder prune"
+      ],
+      "lesson": "disk-space",
+      "tags": [
+        "system",
+        "disk"
+      ]
+    },
+    {
+      "id": "system prune",
+      "command": "docker system prune",
+      "group": "System",
+      "summary": "Remove unused data",
+      "description": "Removes stopped containers, unused networks, dangling images and build cache. With -a it removes all unused images; with --volumes it also removes unused volumes.",
+      "syntax": "docker system prune [OPTIONS]",
+      "examples": [
+        {
+          "title": "Basic",
+          "command": "docker system prune",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Aggressive",
+          "command": "docker system prune -a --volumes",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Running -a --volumes on a host with data you have not backed up.",
+        "Using prune to fix a problem without understanding what is consuming space."
+      ],
+      "security": [
+        "Destructive and irreversible. Read the confirmation and back up volumes."
+      ],
+      "related": [
+        "docker system df",
+        "docker image prune",
+        "docker volume prune"
+      ],
+      "lesson": "disk-space",
+      "tags": [
+        "system",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "login",
+      "command": "docker login",
+      "group": "Registry",
+      "summary": "Authenticate to a registry",
+      "description": "Stores credentials for a registry. Use --password-stdin to avoid putting the secret in argv or shell history. Credentials go to a helper or config.json.",
+      "syntax": "docker login [OPTIONS] [SERVER]",
+      "examples": [
+        {
+          "title": "Token via stdin",
+          "command": "printf '%s' \"$TOKEN\" | docker login ghcr.io -u \"$USER\" --password-stdin",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Passing the password as an argument.",
+        "Committing ~/.docker/config.json to a repository."
+      ],
+      "security": [
+        "Authenticating to a malicious registry can leak credentials; verify the host."
+      ],
+      "related": [
+        "docker logout",
+        "docker push",
+        "docker pull"
+      ],
+      "lesson": "registry-auth",
+      "tags": [
+        "registry",
+        "auth"
+      ]
+    },
+    {
+      "id": "logout",
+      "command": "docker logout",
+      "group": "Registry",
+      "summary": "Log out from a registry",
+      "description": "Removes stored credentials for a registry host.",
+      "syntax": "docker logout [SERVER]",
+      "examples": [
+        {
+          "title": "Logout",
+          "command": "docker logout ghcr.io",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker login"
+      ],
+      "lesson": "registry-auth",
+      "tags": [
+        "registry",
+        "auth"
+      ]
+    },
+    {
+      "id": "search",
+      "command": "docker search",
+      "group": "Registry",
+      "summary": "Search Docker Hub for images",
+      "description": "Searches Docker Hub by term and returns name, description, stars and official status. It does not search arbitrary registries.",
+      "syntax": "docker search [OPTIONS] TERM",
+      "examples": [
+        {
+          "title": "Search",
+          "command": "docker search --limit 10 postgres",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Assuming search covers private registries or enterprise catalogs.",
+        "Pulling an unofficial image without reviewing its source and maintenance."
+      ],
+      "security": [
+        "Prefer official or verified publishers; scan images before use."
+      ],
+      "related": [
+        "docker pull",
+        "docker image inspect"
+      ],
+      "lesson": "pull-inspect-tag",
+      "tags": [
+        "registry",
+        "search"
+      ]
+    },
+    {
+      "id": "context",
+      "command": "docker context",
+      "group": "System",
+      "summary": "Manage Docker CLI contexts",
+      "description": "Create, inspect, use and remove named daemon endpoints, including SSH and TLS. Contexts keep remote engines one command away.",
+      "syntax": "docker context COMMAND",
+      "examples": [
+        {
+          "title": "List",
+          "command": "docker context ls",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "SSH context",
+          "command": "docker context create staging --docker \"host=ssh://deploy@staging.example.com\"",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Switch",
+          "command": "docker context use staging",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Running destructive commands against the wrong context.",
+        "Exposing a remote daemon over unauthenticated TCP instead of SSH/TLS."
+      ],
+      "security": [
+        "Treat a production context as privileged access. Verify the active context before pruning."
+      ],
+      "related": [
+        "docker info",
+        "docker system prune"
+      ],
+      "lesson": "contexts",
+      "tags": [
+        "system",
+        "remote"
+      ]
+    },
+    {
+      "id": "builder prune",
+      "command": "docker builder prune",
+      "group": "System",
+      "summary": "Remove build cache",
+      "description": "Removes BuildKit cache. Use --keep-storage to retain a ceiling, or --all to remove all cache including in-use records.",
+      "syntax": "docker builder prune [OPTIONS]",
+      "examples": [
+        {
+          "title": "Keep 5 GB",
+          "command": "docker builder prune --keep-storage 5GB",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Pruning during an active build.",
+        "Assuming build cache is part of the image size; it is separate."
+      ],
+      "security": [],
+      "related": [
+        "docker buildx",
+        "docker system df"
+      ],
+      "lesson": "build-cache",
+      "tags": [
+        "build",
+        "cleanup"
+      ]
+    }
+  ],
+  "compose": [
+    {
+      "id": "compose-up",
+      "command": "docker compose up",
+      "group": "Compose",
+      "summary": "Create and start project services",
+      "description": "Builds or pulls images as needed, creates networks/volumes, and starts services in dependency order. -d runs detached; --wait waits for healthy/running state.",
+      "syntax": "docker compose up [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Detached",
+          "command": "docker compose up -d",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Build and wait",
+          "command": "docker compose up -d --build --wait",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "One service",
+          "command": "docker compose up -d api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [
+        {
+          "title": "Selected profiles",
+          "command": "docker compose --profile debug up -d",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "output": "Network and container creation logs; with -d the command returns after start (or health with --wait).",
+      "mistakes": [
+        "Assuming depends_on waits for readiness; add health conditions.",
+        "Forgetting that down -v deletes volumes."
+      ],
+      "security": [],
+      "related": [
+        "docker compose down",
+        "docker compose ps",
+        "docker compose logs"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "compose-down",
+      "command": "docker compose down",
+      "group": "Compose",
+      "summary": "Stop and remove project resources",
+      "description": "Stops services and removes containers and the default network. Volumes are kept unless --volumes is passed. --remove-orphans removes services no longer in the file.",
+      "syntax": "docker compose down [OPTIONS]",
+      "examples": [
+        {
+          "title": "Standard",
+          "command": "docker compose down",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "With volumes",
+          "command": "docker compose down -v",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using -v casually; it destroys named volume data.",
+        "Expecting down to remove externally created networks/volumes."
+      ],
+      "security": [
+        "Back up volumes before using -v."
+      ],
+      "related": [
+        "docker compose up",
+        "docker volume ls"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "compose-ps",
+      "command": "docker compose ps",
+      "group": "Compose",
+      "summary": "List project containers",
+      "description": "Shows containers for the current project with state, health and ports. --all includes stopped one-shot services.",
+      "syntax": "docker compose ps [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Status",
+          "command": "docker compose ps",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Include stopped",
+          "command": "docker compose ps --all",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Confusing container state with application readiness; check health and logs."
+      ],
+      "security": [],
+      "related": [
+        "docker compose logs",
+        "docker compose up"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "status"
+      ]
+    },
+    {
+      "id": "compose-logs",
+      "command": "docker compose logs",
+      "group": "Compose",
+      "summary": "View service logs",
+      "description": "Aggregates logs from project services. -f follows, --tail limits, and service names filter output.",
+      "syntax": "docker compose logs [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Follow all",
+          "command": "docker compose logs -f --tail 100",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "One service",
+          "command": "docker compose logs -f api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using logs to debug a container that writes to files instead of stdout."
+      ],
+      "security": [],
+      "related": [
+        "docker logs",
+        "docker compose ps"
+      ],
+      "lesson": "logging-drivers",
+      "tags": [
+        "compose",
+        "logs"
+      ]
+    },
+    {
+      "id": "compose-config",
+      "command": "docker compose config",
+      "group": "Compose",
+      "summary": "Resolve and validate the Compose model",
+      "description": "Resolves variables, merges multiple files, validates the schema and prints the canonical model. --quiet only reports errors. Essential in CI.",
+      "syntax": "docker compose config [OPTIONS]",
+      "examples": [
+        {
+          "title": "Validate",
+          "command": "docker compose config --quiet",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Inspect",
+          "command": "docker compose config",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "The fully resolved YAML/JSON model.",
+      "mistakes": [
+        "Skipping validation and discovering interpolation errors at deploy time.",
+        "Assuming config starts containers; it does not."
+      ],
+      "security": [],
+      "related": [
+        "docker compose up"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "validation"
+      ]
+    },
+    {
+      "id": "compose-build",
+      "command": "docker compose build",
+      "group": "Compose",
+      "summary": "Build service images",
+      "description": "Builds images for services with a build section. Supports --no-cache, --pull and service selection.",
+      "syntax": "docker compose build [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Build all",
+          "command": "docker compose build",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Fresh build",
+          "command": "docker compose build --no-cache --pull",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose up",
+        "docker build"
+      ],
+      "lesson": "compose-services",
+      "tags": [
+        "compose",
+        "build"
+      ]
+    },
+    {
+      "id": "compose-pull",
+      "command": "docker compose pull",
+      "group": "Compose",
+      "summary": "Pull service images",
+      "description": "Pulls the image for each service that has an image (not only build). Use --ignore-buildable to skip build-backed services.",
+      "syntax": "docker compose pull [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Pull",
+          "command": "docker compose pull",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose push",
+        "docker pull"
+      ],
+      "lesson": "production-compose",
+      "tags": [
+        "compose",
+        "registry"
+      ]
+    },
+    {
+      "id": "compose-exec",
+      "command": "docker compose exec",
+      "group": "Compose",
+      "summary": "Run a command in a running service",
+      "description": "Like docker exec but resolves the service name and uses the service container. -T disables TTY allocation for scripts.",
+      "syntax": "docker compose exec [OPTIONS] SERVICE COMMAND [ARGS...]",
+      "examples": [
+        {
+          "title": "Shell",
+          "command": "docker compose exec api sh",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Non-interactive",
+          "command": "docker compose exec -T db pg_dump -U app app > backup.sql",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using exec for a one-off service that is not running; use run instead.",
+        "Forgetting -T in CI pipelines."
+      ],
+      "security": [],
+      "related": [
+        "docker compose run",
+        "docker exec"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "exec"
+      ]
+    },
+    {
+      "id": "compose-run",
+      "command": "docker compose run",
+      "group": "Compose",
+      "summary": "Run a one-off command in a service",
+      "description": "Creates a new container for a service and runs a command. --rm removes it afterwards. Unlike exec, it can start a stopped service container.",
+      "syntax": "docker compose run [OPTIONS] SERVICE [COMMAND] [ARGS...]",
+      "examples": [
+        {
+          "title": "One-off task",
+          "command": "docker compose run --rm api npm run migrate",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Using run for long-lived services; it creates a new container outside the normal service lifecycle.",
+        "Forgetting --rm and accumulating one-off containers."
+      ],
+      "security": [],
+      "related": [
+        "docker compose exec",
+        "docker compose up"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "jobs"
+      ]
+    },
+    {
+      "id": "compose-restart",
+      "command": "docker compose restart",
+      "group": "Compose",
+      "summary": "Restart project services",
+      "description": "Restarts service containers without recreating them. Configuration or image changes are not applied; use up -d --force-recreate for that.",
+      "syntax": "docker compose restart [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Restart api",
+          "command": "docker compose restart api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Expecting a new image or env change to take effect; recreate instead."
+      ],
+      "security": [],
+      "related": [
+        "docker compose up",
+        "docker compose stop"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "compose-stop",
+      "command": "docker compose stop",
+      "group": "Compose",
+      "summary": "Stop project services",
+      "description": "Stops running service containers without removing them.",
+      "syntax": "docker compose stop [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Stop",
+          "command": "docker compose stop",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose start",
+        "docker compose down"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "compose-start",
+      "command": "docker compose start",
+      "group": "Compose",
+      "summary": "Start existing service containers",
+      "description": "Starts previously created service containers. Does not recreate or apply config changes.",
+      "syntax": "docker compose start [SERVICE...]",
+      "examples": [
+        {
+          "title": "Start",
+          "command": "docker compose start",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose stop"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "compose-rm",
+      "command": "docker compose rm",
+      "group": "Compose",
+      "summary": "Remove stopped service containers",
+      "description": "Removes stopped containers for services. -f skips confirmation; -v removes anonymous volumes.",
+      "syntax": "docker compose rm [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Remove",
+          "command": "docker compose rm -f",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose down"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "cleanup"
+      ]
+    },
+    {
+      "id": "compose-scale",
+      "command": "docker compose scale",
+      "group": "Compose",
+      "summary": "Scale a service",
+      "description": "Sets the number of containers for a service on a single host. Ports must not collide; use a proxy or omit fixed host ports.",
+      "syntax": "docker compose scale SERVICE=NUM [SERVICE=NUM...]",
+      "examples": [
+        {
+          "title": "Three workers",
+          "command": "docker compose scale worker=3",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [
+        "Scaling a service with a fixed published port; only one container can bind it.",
+        "Expecting load balancing; Compose has no built-in service VIP."
+      ],
+      "security": [],
+      "related": [
+        "docker compose up"
+      ],
+      "lesson": "zero-downtime",
+      "tags": [
+        "compose",
+        "scale"
+      ]
+    },
+    {
+      "id": "compose-watch",
+      "command": "docker compose watch",
+      "group": "Compose",
+      "summary": "Watch and sync service source changes",
+      "description": "Watches the build context and rebuilds or syncs files for services with a develop.watch configuration.",
+      "syntax": "docker compose watch [SERVICE...]",
+      "examples": [
+        {
+          "title": "Watch",
+          "command": "docker compose watch",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose up"
+      ],
+      "lesson": "compose-services",
+      "tags": [
+        "compose",
+        "development"
+      ]
+    },
+    {
+      "id": "compose-events",
+      "command": "docker compose events",
+      "group": "Compose",
+      "summary": "Stream project events",
+      "description": "Streams events for the project’s containers with Compose context.",
+      "syntax": "docker compose events [OPTIONS]",
+      "examples": [
+        {
+          "title": "Events",
+          "command": "docker compose events --json",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker events"
+      ],
+      "lesson": "stats-events",
+      "tags": [
+        "compose",
+        "events"
+      ]
+    },
+    {
+      "id": "compose-images",
+      "command": "docker compose images",
+      "group": "Compose",
+      "summary": "List images used by services",
+      "description": "Shows the image, tag, image ID and size for each service container.",
+      "syntax": "docker compose images [OPTIONS]",
+      "examples": [
+        {
+          "title": "Images",
+          "command": "docker compose images",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker images"
+      ],
+      "lesson": "compose-services",
+      "tags": [
+        "compose",
+        "images"
+      ]
+    },
+    {
+      "id": "compose-networks-volumes",
+      "command": "docker compose volumes",
+      "group": "Compose",
+      "summary": "List project volumes",
+      "description": "Lists volumes used by the project and whether they are external.",
+      "syntax": "docker compose volumes [OPTIONS]",
+      "examples": [
+        {
+          "title": "Volumes",
+          "command": "docker compose volumes",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker volume ls"
+      ],
+      "lesson": "compose-networks-volumes",
+      "tags": [
+        "compose",
+        "volumes"
+      ]
+    },
+    {
+      "id": "compose-ls",
+      "command": "docker compose ls",
+      "group": "Compose",
+      "summary": "List Compose projects",
+      "description": "Lists projects with status and config file paths. --all includes stopped projects.",
+      "syntax": "docker compose ls [OPTIONS]",
+      "examples": [
+        {
+          "title": "Projects",
+          "command": "docker compose ls --all",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose ps"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "list"
+      ]
+    },
+    {
+      "id": "compose-push",
+      "command": "docker compose push",
+      "group": "Compose",
+      "summary": "Push service images",
+      "description": "Pushes images for services with an image field.",
+      "syntax": "docker compose push [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Push",
+          "command": "docker compose push",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker push"
+      ],
+      "lesson": "registry-auth",
+      "tags": [
+        "compose",
+        "registry"
+      ]
+    },
+    {
+      "id": "compose-create",
+      "command": "docker compose create",
+      "group": "Compose",
+      "summary": "Create service containers without starting",
+      "description": "Creates containers for services without starting them.",
+      "syntax": "docker compose create [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Create",
+          "command": "docker compose create",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [],
+      "related": [
+        "docker compose start"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    },
+    {
+      "id": "compose-kill",
+      "command": "docker compose kill",
+      "group": "Compose",
+      "summary": "Force stop service containers",
+      "description": "Sends SIGKILL to service containers. Use only when graceful stop is not possible.",
+      "syntax": "docker compose kill [OPTIONS] [SERVICE...]",
+      "examples": [
+        {
+          "title": "Kill api",
+          "command": "docker compose kill api",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "advanced": [],
+      "output": "",
+      "mistakes": [],
+      "security": [
+        "SIGKILL prevents cleanup and can corrupt state; prefer stop."
+      ],
+      "related": [
+        "docker compose stop"
+      ],
+      "lesson": "compose-architecture",
+      "tags": [
+        "compose",
+        "lifecycle"
+      ]
+    }
+  ],
+  "dockerfile": [
+    {
+      "id": "dockerfile-from",
+      "name": "FROM",
+      "summary": "Sets the base image for a build stage. Every Dockerfile starts with FROM (or ARG before FROM).",
+      "syntax": "FROM [--platform=<platform>] <image>[:<tag>|@<digest>] [AS <name>]",
+      "description": "Sets the base image for a build stage. Every Dockerfile starts with FROM (or ARG before FROM). This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "FROM node:20-alpine AS build",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "FROM scratch",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Pin a version for reproducible builds; use digests in regulated environments."
+      ],
+      "security": [
+        "Prefer minimal base images to reduce attack surface."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-run",
+      "name": "RUN",
+      "summary": "Executes a command during the build in a new layer. Use exec form or shell form; combine related commands to reduce layers.",
+      "syntax": "RUN <command> | RUN [\"executable\", \"param\", ...]",
+      "description": "Executes a command during the build in a new layer. Use exec form or shell form; combine related commands to reduce layers. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "RUN npm ci",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "RUN --mount=type=cache,target=/root/.npm npm ci",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Never put secrets in RUN arguments; use --mount=type=secret."
+      ],
+      "security": [
+        "Clean package caches in the same RUN to avoid bloating the layer."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-cmd",
+      "name": "CMD",
+      "summary": "Provides the default command or arguments for the container. Overridden by arguments to docker run. Only the last CMD takes effect.",
+      "syntax": "CMD [\"executable\",\"param1\"] | CMD command param1",
+      "description": "Provides the default command or arguments for the container. Overridden by arguments to docker run. Only the last CMD takes effect. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "CMD [\"node\", \"server.js\"]",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Use exec form for correct signal handling."
+      ],
+      "security": [
+        "Do not use CMD for build steps."
+      ],
+      "related": [
+        "ENTRYPOINT"
+      ],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-entrypoint",
+      "name": "ENTRYPOINT",
+      "summary": "Sets the executable that runs when the container starts. Runtime arguments are appended to ENTRYPOINT (or replace CMD).",
+      "syntax": "ENTRYPOINT [\"executable\",\"param1\"] | ENTRYPOINT command param1",
+      "description": "Sets the executable that runs when the container starts. Runtime arguments are appended to ENTRYPOINT (or replace CMD). This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "ENTRYPOINT [\"node\"]",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "CMD [\"server.js\"]",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Shell form wraps the command in /bin/sh and can break signals."
+      ],
+      "security": [
+        "Use an entrypoint script ending in exec \"$@\" if you need setup."
+      ],
+      "related": [
+        "CMD"
+      ],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-copy",
+      "name": "COPY",
+      "summary": "Copies files from the build context or a previous stage into the image.",
+      "syntax": "COPY [--chown=<user>:<group>] <src>... <dest> | COPY --from=<stage> <src> <dest>",
+      "description": "Copies files from the build context or a previous stage into the image. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "COPY package*.json ./",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "COPY --from=build /app/dist /usr/share/nginx/html",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Copy dependency manifests before source for better caching."
+      ],
+      "security": [
+        "Use --chown instead of a later chown layer."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-add",
+      "name": "ADD",
+      "summary": "Like COPY but also supports URLs and automatic tar extraction. Prefer COPY unless you need those behaviours.",
+      "syntax": "ADD <src>... <dest>",
+      "description": "Like COPY but also supports URLs and automatic tar extraction. Prefer COPY unless you need those behaviours. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "ADD app.tar.gz /app/",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "ADD from a URL does not use the build cache the way COPY does."
+      ],
+      "security": [
+        "Automatic extraction can be surprising; be explicit."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-workdir",
+      "name": "WORKDIR",
+      "summary": "Sets the working directory for subsequent instructions and the runtime. Creates the directory if needed.",
+      "syntax": "WORKDIR /path/to/dir",
+      "description": "Sets the working directory for subsequent instructions and the runtime. Creates the directory if needed. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "WORKDIR /app",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Use absolute paths to avoid confusion."
+      ],
+      "security": [
+        "WORKDIR does not create a layer."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-env",
+      "name": "ENV",
+      "summary": "Sets environment variables for the build and the runtime container. Values persist in image metadata.",
+      "syntax": "ENV KEY=value [KEY=value...]",
+      "description": "Sets environment variables for the build and the runtime container. Values persist in image metadata. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "ENV NODE_ENV=production",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Do not put secrets in ENV."
+      ],
+      "security": [
+        "Prefer runtime configuration for values that change per environment."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-arg",
+      "name": "ARG",
+      "summary": "Defines a build-time variable. Values can be passed with --build-arg and may appear in image history.",
+      "syntax": "ARG <name>[=<default>]",
+      "description": "Defines a build-time variable. Values can be passed with --build-arg and may appear in image history. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "ARG NODE_VERSION=20",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "FROM node:${NODE_VERSION}-alpine",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "ARG is not suitable for secrets; use BuildKit secrets."
+      ],
+      "security": [
+        "ARG before FROM is only available in FROM and must be redeclared in the stage."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-expose",
+      "name": "EXPOSE",
+      "summary": "Documents the port the container listens on. It does not publish the port.",
+      "syntax": "EXPOSE <port>[/<protocol>]",
+      "description": "Documents the port the container listens on. It does not publish the port. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "EXPOSE 3000",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Publish with -p or Compose ports; EXPOSE alone is not reachable."
+      ],
+      "security": [
+        "Use the actual listen port, not a host port."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-user",
+      "name": "USER",
+      "summary": "Sets the user (and optionally group) for subsequent instructions and the runtime.",
+      "syntax": "USER <user>[:<group>] | USER <uid>[:<gid>]",
+      "description": "Sets the user (and optionally group) for subsequent instructions and the runtime. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "USER node",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "USER 10001:10001",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Create the user in the image or use an existing one."
+      ],
+      "security": [
+        "Numeric UIDs are more portable across environments."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-volume",
+      "name": "VOLUME",
+      "summary": "Declares a mount point for external storage. Creates an anonymous volume at runtime if no mount is provided.",
+      "syntax": "VOLUME [\"/data\"]",
+      "description": "Declares a mount point for external storage. Creates an anonymous volume at runtime if no mount is provided. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "VOLUME /var/lib/postgresql/data",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "VOLUME does not make data persistent by itself; mount a named volume."
+      ],
+      "security": [
+        "Declaring a VOLUME can complicate later writes in the Dockerfile."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-healthcheck",
+      "name": "HEALTHCHECK",
+      "summary": "Defines a command that checks container health. Exit 0 is healthy; non-zero is unhealthy.",
+      "syntax": "HEALTHCHECK [OPTIONS] CMD command",
+      "description": "Defines a command that checks container health. Exit 0 is healthy; non-zero is unhealthy. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD curl -f http://localhost/health || exit 1",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Use CMD-SHELL for shell syntax, CMD exec form otherwise."
+      ],
+      "security": [
+        "Set start-period for slow starters."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-label",
+      "name": "LABEL",
+      "summary": "Adds metadata to the image as key-value pairs. Useful for OCI provenance and ownership.",
+      "syntax": "LABEL <key>=<value> ...",
+      "description": "Adds metadata to the image as key-value pairs. Useful for OCI provenance and ownership. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "LABEL org.opencontainers.image.source=\"https://github.com/acme/api\"",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Use OCI-standard keys where applicable."
+      ],
+      "security": [
+        "Labels are visible in inspect and registries."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-shell",
+      "name": "SHELL",
+      "summary": "Changes the default shell used by shell-form RUN, CMD and ENTRYPOINT.",
+      "syntax": "SHELL [\"executable\", \"parameters\"]",
+      "description": "Changes the default shell used by shell-form RUN, CMD and ENTRYPOINT. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "SHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Useful on Windows or when bash features are required."
+      ],
+      "security": [
+        "Exec-form instructions bypass the shell."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-stopsignal",
+      "name": "STOPSIGNAL",
+      "summary": "Sets the signal sent to the container when stopping. Default is SIGTERM.",
+      "syntax": "STOPSIGNAL signal",
+      "description": "Sets the signal sent to the container when stopping. Default is SIGTERM. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "STOPSIGNAL SIGQUIT",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "The application must handle the signal gracefully."
+      ],
+      "security": [
+        "Compose has a separate stop_grace_period."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-onbuild",
+      "name": "ONBUILD",
+      "summary": "Registers a trigger instruction to run later when the image is used as a base. Avoid in most images.",
+      "syntax": "ONBUILD <instruction>",
+      "description": "Registers a trigger instruction to run later when the image is used as a base. Avoid in most images. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "ONBUILD COPY . /app",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "ONBUILD makes child builds surprising and hard to debug."
+      ],
+      "security": [
+        "Prefer explicit instructions in the child Dockerfile."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    },
+    {
+      "id": "dockerfile-dockerignore",
+      "name": ".dockerignore",
+      "summary": "Excludes files from the build context. Not a Dockerfile instruction, but critical for cache and context size.",
+      "syntax": "One pattern per line, with ! for exceptions",
+      "description": "Excludes files from the build context. Not a Dockerfile instruction, but critical for cache and context size. This is a Dockerfile instruction, not a Docker CLI command.",
+      "examples": [
+        {
+          "title": "Example",
+          "command": "node_modules",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": ".git",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": ".env",
+          "output": "",
+          "explain": ""
+        },
+        {
+          "title": "Variant",
+          "command": "dist",
+          "output": "",
+          "explain": ""
+        }
+      ],
+      "mistakes": [
+        "Exclude node_modules and VCS metadata."
+      ],
+      "security": [
+        "Negated patterns can re-include files; test with the build output."
+      ],
+      "related": [],
+      "lesson": "dockerfile-anatomy"
+    }
+  ],
+  "properties": [
+    {
+      "id": "compose-services",
+      "name": "services",
+      "summary": "Top-level map of services. Each key is a service name and each value defines a container.",
+      "description": "Top-level map of services. Each key is a service name and each value defines a container. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "services:\n  <service-name>:\n    image: <image>\n    # or build: <context>",
+      "examples": [
+        {
+          "title": "Minimal stack",
+          "command": "services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - \"8080:80\"",
+          "output": "",
+          "explain": "The top-level services map is required in every Compose file. Each key becomes a service name and a DNS name on the project network."
+        },
+        {
+          "title": "Project name plus services",
+          "command": "name: acme\n\nservices:\n  api:\n    build: .\n  db:\n    image: postgres:16-alpine",
+          "output": "",
+          "explain": "name sets the Compose project name, which prefixes containers, networks and volumes. It keeps project resources identifiable in a busy engine."
+        }
+      ],
+      "mistakes": [
+        "services must be a map, not a list. A YAML list fails schema validation before any container starts.",
+        "Do not add a top-level version field. It is obsolete in Compose v2 and produces a warning."
+      ],
+      "security": [],
+      "related": [
+        "compose-image",
+        "compose-build"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-image",
+      "name": "image",
+      "summary": "Image reference used to create the service container. Can be combined with build to tag the built image.",
+      "description": "Image reference used to create the service container. Can be combined with build to tag the built image. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "image: [registry/]<name>[:<tag>|@<digest>]",
+      "examples": [
+        {
+          "title": "Pinned tag",
+          "command": "services:\n  api:\n    image: ghcr.io/acme/api:1.4.2",
+          "output": "",
+          "explain": "A full reference includes the registry, repository and tag. Pinning the version makes a deployment reproducible."
+        },
+        {
+          "title": "Build and tag together",
+          "command": "services:\n  api:\n    build: .\n    image: ghcr.io/acme/api:local",
+          "output": "",
+          "explain": "When build is present, image names the tag applied to the built result. It also lets other services reference the same image."
+        }
+      ],
+      "mistakes": [
+        "Using latest in production makes rollbacks ambiguous; two deploys can run different code under the same tag.",
+        "A bare name is pulled from Docker Hub by default. Specify the registry when the image does not live there."
+      ],
+      "security": [
+        "Pull from registries you trust and verify digests when supply-chain integrity matters."
+      ],
+      "related": [
+        "compose-build"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-build",
+      "name": "build",
+      "summary": "Build configuration: context, dockerfile, target, args, cache_from, cache_to, platforms, secrets.",
+      "description": "Build configuration: context, dockerfile, target, args, cache_from, cache_to, platforms, secrets. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "build:\n  context: <path|url>\n  dockerfile: <file>\n  target: <stage>\n  args: <map>\n  platforms: <list>\n  cache_from: <list>\n  cache_to: <list>\n  secrets: <list>",
+      "examples": [
+        {
+          "title": "Multi-stage target",
+          "command": "services:\n  api:\n    build:\n      context: .\n      dockerfile: Dockerfile\n      target: runtime",
+          "output": "",
+          "explain": "target stops the build at a named stage, so development stages never reach the runtime image."
+        },
+        {
+          "title": "Build arguments",
+          "command": "services:\n  api:\n    build:\n      context: .\n      args:\n        NODE_VERSION: \"20\"",
+          "output": "",
+          "explain": "Build args feed ARG values into the Dockerfile. They are configuration, not secrets."
+        }
+      ],
+      "mistakes": [
+        "A relative context is resolved from the Compose file location, not from the shell working directory.",
+        "Build args are recorded in image history and metadata; never pass credentials through them."
+      ],
+      "security": [
+        "Use BuildKit secrets (build.secrets) instead of build args for tokens, keys and passwords."
+      ],
+      "related": [
+        "compose-image"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-ports",
+      "name": "ports",
+      "summary": "Publishes container ports to the host. Short syntax HOST:CONTAINER; long syntax supports protocol, mode and host_ip.",
+      "description": "Publishes container ports to the host. Short syntax HOST:CONTAINER; long syntax supports protocol, mode and host_ip. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "ports:\n  - \"[HOST_IP:]<HOST_PORT>:<CONTAINER_PORT>[/<protocol>]\"\n  - target: <port>\n    published: \"<port>\"\n    protocol: tcp\n    mode: host\n    host_ip: <ip>",
+      "examples": [
+        {
+          "title": "Short syntax",
+          "command": "services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - \"8080:80\"",
+          "output": "",
+          "explain": "The left side is the host port and the right side is the container port. Traffic to host 8080 reaches port 80 in the container."
+        },
+        {
+          "title": "Long syntax with host binding",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    ports:\n      - target: 3000\n        published: \"3000\"\n        host_ip: 127.0.0.1\n        protocol: tcp",
+          "output": "",
+          "explain": "The long form makes the host interface explicit. Binding to 127.0.0.1 keeps the port off external interfaces."
+        }
+      ],
+      "mistakes": [
+        "Publishing to 0.0.0.0 exposes the port on every interface, including networks you did not intend.",
+        "Reversing host and container ports produces a service that is reachable on the wrong port, or not at all."
+      ],
+      "security": [
+        "Publish only ports that must be reachable from outside the host. Keep internal service ports on the project network."
+      ],
+      "related": [
+        "compose-expose"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-expose",
+      "name": "expose",
+      "summary": "Documents ports used internally. Does not publish them to the host.",
+      "description": "Documents ports used internally. Does not publish them to the host. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "expose:\n  - \"<port>[/<protocol>]\"",
+      "examples": [
+        {
+          "title": "Document an internal port",
+          "command": "services:\n  api:\n    image: node:20-alpine\n    expose:\n      - \"3000\"",
+          "output": "",
+          "explain": "expose records the port the service listens on for other services on the same network. It never publishes a host port."
+        }
+      ],
+      "mistakes": [
+        "expose does not make a port reachable from the host. Use ports for that.",
+        "Exposing a port does not make the application listen on it; the process configuration must match."
+      ],
+      "security": [],
+      "related": [
+        "compose-ports"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-environment",
+      "name": "environment",
+      "summary": "Map or list of environment variables for the container. Values are visible in inspect; not for secrets.",
+      "description": "Map or list of environment variables for the container. Values are visible in inspect; not for secrets. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "environment:\n  KEY: value\n  OTHER: \"\"\n# or\nenvironment:\n  - KEY=value",
+      "examples": [
+        {
+          "title": "Map form",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    environment:\n      NODE_ENV: production\n      LOG_LEVEL: info",
+          "output": "",
+          "explain": "The map form is the clearest for a fixed set of values. YAML scalars are converted to strings."
+        },
+        {
+          "title": "Pass a value from the shell",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    environment:\n      DATABASE_URL: \"${DATABASE_URL}\"",
+          "output": "",
+          "explain": "Compose interpolates ${...} from the shell or .env before the container starts. The value still appears in inspect."
+        }
+      ],
+      "mistakes": [
+        "An empty value still defines the variable; it does not unset it.",
+        "YAML converts unquoted yes or no to a boolean before Compose sees it. Quote values that must stay text."
+      ],
+      "security": [
+        "Environment variables are visible in docker inspect and docker compose config. Use secrets for credentials."
+      ],
+      "related": [
+        "compose-env-file",
+        "compose-secrets"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-env-file",
+      "name": "env_file",
+      "summary": "Loads environment variables from one or more files. Can be optional.",
+      "description": "Loads environment variables from one or more files. Can be optional. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "env_file: <path>\n# or\nenv_file:\n  - path: <path>\n    required: true",
+      "examples": [
+        {
+          "title": "Single file",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    env_file:\n      - .env.local",
+          "output": "",
+          "explain": "The file is read from the Compose file directory. Each non-comment line becomes an environment variable in the container."
+        },
+        {
+          "title": "Optional file",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    env_file:\n      - path: .env.optional\n        required: false",
+          "output": "",
+          "explain": "required: false lets a local override file be absent without failing the whole project."
+        }
+      ],
+      "mistakes": [
+        "A path is resolved relative to the Compose file, not the shell. A working directory override changes what you expect.",
+        "Values in the environment section take precedence over env_file entries for the same key."
+      ],
+      "security": [
+        "Never commit an env file containing live credentials. Add .env files to .gitignore."
+      ],
+      "related": [
+        "compose-environment"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-depends-on",
+      "name": "depends_on",
+      "summary": "Controls startup order. With condition: service_healthy it waits for a health check; it does not restart dependents later.",
+      "description": "Controls startup order. With condition: service_healthy it waits for a health check; it does not restart dependents later. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "depends_on:\n  - <service>\n# or\ndepends_on:\n  <service>:\n    condition: service_started|service_healthy|service_completed_successfully\n    restart: true",
+      "examples": [
+        {
+          "title": "Start order only",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    depends_on:\n      - db",
+          "output": "",
+          "explain": "The short form waits until db has started, not until its process is ready to accept connections."
+        },
+        {
+          "title": "Wait for a healthy dependency",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    depends_on:\n      db:\n        condition: service_healthy",
+          "output": "",
+          "explain": "The long form waits for the dependency health check to pass. db must define a healthcheck."
+        }
+      ],
+      "mistakes": [
+        "depends_on does not wait for an application to be ready unless condition: service_healthy is used.",
+        "It does not restart dependents if the dependency dies later. The application still needs retries."
+      ],
+      "security": [],
+      "related": [
+        "compose-healthcheck"
+      ],
+      "lesson": "compose-health-dependencies"
+    },
+    {
+      "id": "compose-healthcheck",
+      "name": "healthcheck",
+      "summary": "Defines a health probe with test, interval, timeout, retries, start_period. Enables service_healthy dependencies and --wait.",
+      "description": "Defines a health probe with test, interval, timeout, retries, start_period. Enables service_healthy dependencies and --wait. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "healthcheck:\n  test: [\"CMD\", \"<command>\", \"<arg>\"]\n  interval: 30s\n  timeout: 5s\n  retries: 3\n  start_period: 10s\n  start_interval: 5s\n  disable: false",
+      "examples": [
+        {
+          "title": "HTTP probe",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    healthcheck:\n      test: [\"CMD\", \"wget\", \"-qO-\", \"http://localhost:3000/health\"]\n      interval: 15s\n      timeout: 3s\n      retries: 3\n      start_period: 20s",
+          "output": "",
+          "explain": "The probe runs inside the container. start_period gives a slow starter time before failures count."
+        },
+        {
+          "title": "Shell probe",
+          "command": "services:\n  db:\n    image: postgres:16-alpine\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]\n      interval: 10s\n      retries: 5",
+          "output": "",
+          "explain": "CMD-SHELL runs the string through the container shell, which is needed for pipes and redirection."
+        }
+      ],
+      "mistakes": [
+        "curl is missing from many minimal images. Use a tool that exists in the image or build one in.",
+        "A health check that always exits 0 hides failures. Probe the dependency the service actually needs."
+      ],
+      "security": [
+        "Health commands run inside the container with the service user. Do not put credentials in the test string."
+      ],
+      "related": [
+        "compose-depends-on"
+      ],
+      "lesson": "compose-health-dependencies"
+    },
+    {
+      "id": "compose-volumes",
+      "name": "volumes",
+      "summary": "Mounts named volumes, bind mounts or tmpfs. Named volumes must be declared at the top level to be managed as project resources.",
+      "description": "Mounts named volumes, bind mounts or tmpfs. Named volumes must be declared at the top level to be managed as project resources. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "volumes:\n  - <volume-name>:<container-path>[:ro]\n  - type: volume|bind|tmpfs\n    source: <name|path>\n    target: <path>\n    read_only: true\n\n# top level\nvolumes:\n  <volume-name>: {}",
+      "examples": [
+        {
+          "title": "Named volume",
+          "command": "services:\n  db:\n    image: postgres:16-alpine\n    volumes:\n      - db-data:/var/lib/postgresql/data\n\nvolumes:\n  db-data: {}",
+          "output": "",
+          "explain": "A named volume is managed by Docker, survives container removal and is declared once at the top level."
+        },
+        {
+          "title": "Read-only bind mount",
+          "command": "services:\n  web:\n    image: nginx:1.27-alpine\n    volumes:\n      - ./site:/usr/share/nginx/html:ro",
+          "output": "",
+          "explain": "A path on the left is a bind mount from the host. :ro makes the mount read-only inside the container."
+        }
+      ],
+      "mistakes": [
+        "A short-syntax source without a slash is a named volume, not a host path. ./site and site mean different things.",
+        "A named volume used by a service but missing from top-level volumes is created implicitly and is harder to manage."
+      ],
+      "security": [
+        "Never mount /var/run/docker.sock into an application container; it grants control of the engine.",
+        "Bind mounts expose host files and permissions. Prefer named volumes for application data."
+      ],
+      "related": [
+        "compose-tmpfs",
+        "compose-read-only"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-networks",
+      "name": "networks",
+      "summary": "Attaches a service to one or more networks by name. Networks can be declared at the top level with driver and options.",
+      "description": "Attaches a service to one or more networks by name. Networks can be declared at the top level with driver and options. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "services:\n  <service>:\n    networks:\n      - <network>\n\nnetworks:\n  <network>:\n    driver: bridge|overlay\n    internal: true",
+      "examples": [
+        {
+          "title": "Two-service private network",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    networks:\n      - backend\n  db:\n    image: postgres:16-alpine\n    networks:\n      - backend\n\nnetworks:\n  backend: {}",
+          "output": "",
+          "explain": "Only services on backend can resolve and reach each other. The network is prefixed with the project name."
+        },
+        {
+          "title": "Internal network",
+          "command": "networks:\n  backend:\n    internal: true",
+          "output": "",
+          "explain": "internal: true removes the gateway, so services cannot reach the outside world through it."
+        }
+      ],
+      "mistakes": [
+        "A service can only reach a service on a shared network. The default network is not shared with another project.",
+        "Network names are prefixed by the project unless name is set explicitly."
+      ],
+      "security": [
+        "Use internal networks for databases and other services that should never reach the internet."
+      ],
+      "related": [
+        "compose-volumes"
+      ],
+      "lesson": "compose-networks-volumes"
+    },
+    {
+      "id": "compose-secrets",
+      "name": "secrets",
+      "summary": "Mounts sensitive values from files or environment into /run/secrets by default. Keeps secrets out of images and env.",
+      "description": "Mounts sensitive values from files or environment into /run/secrets by default. Keeps secrets out of images and env. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "services:\n  <service>:\n    secrets:\n      - <secret>\n      - source: <secret>\n        target: <filename>\n        mode: 0400\n\nsecrets:\n  <secret>:\n    file: <path>\n# or\n    environment: <ENV_VAR>",
+      "examples": [
+        {
+          "title": "Mount a secret file",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    secrets:\n      - db_password\n\nsecrets:\n  db_password:\n    file: ./secrets/db_password.txt",
+          "output": "",
+          "explain": "The secret appears as /run/secrets/db_password inside the container. It is not an environment variable."
+        },
+        {
+          "title": "Read a secret from the environment",
+          "command": "secrets:\n  api_key:\n    environment: API_KEY",
+          "output": "",
+          "explain": "The value comes from the host environment at deploy time and is mounted as a file, not exported into the container environment."
+        }
+      ],
+      "mistakes": [
+        "The application must read the secret from /run/secrets; it will not appear in env.",
+        "Changing a secret file requires recreating the service for the new content to be mounted."
+      ],
+      "security": [
+        "Compose secrets are files, not a vault. Protect the source file and restrict its mode.",
+        "Do not bake secrets into images or commit them to the repository."
+      ],
+      "related": [
+        "compose-environment",
+        "compose-configs"
+      ],
+      "lesson": "compose-environment-secrets"
+    },
+    {
+      "id": "compose-configs",
+      "name": "configs",
+      "summary": "Mounts non-secret configuration files. Similar lifecycle to secrets but semantically public.",
+      "description": "Mounts non-secret configuration files. Similar lifecycle to secrets but semantically public. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "services:\n  <service>:\n    configs:\n      - <config>\n      - source: <config>\n        target: <path>\n\nconfigs:\n  <config>:\n    file: <path>",
+      "examples": [
+        {
+          "title": "Mount configuration",
+          "command": "services:\n  nginx:\n    image: nginx:1.27-alpine\n    configs:\n      - source: nginx_conf\n        target: /etc/nginx/conf.d/default.conf\n\nconfigs:\n  nginx_conf:\n    file: ./nginx/default.conf",
+          "output": "",
+          "explain": "Configs use the same mount mechanism as secrets but are suitable for non-sensitive content."
+        }
+      ],
+      "mistakes": [
+        "Configs are read-only inside the container; the application must not try to rewrite them.",
+        "A config change requires recreating the service just like a secret change."
+      ],
+      "security": [
+        "Do not use configs for passwords or keys. Use secrets instead."
+      ],
+      "related": [
+        "compose-secrets"
+      ],
+      "lesson": "compose-environment-secrets"
+    },
+    {
+      "id": "compose-profiles",
+      "name": "profiles",
+      "summary": "Opt-in service groups. A service with profiles does not start unless the profile is enabled.",
+      "description": "Opt-in service groups. A service with profiles does not start unless the profile is enabled. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "services:\n  <service>:\n    profiles:\n      - <profile>\n# enable with: docker compose --profile <profile> up",
+      "examples": [
+        {
+          "title": "Opt-in debug tools",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n  adminer:\n    image: adminer:4\n    profiles:\n      - tools",
+          "output": "",
+          "explain": "docker compose up starts only api. docker compose --profile tools up adds adminer."
+        }
+      ],
+      "mistakes": [
+        "A service with profiles does not start by default, even if another service depends on it.",
+        "An enabled profile does not start services from other profiles. Each profile must be requested."
+      ],
+      "security": [
+        "Put administrative and debugging services behind a profile so they are not exposed by a normal start."
+      ],
+      "related": [
+        "compose-services"
+      ],
+      "lesson": "compose-profiles-production"
+    },
+    {
+      "id": "compose-restart",
+      "name": "restart",
+      "summary": "Restart policy: no, on-failure[:max], always, unless-stopped.",
+      "description": "Restart policy: no, on-failure[:max], always, unless-stopped. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "restart: \"no\" | on-failure[:<max-retries>] | always | unless-stopped",
+      "examples": [
+        {
+          "title": "Restart on failure",
+          "command": "services:\n  worker:\n    image: acme/worker:1.4.2\n    restart: on-failure:5",
+          "output": "",
+          "explain": "The container restarts up to five times after a non-zero exit. A clean exit stops the loop."
+        },
+        {
+          "title": "Survive daemon restarts",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    restart: unless-stopped",
+          "output": "",
+          "explain": "unless-stopped restarts after daemon restarts but respects an explicit docker stop."
+        }
+      ],
+      "mistakes": [
+        "restart: always restarts even after a clean exit, which can hide a completed one-shot job.",
+        "A restart loop is a symptom. Fix the failing process instead of increasing the retry count."
+      ],
+      "security": [],
+      "related": [
+        "compose-healthcheck"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-deploy",
+      "name": "deploy",
+      "summary": "Deployment-related settings, including resources.limits and replicas (Compose supports limits on a single host; replicas and placement are orchestrator features).",
+      "description": "Deployment-related settings, including resources.limits and replicas (Compose supports limits on a single host; replicas and placement are orchestrator features). This is a Compose YAML property, not a CLI flag.",
+      "syntax": "deploy:\n  replicas: <n>\n  resources:\n    limits:\n      cpus: \"<cores>\"\n      memory: <size>\n    reservations:\n      cpus: \"<cores>\"\n      memory: <size>",
+      "examples": [
+        {
+          "title": "Resource limits",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    deploy:\n      resources:\n        limits:\n          cpus: \"0.50\"\n          memory: 256M",
+          "output": "",
+          "explain": "Limits cap the container. Docker Compose applies these on a single host for local deployments."
+        },
+        {
+          "title": "Replicas on a single host",
+          "command": "services:\n  worker:\n    image: acme/worker:1.4.2\n    deploy:\n      replicas: 3",
+          "output": "",
+          "explain": "Replica count is an orchestration feature. Compose honors it when scaling the project, not as a scheduler."
+        }
+      ],
+      "mistakes": [
+        "Replicas and placement are scheduling features; a one-shot docker compose up is not a Swarm scheduler.",
+        "Memory values need a unit (256M). A bare number is parsed as bytes and surprises you."
+      ],
+      "security": [
+        "Limits protect the host from a runaway container, but they are not a security boundary."
+      ],
+      "related": [
+        "compose-restart"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-logging",
+      "name": "logging",
+      "summary": "Logging driver and options for the service, such as max-size and max-file for json-file.",
+      "description": "Logging driver and options for the service, such as max-size and max-file for json-file. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "logging:\n  driver: json-file|local|syslog|journald|none\n  options:\n    max-size: \"10m\"\n    max-file: \"3\"",
+      "examples": [
+        {
+          "title": "Bounded json-file logs",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    logging:\n      driver: json-file\n      options:\n        max-size: \"10m\"\n        max-file: \"3\"",
+          "output": "",
+          "explain": "Rotation keeps log files bounded. Without it, json-file logs grow until the disk fills."
+        }
+      ],
+      "mistakes": [
+        "The default json-file driver has no size limit. Long-running services eventually fill the disk.",
+        "A driver must be available on the host; an unknown driver fails container creation."
+      ],
+      "security": [
+        "Logs can contain personal data and tokens. Set retention deliberately and restrict access to the log files."
+      ],
+      "related": [
+        "compose-deploy"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-command",
+      "name": "command",
+      "summary": "Overrides the image CMD.",
+      "description": "Overrides the image CMD. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "command: <string>\n# or\ncommand: [\"<executable>\", \"<arg>\"]",
+      "examples": [
+        {
+          "title": "Exec form",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    command: [\"node\", \"server.js\"]",
+          "output": "",
+          "explain": "The list form runs without a shell, so signals reach the process directly."
+        },
+        {
+          "title": "Override a long-running command",
+          "command": "services:\n  migrate:\n    image: acme/api:1.4.2\n    command: [\"npm\", \"run\", \"migrate\"]",
+          "output": "",
+          "explain": "command replaces the image CMD. It does not touch ENTRYPOINT."
+        }
+      ],
+      "mistakes": [
+        "A string is run through /bin/sh -c, which changes signal handling and quoting.",
+        "command does not replace ENTRYPOINT. If the entrypoint expects arguments, keep them compatible."
+      ],
+      "security": [],
+      "related": [
+        "compose-entrypoint"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-entrypoint",
+      "name": "entrypoint",
+      "summary": "Overrides the image ENTRYPOINT.",
+      "description": "Overrides the image ENTRYPOINT. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "entrypoint: <string>\n# or\nentrypoint: [\"<executable>\", \"<arg>\"]",
+      "examples": [
+        {
+          "title": "Exec form entrypoint",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    entrypoint: [\"/usr/local/bin/docker-entrypoint.sh\"]",
+          "output": "",
+          "explain": "entrypoint replaces the image ENTRYPOINT and receives command arguments after it."
+        }
+      ],
+      "mistakes": [
+        "Clearing an entrypoint with [] is sometimes needed for shell images, but can break the image contract.",
+        "A shell-form entrypoint swallows signals. Prefer the exec form."
+      ],
+      "security": [],
+      "related": [
+        "compose-command"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-user",
+      "name": "user",
+      "summary": "Sets the user for the container process.",
+      "description": "Sets the user for the container process. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "user: \"<uid>[:<gid>]\"",
+      "examples": [
+        {
+          "title": "Numeric user",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    user: \"10001:10001\"",
+          "output": "",
+          "explain": "Numeric IDs work even when /etc/passwd has no matching name. The image must allow that user to write its paths."
+        }
+      ],
+      "mistakes": [
+        "A user that does not exist in /etc/passwd may still run by numeric UID, but tools that resolve names fail.",
+        "Mounts and application directories must be writable by the chosen UID or the process exits immediately."
+      ],
+      "security": [
+        "Run as non-root where possible. Check file ownership before switching the user."
+      ],
+      "related": [
+        "compose-read-only"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-working-dir",
+      "name": "working_dir",
+      "summary": "Sets the working directory inside the container.",
+      "description": "Sets the working directory inside the container. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "working_dir: <path>",
+      "examples": [
+        {
+          "title": "Set the process directory",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    working_dir: /app",
+          "output": "",
+          "explain": "The container process starts in this directory. Relative paths in command resolve from here."
+        }
+      ],
+      "mistakes": [
+        "The directory must exist in the image; Compose does not create it for you.",
+        "A relative path is resolved inside the container, not on the host."
+      ],
+      "security": [],
+      "related": [
+        "compose-user"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-read-only",
+      "name": "read_only",
+      "summary": "Mounts the root filesystem read-only. Combine with tmpfs or volumes for writable paths.",
+      "description": "Mounts the root filesystem read-only. Combine with tmpfs or volumes for writable paths. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "read_only: true\n# combine with\ntmpfs:\n  - /tmp",
+      "examples": [
+        {
+          "title": "Read-only root with writable tmp",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    read_only: true\n    tmpfs:\n      - /tmp\n    volumes:\n      - api-cache:/var/cache/app\n\nvolumes:\n  api-cache: {}",
+          "output": "",
+          "explain": "The root filesystem cannot be modified, while /tmp and the named volume stay writable."
+        }
+      ],
+      "mistakes": [
+        "Applications that write to the root filesystem fail at start. Audit writable paths first.",
+        "read_only does not make mounted volumes read-only. Add :ro or read_only: true per mount."
+      ],
+      "security": [
+        "A read-only root filesystem limits what an attacker can persist inside the container."
+      ],
+      "related": [
+        "compose-tmpfs",
+        "compose-volumes"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-cap-drop",
+      "name": "cap_drop",
+      "summary": "Drops Linux capabilities. Use [\"ALL\"] then add only what is required.",
+      "description": "Drops Linux capabilities. Use [\"ALL\"] then add only what is required. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "cap_drop:\n  - ALL\ncap_add:\n  - <capability>",
+      "examples": [
+        {
+          "title": "Drop everything",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    cap_drop:\n      - ALL",
+          "output": "",
+          "explain": "Start from no capabilities and add back only what the process demonstrably needs."
+        }
+      ],
+      "mistakes": [
+        "Dropping ALL without testing can break a service that relied on a default capability such as CHOWN.",
+        "Adding capabilities back without a reason defeats the purpose of dropping them."
+      ],
+      "security": [
+        "Never add SYS_ADMIN or NET_ADMIN unless the workload is genuinely privileged and isolated."
+      ],
+      "related": [
+        "compose-security-opt"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-security-opt",
+      "name": "security_opt",
+      "summary": "Security options such as no-new-privileges and seccomp/apparmor profiles.",
+      "description": "Security options such as no-new-privileges and seccomp/apparmor profiles. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "security_opt:\n  - no-new-privileges:true\n  - seccomp=<profile.json>\n  - apparmor=<profile>",
+      "examples": [
+        {
+          "title": "No privilege escalation",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    security_opt:\n      - no-new-privileges:true",
+          "output": "",
+          "explain": "The process cannot gain privileges through setuid binaries or file capabilities."
+        }
+      ],
+      "mistakes": [
+        "Referencing a seccomp profile that does not exist on the host prevents the container from starting.",
+        "Disabling seccomp or AppArmor removes a real boundary; do not do it to silence a permission error."
+      ],
+      "security": [
+        "Keep the default seccomp profile. Prefer narrowing it rather than disabling it."
+      ],
+      "related": [
+        "compose-cap-drop"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-tmpfs",
+      "name": "tmpfs",
+      "summary": "Mounts an in-memory filesystem. Useful for writable temporary paths with read_only.",
+      "description": "Mounts an in-memory filesystem. Useful for writable temporary paths with read_only. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "tmpfs:\n  - /tmp\n  - /run:size=64m,mode=1777",
+      "examples": [
+        {
+          "title": "Bounded tmpfs",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    read_only: true\n    tmpfs:\n      - /tmp:size=64m,mode=1777",
+          "output": "",
+          "explain": "In-memory storage is ideal for ephemeral files on a read-only root. The size cap prevents memory exhaustion."
+        }
+      ],
+      "mistakes": [
+        "tmpfs contents are lost when the container stops and count against memory.",
+        "An uncapped tmpfs can consume the host memory allocated to the container."
+      ],
+      "security": [
+        "Cap tmpfs size so a compromised process cannot exhaust memory through temporary files."
+      ],
+      "related": [
+        "compose-read-only"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-stop-grace-period",
+      "name": "stop_grace_period",
+      "summary": "How long to wait after SIGTERM before SIGKILL when stopping the container.",
+      "description": "How long to wait after SIGTERM before SIGKILL when stopping the container. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "stop_grace_period: <duration>",
+      "examples": [
+        {
+          "title": "Allow a slow shutdown",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    stop_grace_period: 30s",
+          "output": "",
+          "explain": "Docker sends SIGTERM, waits the grace period, then sends SIGKILL. Give the application time to drain."
+        }
+      ],
+      "mistakes": [
+        "A grace period shorter than the application drain time turns a graceful shutdown into SIGKILL.",
+        "The application must handle SIGTERM. A process that ignores it always reaches SIGKILL."
+      ],
+      "security": [],
+      "related": [
+        "compose-restart"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-init",
+      "name": "init",
+      "summary": "Runs a small init process as PID 1 to reap zombies and forward signals.",
+      "description": "Runs a small init process as PID 1 to reap zombies and forward signals. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "init: true",
+      "examples": [
+        {
+          "title": "Enable the init process",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    init: true",
+          "output": "",
+          "explain": "A tiny init runs as PID 1, reaps orphaned processes and forwards signals to the application."
+        }
+      ],
+      "mistakes": [
+        "init is not a substitute for handling signals in the application.",
+        "Some images already include an init or an entrypoint that execs the process; adding another can be redundant."
+      ],
+      "security": [],
+      "related": [
+        "compose-command"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-extra-hosts",
+      "name": "extra_hosts",
+      "summary": "Adds host-to-IP mappings to /etc/hosts.",
+      "description": "Adds host-to-IP mappings to /etc/hosts. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "extra_hosts:\n  - \"<hostname>:<ip>\"\n# or\n  <hostname>: <ip>",
+      "examples": [
+        {
+          "title": "Map a host name",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    extra_hosts:\n      - \"host.docker.internal:host-gateway\"",
+          "output": "",
+          "explain": "host-gateway resolves to the host address on Linux. It lets a container reach a service running on the host."
+        }
+      ],
+      "mistakes": [
+        "Hard-coding an IP breaks when the host network changes. Prefer host-gateway where supported.",
+        "extra_hosts changes name resolution only; it does not open a firewall path."
+      ],
+      "security": [
+        "Reaching the host from a container widens the attack surface. Use it deliberately."
+      ],
+      "related": [
+        "compose-dns"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-dns",
+      "name": "dns",
+      "summary": "Custom DNS servers for the service.",
+      "description": "Custom DNS servers for the service. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "dns:\n  - <ip>\ndns_search:\n  - <domain>\ndns_opt:\n  - <option>",
+      "examples": [
+        {
+          "title": "Custom resolver",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    dns:\n      - 1.1.1.1\n      - 8.8.8.8",
+          "output": "",
+          "explain": "The container uses these resolvers instead of the host configuration for external names."
+        }
+      ],
+      "mistakes": [
+        "Custom DNS replaces the embedded Docker DNS for external lookups; service discovery on the project network still works.",
+        "A resolver that is not reachable from the container breaks name resolution entirely."
+      ],
+      "security": [
+        "DNS traffic can leak metadata. Use resolvers you trust."
+      ],
+      "related": [
+        "compose-extra-hosts"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-ulimits",
+      "name": "ulimits",
+      "summary": "Sets ulimit values such as nofile.",
+      "description": "Sets ulimit values such as nofile. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "ulimits:\n  nofile:\n    soft: <n>\n    hard: <n>\n  nproc: <n>",
+      "examples": [
+        {
+          "title": "Raise open-file limits",
+          "command": "services:\n  api:\n    image: acme/api:1.4.2\n    ulimits:\n      nofile:\n        soft: 65536\n        hard: 65536",
+          "output": "",
+          "explain": "The soft limit is the effective value; the hard limit caps what the process can raise."
+        }
+      ],
+      "mistakes": [
+        "A hard limit above the host limit fails at container start.",
+        "Raising nofile without checking application connection pools can exhaust other resources."
+      ],
+      "security": [],
+      "related": [
+        "compose-deploy"
+      ],
+      "lesson": "compose-services"
+    },
+    {
+      "id": "compose-platform",
+      "name": "platform",
+      "summary": "Forces a specific platform for the service image.",
+      "description": "Forces a specific platform for the service image. This is a Compose YAML property, not a CLI flag.",
+      "syntax": "platform: <os>/<arch>\n# example\nplatform: linux/amd64",
+      "examples": [
+        {
+          "title": "Force an architecture",
+          "command": "services:\n  legacy:\n    image: acme/legacy:1.0\n    platform: linux/amd64",
+          "output": "",
+          "explain": "Useful when only a specific architecture is published. On an ARM host the image runs under emulation and is slower."
+        }
+      ],
+      "mistakes": [
+        "Emulated platforms are slower and may behave differently for native dependencies.",
+        "The image must exist for the requested platform, or the pull fails."
+      ],
+      "security": [
+        "Emulation layers widen the supply chain. Pin the platform only when the image requires it."
+      ],
+      "related": [
+        "compose-build"
+      ],
+      "lesson": "compose-services"
+    }
+  ]
+}

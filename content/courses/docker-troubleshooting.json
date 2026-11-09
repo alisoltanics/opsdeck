@@ -1,0 +1,530 @@
+{
+  "id": "docker-troubleshooting",
+  "order": 15,
+  "title": "Docker Troubleshooting",
+  "subtitle": "A systematic method for real failures",
+  "level": "Intermediate",
+  "duration": "1h 40m",
+  "icon": "wrench",
+  "accent": "red",
+  "description": "Stop guessing. Learn a repeatable diagnostic method and the specific failure signatures for exits, ports, disk pressure and builds.",
+  "outcomes": [
+    "Apply a layered diagnostic method",
+    "Diagnose immediate container exits",
+    "Resolve port, network and disk problems",
+    "Read BuildKit failures correctly"
+  ],
+  "modules": [
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "summary": "Method and common failure signatures.",
+      "lessons": [
+        {
+          "id": "troubleshooting-method",
+          "title": "A systematic method",
+          "duration": "11 min",
+          "summary": "Observe, narrow, verify. The same loop works for every Docker problem.",
+          "objectives": [
+            "Collect the right evidence before changing anything",
+            "Separate host, engine, container and application layers",
+            "Write a useful bug report"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The loop",
+              "body": "Start with the exact error and the layer that produced it. Reproduce with the smallest command. Check `docker inspect`, logs and events before editing configuration. Change one variable at a time. Record what you changed; most long incidents are a pile of untracked changes."
+            },
+            {
+              "type": "steps",
+              "items": [
+                {
+                  "title": "Identify the layer",
+                  "body": "Is it the CLI, daemon, image build, container start, networking, or the application?"
+                },
+                {
+                  "title": "Collect evidence",
+                  "body": "Exact command, full error, docker version, docker info, inspect state, logs, events."
+                },
+                {
+                  "title": "Reproduce minimally",
+                  "body": "Run the same image with a trivial command to separate image problems from application problems."
+                },
+                {
+                  "title": "Change one thing",
+                  "body": "Test a single hypothesis. Revert if it does not help."
+                },
+                {
+                  "title": "Verify and document",
+                  "body": "Confirm the fix with a health check and leave a note in the runbook."
+                }
+              ]
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker version\ndocker info\ndocker inspect --format '{{json .State}}' NAME\ndocker logs --tail 200 --timestamps NAME\ndocker events --since 30m --filter container=NAME\ndocker stats --no-stream NAME\njournalctl -u docker --since '30 min ago' --no-pager | tail -100",
+              "title": null,
+              "output": null,
+              "note": "These commands answer most \"why did it fail?\" questions before you touch a config file."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Read the first error, not the last",
+              "body": "Later errors are often consequences. In a stack trace or build log, the first causal failure is usually the one to fix."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Evidence pack",
+              "prompt": "Write the five commands you would collect for a container that keeps restarting.",
+              "command": null,
+              "expected": "version, inspect state, logs, events, stats/journal.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Minimal repro",
+              "prompt": "A custom image exits immediately. What trivial command tests the image itself?",
+              "command": null,
+              "expected": "docker run --rm IMAGE sh (or the shell available) to inspect files and entrypoint.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What should you do before changing configuration?",
+                "options": [
+                  "Restart Docker",
+                  "Collect evidence and identify the layer",
+                  "Delete containers",
+                  "Rebuild images"
+                ],
+                "answer": 1,
+                "explain": "Evidence prevents guesswork."
+              },
+              {
+                "question": "Which command shows recent daemon-level events for a container?",
+                "options": [
+                  "docker logs",
+                  "docker events --filter container=NAME",
+                  "docker top",
+                  "docker diff"
+                ],
+                "answer": 1,
+                "explain": "Events include start/die/oom and more."
+              },
+              {
+                "question": "Why change one variable at a time?",
+                "options": [
+                  "It is faster",
+                  "To know which change fixed or broke the system",
+                  "Docker requires it",
+                  "It reduces logs"
+                ],
+                "answer": 1,
+                "explain": "Multiple changes make causality impossible."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "container-exits",
+            "disk-space",
+            "build-failures"
+          ],
+          "tags": [
+            "troubleshooting"
+          ],
+          "commands": [
+            "docker inspect",
+            "docker logs",
+            "docker events"
+          ],
+          "sources": [
+            {
+              "title": "Troubleshooting",
+              "url": "https://docs.docker.com/engine/troubleshooting/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "container-exits",
+          "title": "Container exits immediately",
+          "duration": "12 min",
+          "summary": "The most common Docker problem, diagnosed by exit code, logs and command.",
+          "objectives": [
+            "Interpret exit codes 0, 1, 126, 127, 137, 143",
+            "Find why PID 1 terminated",
+            "Use an override command to debug an image"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Exit codes are evidence",
+              "body": "`0` means success — a one-shot job can exit immediately and that is correct. `1` is a general application error. `126` means command found but not executable. `127` means command not found. `137` is SIGKILL (often OOM). `143` is SIGTERM. Read the code before reading the logs, then read the logs."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker ps -a --filter name=app\ndocker inspect app --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}'\ndocker logs app\ndocker inspect app --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'\n\n# Override the entrypoint to inspect the filesystem\ndocker run --rm -it --entrypoint sh IMAGE",
+              "title": null,
+              "output": "status=exited exit=127 oom=false error=",
+              "note": "Exit 127 usually means the command in CMD/ENTRYPOINT does not exist in the image or PATH."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Symptom",
+                "Likely cause"
+              ],
+              "rows": [
+                [
+                  "Exit 0 immediately",
+                  "Command is a one-shot or daemonizes"
+                ],
+                [
+                  "Exit 127",
+                  "Binary missing / wrong PATH"
+                ],
+                [
+                  "Exit 126",
+                  "Permission denied / not executable"
+                ],
+                [
+                  "Exit 137",
+                  "OOM kill or manual SIGKILL"
+                ],
+                [
+                  "Restart loop",
+                  "App crashes or dependency unavailable"
+                ],
+                [
+                  "No logs",
+                  "App writes to a file, not stdout"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "A daemonizing process is a bug in a container",
+              "body": "If the app forks to the background, PID 1 exits and the container stops. Run in the foreground and let Docker supervise."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Diagnose",
+              "prompt": "A container exits 127. List the first three checks.",
+              "command": null,
+              "expected": "Entrypoint/Cmd exists, PATH, shebang/interpreter, file permissions.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Inspect",
+              "prompt": "Override the entrypoint of postgres to open a shell.",
+              "command": null,
+              "expected": "docker run --rm -it --entrypoint sh postgres:16-alpine",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Exit code 127 means…",
+                "options": [
+                  "OOM",
+                  "Command not found",
+                  "Success",
+                  "SIGTERM"
+                ],
+                "answer": 1,
+                "explain": "The shell could not find the command."
+              },
+              {
+                "question": "Exit code 137 means…",
+                "options": [
+                  "Success",
+                  "SIGKILL, often OOM",
+                  "Permission denied",
+                  "Port conflict"
+                ],
+                "answer": 1,
+                "explain": "128 + 9. Check OOMKilled."
+              },
+              {
+                "question": "How do you debug an image whose entrypoint exits instantly?",
+                "options": [
+                  "Increase memory",
+                  "Override entrypoint with a shell",
+                  "Use host networking",
+                  "Prune images"
+                ],
+                "answer": 1,
+                "explain": "Run --entrypoint sh to inspect the image."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "troubleshooting-method",
+            "container-lifecycle",
+            "build-failures"
+          ],
+          "tags": [
+            "troubleshooting",
+            "containers"
+          ],
+          "commands": [
+            "docker inspect",
+            "docker logs",
+            "docker run"
+          ],
+          "sources": [
+            {
+              "title": "Container exits",
+              "url": "https://docs.docker.com/engine/troubleshooting/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "disk-space",
+          "title": "Disk pressure and pruning",
+          "duration": "11 min",
+          "summary": "When /var/lib/docker fills the host: find the consumer, reclaim safely, prevent recurrence.",
+          "objectives": [
+            "Measure Docker disk usage by category",
+            "Find large images, containers and volumes",
+            "Set retention and log rotation"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Find the consumer",
+              "body": "`docker system df` gives the category totals. `docker system df -v` lists per-image, per-container and per-volume sizes. Build cache is frequently the largest and least understood consumer. Container logs under `/var/lib/docker/containers` are another common culprit."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker system df -v\ndocker image ls --format 'table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}' | sort -k3 -h\ndocker ps -as --format 'table {{.Names}}\\t{{.Size}}'\ndocker system events --since 24h --filter type=image --filter event=untag\n\ndu -sh /var/lib/docker/* 2>/dev/null | sort -h\ndocker builder prune --keep-storage 5GB\ndocker image prune -a\ndocker volume prune",
+              "title": null,
+              "output": null,
+              "note": "Prune commands are destructive. Confirm what is unused and back up volumes first."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Do not delete files under /var/lib/docker manually",
+              "body": "Use Docker commands. Deleting the overlay or container directories directly can corrupt the image store."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Audit",
+              "prompt": "List the ten largest images.",
+              "command": null,
+              "expected": "docker image ls --format and sort by size, or docker system df -v.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Reclaim",
+              "prompt": "Prune build cache but keep 5 GB.",
+              "command": "docker builder prune --keep-storage 5GB",
+              "expected": "docker builder prune --keep-storage 5GB",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which command shows per-object disk usage?",
+                "options": [
+                  "docker ps -s",
+                  "docker system df -v",
+                  "docker info",
+                  "docker stats"
+                ],
+                "answer": 1,
+                "explain": "df -v breaks usage down by object."
+              },
+              {
+                "question": "Which category is often the largest hidden consumer?",
+                "options": [
+                  "Networks",
+                  "Build cache",
+                  "Volumes",
+                  "Images"
+                ],
+                "answer": 1,
+                "explain": "Build cache can grow very large."
+              },
+              {
+                "question": "Why not delete /var/lib/docker files manually?",
+                "options": [
+                  "It is slow",
+                  "It can corrupt Docker metadata",
+                  "It requires root",
+                  "It breaks DNS"
+                ],
+                "answer": 1,
+                "explain": "Docker must manage its own store."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "cleanup-and-pruning",
+            "logging-drivers",
+            "system-maintenance"
+          ],
+          "tags": [
+            "troubleshooting",
+            "disk"
+          ],
+          "commands": [
+            "docker system df",
+            "docker builder prune"
+          ],
+          "sources": [
+            {
+              "title": "Pruning",
+              "url": "https://docs.docker.com/config/pruning/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "build-failures",
+          "title": "Build failures",
+          "duration": "12 min",
+          "summary": "Read a BuildKit log, find the failing step, and fix the layer instead of rebuilding blindly.",
+          "objectives": [
+            "Locate the first failing step",
+            "Diagnose package, network and permission errors",
+            "Use --progress and debug targets"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The first error wins",
+              "body": "BuildKit prints a step graph and the failing step’s output. Network failures while installing packages are often DNS or proxy issues in the build container, not the Dockerfile. Permission errors are often a missing user or a directory created as root in an earlier layer. Cache misses are not errors but explain slow builds."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker build --progress=plain --no-cache -t app:debug .\ndocker build --target build -t app:build .\ndocker run --rm -it app:build sh\n\n# Check build-time DNS and proxy\ndocker build --build-arg HTTP_PROXY=$HTTP_PROXY .\ndocker buildx build --ssh default .",
+              "title": null,
+              "output": "#12 [build 4/6] RUN npm ci\n#12 0.532 npm ERR! network request to https://registry.npmjs.org failed",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Reproduce the layer",
+              "body": "Build the failing stage with --target, then run a shell in it. You now have the exact environment the failing RUN saw."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Plain log",
+              "prompt": "Rebuild an image with plain progress and identify the failing step.",
+              "command": null,
+              "expected": "docker build --progress=plain .",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Debug stage",
+              "prompt": "Build the build stage and open a shell.",
+              "command": null,
+              "expected": "docker build --target build -t dbg . && docker run --rm -it dbg sh",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which flag gives plain, timestamped build output?",
+                "options": [
+                  "--verbose",
+                  "--progress=plain",
+                  "--debug",
+                  "--log-level=debug"
+                ],
+                "answer": 1,
+                "explain": "BuildKit accepts --progress=plain."
+              },
+              {
+                "question": "A package install fails with DNS errors. What should you check?",
+                "options": [
+                  "Image size",
+                  "Build container DNS/proxy configuration",
+                  "Port mappings",
+                  "Restart policy"
+                ],
+                "answer": 1,
+                "explain": "Build containers use the daemon network configuration."
+              },
+              {
+                "question": "How do you inspect a failed stage?",
+                "options": [
+                  "docker logs",
+                  "Build with --target and run a shell",
+                  "docker exec",
+                  "docker events"
+                ],
+                "answer": 1,
+                "explain": "Target the stage and run a shell in the result."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "layer-caching",
+            "buildkit-architecture",
+            "troubleshooting-method"
+          ],
+          "tags": [
+            "troubleshooting",
+            "build"
+          ],
+          "commands": [
+            "docker build",
+            "docker run"
+          ],
+          "sources": [
+            {
+              "title": "Build troubleshooting",
+              "url": "https://docs.docker.com/build/building/"
+            },
+            {
+              "title": "BuildKit",
+              "url": "https://docs.docker.com/build/buildkit/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-containers",
+    "dockerfile-masterclass",
+    "docker-networking"
+  ]
+}

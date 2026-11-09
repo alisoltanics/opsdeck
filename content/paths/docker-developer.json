@@ -1,0 +1,62 @@
+{
+  "id": "docker-developer",
+  "title": "Docker Developer",
+  "subtitle": "A daily workflow for building and shipping applications",
+  "level": "Intermediate",
+  "duration": "9h 30m",
+  "icon": "code",
+  "accent": "blue",
+  "description": "For application developers who need to containerise services, write production Dockerfiles, manage data and run a full local stack.",
+  "prerequisites": [
+    "docker-beginner"
+  ],
+  "outcomes": [
+    "Write small, secure Dockerfiles",
+    "Use multi-stage builds and cache effectively",
+    "Run a database-backed app with Compose",
+    "Debug a failing container quickly"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "docker-fundamentals",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "docker-images",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "dockerfile-masterclass",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "docker-volumes",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "docker-compose",
+      "description": ""
+    },
+    {
+      "title": "Stage 6",
+      "courseId": "real-world-projects",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "docker-fundamentals",
+      "docker-images",
+      "dockerfile-masterclass",
+      "docker-volumes",
+      "docker-compose",
+      "real-world-projects"
+    ]
+  }
+}

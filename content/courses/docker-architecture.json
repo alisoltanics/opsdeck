@@ -1,0 +1,422 @@
+{
+  "id": "docker-architecture",
+  "order": 2,
+  "title": "Docker Architecture",
+  "subtitle": "What happens between the CLI and a running process",
+  "level": "Beginner",
+  "duration": "1h 15m",
+  "icon": "layers",
+  "accent": "cyan",
+  "description": "A precise tour of the Docker client, daemon, containerd, runc, namespaces and cgroups. This is the knowledge that turns confusing errors into obvious ones.",
+  "outcomes": [
+    "Trace a docker run request through every component",
+    "Explain the role of containerd and runc",
+    "Describe how namespaces and cgroups isolate and limit a process"
+  ],
+  "modules": [
+    {
+      "id": "architecture-components",
+      "title": "Components",
+      "summary": "The moving parts of a Docker installation.",
+      "lessons": [
+        {
+          "id": "client-server-architecture",
+          "title": "Client, daemon and API",
+          "duration": "9 min",
+          "summary": "The CLI is a thin HTTP client. Almost everything interesting happens in the daemon.",
+          "objectives": [
+            "Describe the client/server split",
+            "Explain the Docker API and socket",
+            "Know what happens when the daemon is unreachable"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A REST API with a CLI on top",
+              "body": "The `docker` command parses your arguments and sends an HTTP request to the Docker daemon over a Unix socket (`/var/run/docker.sock` by default) or a TCP endpoint. The daemon does the work: pulling, building, creating, starting, and streaming logs back.\n\nThis is why remote Docker works, why tools such as Portainer and CI runners can control Docker without the CLI, and why protecting the socket is equivalent to protecting root."
+            },
+            {
+              "type": "diagram",
+              "diagram": "docker-architecture",
+              "caption": "Client → daemon → containerd → runc → process. The registry is contacted by the daemon, not by your CLI."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Component",
+                "Responsibility"
+              ],
+              "rows": [
+                [
+                  "docker CLI",
+                  "Argument parsing, API calls, output formatting"
+                ],
+                [
+                  "dockerd",
+                  "Image store, networks, volumes, API, orchestration of containers"
+                ],
+                [
+                  "containerd",
+                  "Container lifecycle, image transfer, snapshots"
+                ],
+                [
+                  "runc",
+                  "Creates namespaces/cgroups and execs the container process"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "Remote engines are just contexts",
+              "body": "`docker context create` stores an endpoint; `docker context use` switches the CLI to it. The CLI itself does not change."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Inspect the endpoint",
+              "prompt": "Print the Docker host and context currently in use.",
+              "command": "docker context show",
+              "expected": "DOCKER_HOST may be empty (default socket) and `docker context show` prints the context name.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Explain the split",
+              "prompt": "Why can a CI runner control a remote Docker engine without installing the daemon locally?",
+              "command": null,
+              "expected": "It only needs the client and access to the API endpoint.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Who pulls an image during docker run?",
+                "options": [
+                  "The CLI",
+                  "The daemon",
+                  "runc",
+                  "The registry"
+                ],
+                "answer": 1,
+                "explain": "The daemon performs image operations and reports progress to the client."
+              },
+              {
+                "question": "The default Docker endpoint is…",
+                "options": [
+                  "A TCP port on localhost",
+                  "A Unix socket",
+                  "SSH",
+                  "A named pipe on Linux"
+                ],
+                "answer": 1,
+                "explain": "Linux uses /var/run/docker.sock by default. Windows uses a named pipe."
+              },
+              {
+                "question": "Why is docker.sock access dangerous?",
+                "options": [
+                  "It is writable by all users by default",
+                  "It grants control equivalent to root",
+                  "It bypasses networking",
+                  "It deletes images"
+                ],
+                "answer": 1,
+                "explain": "The daemon can start privileged containers and mount host paths."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "daemon-containerd-runc",
+            "contexts",
+            "daemon-security"
+          ],
+          "tags": [
+            "architecture"
+          ],
+          "commands": [
+            "docker context",
+            "docker info"
+          ],
+          "sources": [
+            {
+              "title": "Docker architecture",
+              "url": "https://docs.docker.com/get-started/docker-overview/#docker-architecture"
+            },
+            {
+              "title": "API",
+              "url": "https://docs.docker.com/reference/api/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "daemon-containerd-runc",
+          "title": "dockerd, containerd and runc",
+          "duration": "9 min",
+          "summary": "The chain of custody for a container process, and why it matters when something fails to start.",
+          "objectives": [
+            "Name the responsibility of each layer",
+            "Read a container start failure with the right mental model",
+            "Know where shims fit"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Three layers, one process",
+              "body": "`dockerd` is the API server and the orchestrator of Docker objects. It delegates container execution to **containerd**, a general-purpose container runtime. containerd prepares the image snapshot and root filesystem, then invokes **runc**, an OCI runtime that creates namespaces and cgroups and execs the process.\n\nA **shim** (containerd-shim-runc-v2) sits between containerd and the container process. It keeps the container alive if containerd restarts and collects the exit status. That is why `docker ps` can still work while the daemon is being upgraded."
+            },
+            {
+              "type": "diagram",
+              "diagram": "runtime-stack",
+              "caption": "dockerd → containerd → shim → runc → container process."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# See the runtime chain\nps -eo pid,ppid,comm,args | grep -E 'dockerd|containerd|shim|runc' | grep -v grep\n\ndocker info --format '{{.Driver}} {{.CgroupDriver}} {{.KernelVersion}}'",
+              "title": null,
+              "output": null,
+              "note": "Runc only exists while a container is being created. After exec, the shim supervises the process."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Do not restart dockerd to fix one container",
+              "body": "Restarting the daemon can disrupt networking and running containers. Diagnose with `docker inspect`, `docker logs`, and `journalctl -u docker` first."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Find the chain",
+              "prompt": "Run a sleep container and identify its shim and runtime processes.",
+              "command": null,
+              "expected": "A containerd-shim-runc-v2 process appears between containerd and the sleep process.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Read the driver",
+              "prompt": "Print the storage driver, cgroup driver and kernel version.",
+              "command": "docker info --format '{{.Driver}} {{.CgroupDriver}} {{.KernelVersion}}'",
+              "expected": "docker info --format with .Driver, .CgroupDriver, .KernelVersion.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which component creates namespaces and cgroups?",
+                "options": [
+                  "dockerd",
+                  "containerd",
+                  "runc",
+                  "the shim"
+                ],
+                "answer": 2,
+                "explain": "runc implements the OCI runtime steps that isolate the process."
+              },
+              {
+                "question": "What is the shim responsible for?",
+                "options": [
+                  "Serving the HTTP API",
+                  "Supervising a container process and reporting exit status",
+                  "Storing images",
+                  "DNS"
+                ],
+                "answer": 1,
+                "explain": "The shim outlives containerd restarts and owns the process lifecycle."
+              },
+              {
+                "question": "Where do you look for daemon-level errors?",
+                "options": [
+                  "docker ps",
+                  "journalctl -u docker",
+                  "the container logs",
+                  "docker history"
+                ],
+                "answer": 1,
+                "explain": "The daemon logs to the system journal on systemd hosts."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "client-server-architecture",
+            "namespaces-cgroups",
+            "container-exits"
+          ],
+          "tags": [
+            "architecture",
+            "runtime"
+          ],
+          "commands": [
+            "docker info"
+          ],
+          "sources": [
+            {
+              "title": "containerd",
+              "url": "https://docs.docker.com/engine/containers/"
+            },
+            {
+              "title": "runc",
+              "url": "https://docs.docker.com/engine/security/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "namespaces-cgroups",
+          "title": "Namespaces and cgroups",
+          "duration": "10 min",
+          "summary": "The two Linux features that make containers possible: isolation and limits.",
+          "objectives": [
+            "List the namespaces a container gets",
+            "Explain what cgroups control",
+            "Recognise the limits of container isolation"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Namespaces isolate what a process can see",
+              "body": "A namespace wraps a global system resource so processes inside it see their own private view. Docker uses PID, mount, network, IPC, UTS, user and cgroup namespaces. The PID namespace is why the container main process appears as PID 1 inside the container while having a different host PID.\n\nNamespaces do not limit resources — they only change visibility. Two containers can each see \"their\" network stack while still competing for host CPU."
+            },
+            {
+              "type": "text",
+              "title": "Cgroups limit what a process can use",
+              "body": "Control groups account for and constrain CPU, memory, block I/O and process counts. `--cpus`, `--memory`, `--pids-limit` and `--blkio-weight` map to cgroup controls. When a container exceeds its memory limit, the kernel OOM killer terminates processes inside it; the container exits with code 137."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Namespace",
+                "What it isolates"
+              ],
+              "rows": [
+                [
+                  "pid",
+                  "Process IDs"
+                ],
+                [
+                  "net",
+                  "Interfaces, routes, ports"
+                ],
+                [
+                  "mnt",
+                  "Mount points and filesystem view"
+                ],
+                [
+                  "ipc",
+                  "Shared memory and semaphores"
+                ],
+                [
+                  "uts",
+                  "Hostname and domain"
+                ],
+                [
+                  "user",
+                  "UID/GID mapping"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Containers are not a security boundary by default",
+              "body": "A kernel exploit or a privileged container can escape to the host. Harden with non-root users, dropped capabilities, seccomp, read-only filesystems and user namespaces."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "See the namespaces",
+              "prompt": "Run a container and list its namespaces from the host.",
+              "command": "docker run -d --name ns-demo alpine sleep 300\ndocker inspect ns-demo --format '{{.State.Pid}}'",
+              "expected": "lsns or /proc/<pid>/ns shows pid, net, mnt, ipc, uts, user namespaces.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Trigger the limit",
+              "prompt": "Run a container with --memory 32m that allocates more and observe exit code 137.",
+              "command": "docker run --rm --memory 32m alpine sh -c \"yes | head -c 100M > /dev/null\"",
+              "expected": "The process is OOM-killed and docker inspect reports OOMKilled=true.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which feature limits a container to 512 MB of memory?",
+                "options": [
+                  "Namespaces",
+                  "Cgroups",
+                  "The shim",
+                  "The image layer"
+                ],
+                "answer": 1,
+                "explain": "Cgroups enforce resource limits."
+              },
+              {
+                "question": "Why does the container process see PID 1?",
+                "options": [
+                  "It really is the host init",
+                  "The PID namespace remaps it",
+                  "runc renames processes",
+                  "The kernel reuses PIDs"
+                ],
+                "answer": 1,
+                "explain": "Inside the PID namespace the first process is 1."
+              },
+              {
+                "question": "Exit code 137 usually means…",
+                "options": [
+                  "Success",
+                  "The process was killed, often by the OOM killer",
+                  "A missing image",
+                  "A port conflict"
+                ],
+                "answer": 1,
+                "explain": "128 + 9 (SIGKILL), commonly caused by exceeding a memory limit."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "daemon-containerd-runc",
+            "resource-limits",
+            "container-security"
+          ],
+          "tags": [
+            "linux",
+            "security"
+          ],
+          "commands": [
+            "docker run",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Security",
+              "url": "https://docs.docker.com/engine/security/"
+            },
+            {
+              "title": "Resource constraints",
+              "url": "https://docs.docker.com/engine/containers/resource_constraints/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-fundamentals"
+  ]
+}

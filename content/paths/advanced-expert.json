@@ -1,0 +1,93 @@
+{
+  "id": "advanced-expert",
+  "title": "Advanced Docker Expert",
+  "subtitle": "Master-level depth across build, security and operations",
+  "level": "Expert",
+  "duration": "20h 30m",
+  "icon": "crown",
+  "accent": "orange",
+  "description": "The complete advanced curriculum. Finish this path and you can design, secure, optimise and operate container platforms with confidence.",
+  "prerequisites": [
+    "docker-administrator",
+    "devops-engineer"
+  ],
+  "outcomes": [
+    "Harden images and daemons end to end",
+    "Optimise builds and runtime performance",
+    "Run a supply-chain-aware registry workflow",
+    "Lead production readiness reviews"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "docker-architecture",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "dockerfile-masterclass",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "docker-build-buildkit",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "docker-registry",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "docker-security",
+      "description": ""
+    },
+    {
+      "title": "Stage 6",
+      "courseId": "docker-performance",
+      "description": ""
+    },
+    {
+      "title": "Stage 7",
+      "courseId": "docker-monitoring",
+      "description": ""
+    },
+    {
+      "title": "Stage 8",
+      "courseId": "docker-troubleshooting",
+      "description": ""
+    },
+    {
+      "title": "Stage 9",
+      "courseId": "docker-production",
+      "description": ""
+    },
+    {
+      "title": "Stage 10",
+      "courseId": "daemon-config",
+      "description": ""
+    },
+    {
+      "title": "Stage 11",
+      "courseId": "real-world-projects",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "docker-architecture",
+      "dockerfile-masterclass",
+      "docker-build-buildkit",
+      "docker-registry",
+      "docker-security",
+      "docker-performance",
+      "docker-monitoring",
+      "docker-troubleshooting",
+      "docker-production",
+      "daemon-config",
+      "real-world-projects"
+    ]
+  }
+}

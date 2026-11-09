@@ -1,0 +1,569 @@
+{
+  "id": "docker-security",
+  "order": 12,
+  "title": "Docker Security",
+  "subtitle": "Hardening containers, images and the daemon",
+  "level": "Advanced",
+  "duration": "2h 10m",
+  "icon": "shield",
+  "accent": "red",
+  "description": "Containers share the host kernel. Security is a set of layered controls: least privilege, minimal images, secret hygiene, provenance and daemon hardening.",
+  "outcomes": [
+    "Threat-model a container deployment",
+    "Apply non-root, capability, seccomp and filesystem controls",
+    "Manage secrets without baking them into images",
+    "Harden the Docker daemon and supply chain"
+  ],
+  "modules": [
+    {
+      "id": "container-hardening",
+      "title": "Container hardening",
+      "summary": "Reduce privilege and attack surface.",
+      "lessons": [
+        {
+          "id": "container-security",
+          "title": "The container security model",
+          "duration": "13 min",
+          "summary": "What isolation gives you, what it does not, and the controls that actually reduce risk.",
+          "objectives": [
+            "Name the default privileges of a container",
+            "Drop capabilities and run non-root",
+            "Use read-only filesystems and seccomp"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Shared kernel, shared risk",
+              "body": "A container is a process on the host kernel with namespaces and cgroups. A kernel vulnerability or a misconfigured privileged container can compromise the host. Docker’s defaults are reasonable but not a security boundary on their own.\n\nThe highest-leverage controls are: run as non-root, drop unnecessary capabilities, use a read-only root filesystem, apply a seccomp profile, and never mount the Docker socket into an application container."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name hardened \\\n  --user 10001:10001 \\\n  --cap-drop ALL \\\n  --security-opt no-new-privileges \\\n  --security-opt seccomp=/etc/docker/seccomp.json \\\n  --read-only \\\n  --tmpfs /tmp:rw,noexec,nosuid,size=64m \\\n  --memory 256m --pids-limit 128 \\\n  nginxinc/nginx-unprivileged:1.27-alpine",
+              "title": null,
+              "output": null,
+              "note": "The unprivileged nginx image listens on 8080 and runs without root. Pair read-only with tmpfs for paths the app must write."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Control",
+                "Flag / setting",
+                "Stops"
+              ],
+              "rows": [
+                [
+                  "User",
+                  "USER / --user",
+                  "Root inside container"
+                ],
+                [
+                  "Capabilities",
+                  "--cap-drop ALL",
+                  "Mount, ptrace, raw sockets"
+                ],
+                [
+                  "No new privileges",
+                  "--security-opt no-new-privileges",
+                  "setuid escalation"
+                ],
+                [
+                  "Filesystem",
+                  "--read-only + tmpfs",
+                  "Persistence of a compromise"
+                ],
+                [
+                  "Syscalls",
+                  "seccomp profile",
+                  "Dangerous kernel calls"
+                ],
+                [
+                  "Resources",
+                  "--memory --pids-limit",
+                  "DoS / fork bombs"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Never mount docker.sock into an app",
+              "body": "It is a root-equivalent API. A compromised web app becomes a host compromise. Use a narrowly scoped proxy or a separate deployment mechanism."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Harden nginx",
+              "prompt": "Run unprivileged nginx with a read-only root and tmpfs for /tmp.",
+              "command": null,
+              "expected": "Combine --read-only, --tmpfs /tmp, --cap-drop ALL, --security-opt no-new-privileges.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Check capabilities",
+              "prompt": "Inspect a container and list its capabilities.",
+              "command": null,
+              "expected": "docker inspect --format \"{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}\".",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the strongest reason not to run as root?",
+                "options": [
+                  "Slower startup",
+                  "A container escape or app compromise gains fewer host privileges",
+                  "Images are larger",
+                  "Logs are noisy"
+                ],
+                "answer": 1,
+                "explain": "Least privilege limits blast radius."
+              },
+              {
+                "question": "What does --read-only do?",
+                "options": [
+                  "Encrypts the filesystem",
+                  "Makes the root filesystem read-only",
+                  "Disables volumes",
+                  "Drops capabilities"
+                ],
+                "answer": 1,
+                "explain": "Writable paths must be explicitly mounted."
+              },
+              {
+                "question": "Why is docker.sock dangerous in a container?",
+                "options": [
+                  "It is slow",
+                  "It grants control of the Docker daemon",
+                  "It uses too much disk",
+                  "It breaks DNS"
+                ],
+                "answer": 1,
+                "explain": "The daemon can start privileged containers and mount host paths."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "secrets-management",
+            "daemon-security",
+            "production-dockerfile"
+          ],
+          "tags": [
+            "security",
+            "hardening"
+          ],
+          "commands": [
+            "docker run",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Security",
+              "url": "https://docs.docker.com/engine/security/"
+            },
+            {
+              "title": "Seccomp",
+              "url": "https://docs.docker.com/engine/security/seccomp/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "secrets-management",
+          "title": "Secrets management",
+          "duration": "11 min",
+          "summary": "Keep credentials out of images, environment variables and logs.",
+          "objectives": [
+            "Identify where secrets leak",
+            "Use BuildKit secrets and Compose secrets",
+            "Integrate an external secret manager"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Where secrets leak",
+              "body": "Secrets leak through image layers, build args, environment variables, logs, crash dumps, shell history, CI output, and world-readable files. Deleting a secret in a later Dockerfile layer does not remove it from the earlier layer."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Mechanism",
+                "Safe for secrets?",
+                "Why"
+              ],
+              "rows": [
+                [
+                  "ENV / --env",
+                  "No",
+                  "Visible in inspect and /proc"
+                ],
+                [
+                  "ARG",
+                  "No",
+                  "Visible in image history"
+                ],
+                [
+                  "COPY .env",
+                  "No",
+                  "Stored in a layer permanently"
+                ],
+                [
+                  "BuildKit secret mount",
+                  "Yes",
+                  "Not persisted in layers"
+                ],
+                [
+                  "Compose secret file",
+                  "Yes",
+                  "Mounted at runtime, not in image"
+                ],
+                [
+                  "External vault",
+                  "Yes",
+                  "Injected at runtime, rotated centrally"
+                ]
+              ]
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1\nFROM node:20-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN --mount=type=secret,id=npmrc,target=/root/.npmrc \\\n    npm ci\nCOPY . .\nRUN npm run build",
+              "title": null,
+              "output": null,
+              "note": "Build with: docker build --secret id=npmrc,src=$HOME/.npmrc ."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Rotation is part of secret management",
+              "body": "A secret that cannot be rotated is an incident waiting to happen. Prefer short-lived tokens and automate rotation."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Build secret",
+              "prompt": "Write a RUN that uses a secret named pip_conf.",
+              "command": null,
+              "expected": "RUN --mount=type=secret,id=pip_conf,target=/etc/pip.conf pip install -r requirements.txt",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Audit an image",
+              "prompt": "Find environment variables that look sensitive.",
+              "command": null,
+              "expected": "docker image inspect IMAGE --format \"{{json .Config.Env}}\" and grep for TOKEN/PASSWORD/KEY.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which build mechanism is safe for secrets?",
+                "options": [
+                  "ARG",
+                  "ENV",
+                  "RUN --mount=type=secret",
+                  "COPY .env"
+                ],
+                "answer": 2,
+                "explain": "Secret mounts are not stored in layers."
+              },
+              {
+                "question": "Why is deleting a secret in a later layer insufficient?",
+                "options": [
+                  "Layers are encrypted",
+                  "The earlier layer still contains it",
+                  "Docker caches env vars",
+                  "Secrets are immutable"
+                ],
+                "answer": 1,
+                "explain": "Image layers are additive; history remains."
+              },
+              {
+                "question": "What is the best long-term secret strategy?",
+                "options": [
+                  "One shared .env file",
+                  "A secret manager with rotation and least privilege",
+                  "Secrets in the image",
+                  "Secrets in Git"
+                ],
+                "answer": 1,
+                "explain": "Central management and rotation reduce exposure."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "container-security",
+            "compose-environment-secrets",
+            "image-provenance"
+          ],
+          "tags": [
+            "security",
+            "secrets"
+          ],
+          "commands": [
+            "docker build",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Build secrets",
+              "url": "https://docs.docker.com/build/building/secrets/"
+            },
+            {
+              "title": "Compose secrets",
+              "url": "https://docs.docker.com/compose/how-tos/use-secrets/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "image-provenance",
+          "title": "Scanning, SBOMs and signing",
+          "duration": "11 min",
+          "summary": "Know what is in an image, where it came from, and whether it has been tampered with.",
+          "objectives": [
+            "Scan images for vulnerabilities",
+            "Generate and inspect an SBOM",
+            "Sign and verify images"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Three questions",
+              "body": "**What is inside?** A software bill of materials (SBOM) lists packages and versions. **Is it vulnerable?** A scanner maps packages to advisories. **Is it the image I built?** A signature and provenance attestation answer that.\n\nDocker Scout, Trivy, Grype and registry-native scanners cover the first two. Sigstore/cosign and Docker’s attestations cover provenance. Pin base images and rebuild regularly; scanners only help if you act on results."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Docker Scout (when available)\ndocker scout cves registry.example.com/acme/api:1.4\ndocker scout sbom registry.example.com/acme/api:1.4\n\n# BuildKit provenance and SBOM attestations\ndocker buildx build \\\n  --provenance=true --sbom=true \\\n  -t registry.example.com/acme/api:1.4 --push .\n\n# cosign verification (if signatures are used)\ncosign verify registry.example.com/acme/api:1.4 \\\n  --certificate-identity-regexp 'https://github.com/acme/.*' \\\n  --certificate-oidc-issuer https://token.actions.githubusercontent.com",
+              "title": null,
+              "output": null,
+              "note": "Scanners and cosign are separate tools; OpsDeck does not install them for you."
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "SBOMs are not a security feature by themselves",
+              "body": "They are inventory. Pair them with continuous scanning and a rebuild policy."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Generate attestations",
+              "prompt": "Build with provenance and SBOM and push.",
+              "command": null,
+              "expected": "docker buildx build --provenance=true --sbom=true -t ... --push .",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Scan",
+              "prompt": "Run a vulnerability scan on an image you use.",
+              "command": null,
+              "expected": "docker scout cves IMAGE or trivy image IMAGE.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does an SBOM contain?",
+                "options": [
+                  "Image signatures",
+                  "A list of components and versions",
+                  "Runtime secrets",
+                  "Host kernel modules"
+                ],
+                "answer": 1,
+                "explain": "It is a software bill of materials."
+              },
+              {
+                "question": "What does cosign verify prove?",
+                "options": [
+                  "The image is vulnerability-free",
+                  "The signature matches a trusted identity",
+                  "The image is small",
+                  "The registry is private"
+                ],
+                "answer": 1,
+                "explain": "Verification checks signature and identity."
+              },
+              {
+                "question": "Why rebuild images regularly?",
+                "options": [
+                  "To change the tag",
+                  "To pick up base image and dependency security fixes",
+                  "To reduce layers",
+                  "To reset volumes"
+                ],
+                "answer": 1,
+                "explain": "New vulnerabilities are disclosed after an image is built."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "push-pull-digests",
+            "secrets-management",
+            "project-ci-pipeline"
+          ],
+          "tags": [
+            "security",
+            "supply-chain"
+          ],
+          "commands": [
+            "docker buildx build",
+            "docker scout"
+          ],
+          "sources": [
+            {
+              "title": "Supply chain",
+              "url": "https://docs.docker.com/build/attestations/"
+            },
+            {
+              "title": "Docker Scout",
+              "url": "https://docs.docker.com/scout/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "daemon-security",
+          "title": "Daemon and host hardening",
+          "duration": "12 min",
+          "summary": "The engine is the real privileged component. Protect its socket, configuration and update path.",
+          "objectives": [
+            "Harden the Docker socket and remote access",
+            "Configure daemon logging and user namespaces",
+            "Understand rootless mode trade-offs"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The daemon is root",
+              "body": "Anyone with socket access can mount the host filesystem and start a privileged container. Restrict the socket with filesystem permissions, avoid exposing TCP without mutual TLS, and never give application containers the socket. Rootless mode runs the daemon as a normal user, reducing the impact of a daemon compromise at the cost of some networking and storage features."
+            },
+            {
+              "type": "code",
+              "language": "json",
+              "code": "{\n  \"icc\": false,\n  \"no-new-privileges\": true,\n  \"log-driver\": \"json-file\",\n  \"log-opts\": { \"max-size\": \"10m\", \"max-file\": \"3\" },\n  \"userns-remap\": \"default\",\n  \"live-restore\": true\n}",
+              "title": null,
+              "output": null,
+              "note": "daemon.json lives at /etc/docker/daemon.json on Linux. Validate with dockerd --validate --config-file and restart deliberately."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Check socket ownership\nls -l /var/run/docker.sock\n\n# Rootless mode\ndockerd-rootless-setuptool.sh install\nsystemctl --user status docker\n\n# Audit daemon config\ndocker info --format '{{json .SecurityOptions}}'",
+              "title": null,
+              "output": "[\"name=seccomp,profile=builtin\",\"name=cgroupns\"]",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Remote TCP without TLS is host takeover",
+              "body": "Port 2375 has no authentication. Use `dockerd --tlsverify` with mutual TLS, or SSH contexts, and firewall the port."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Audit socket",
+              "prompt": "Check the permissions and group of docker.sock.",
+              "command": null,
+              "expected": "ls -l /var/run/docker.sock; getent group docker.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Security options",
+              "prompt": "Print the active security options.",
+              "command": null,
+              "expected": "docker info --format \"{{json .SecurityOptions}}\".",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the safest way to give a CI job access to Docker?",
+                "options": [
+                  "Mount docker.sock with write access",
+                  "Use a dedicated remote engine with scoped credentials",
+                  "Expose TCP 2375",
+                  "Run privileged containers"
+                ],
+                "answer": 1,
+                "explain": "Isolate the engine and scope credentials."
+              },
+              {
+                "question": "What does rootless mode change?",
+                "options": [
+                  "Runs the daemon as a non-root user",
+                  "Encrypts images",
+                  "Removes namespaces",
+                  "Disables seccomp"
+                ],
+                "answer": 0,
+                "explain": "It reduces daemon privilege."
+              },
+              {
+                "question": "Why set log rotation?",
+                "options": [
+                  "To reduce image size",
+                  "To stop logs filling the host disk",
+                  "To encrypt logs",
+                  "To enable DNS"
+                ],
+                "answer": 1,
+                "explain": "json-file logs grow without max-size/max-file."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "container-security",
+            "daemon-config",
+            "contexts"
+          ],
+          "tags": [
+            "security",
+            "daemon"
+          ],
+          "commands": [
+            "docker info"
+          ],
+          "sources": [
+            {
+              "title": "Daemon security",
+              "url": "https://docs.docker.com/engine/security/"
+            },
+            {
+              "title": "Rootless mode",
+              "url": "https://docs.docker.com/engine/security/rootless/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-containers",
+    "docker-images"
+  ]
+}

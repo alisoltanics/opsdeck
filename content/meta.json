@@ -1,0 +1,394 @@
+{
+  "version": "1.0.0",
+  "product": "OpsDeck",
+  "tagline": "Operations Studio",
+  "dailyGoalMinutes": 20,
+  "achievements": [
+    {
+      "id": "first-step",
+      "title": "First Step",
+      "description": "Complete your first lesson.",
+      "icon": "footprints",
+      "tier": "bronze",
+      "condition": {
+        "type": "lessonsCompleted",
+        "value": 1
+      }
+    },
+    {
+      "id": "getting-going",
+      "title": "Getting Going",
+      "description": "Complete five lessons.",
+      "icon": "trending-up",
+      "tier": "bronze",
+      "condition": {
+        "type": "lessonsCompleted",
+        "value": 5
+      }
+    },
+    {
+      "id": "deep-diver",
+      "title": "Deep Diver",
+      "description": "Complete twenty lessons.",
+      "icon": "waves",
+      "tier": "silver",
+      "condition": {
+        "type": "lessonsCompleted",
+        "value": 20
+      }
+    },
+    {
+      "id": "course-complete",
+      "title": "Course Complete",
+      "description": "Finish your first course.",
+      "icon": "graduation-cap",
+      "tier": "silver",
+      "condition": {
+        "type": "coursesCompleted",
+        "value": 1
+      }
+    },
+    {
+      "id": "curriculum-builder",
+      "title": "Curriculum Builder",
+      "description": "Finish three courses.",
+      "icon": "library",
+      "tier": "gold",
+      "condition": {
+        "type": "coursesCompleted",
+        "value": 3
+      }
+    },
+    {
+      "id": "quiz-rookie",
+      "title": "Quiz Rookie",
+      "description": "Pass your first knowledge check.",
+      "icon": "circle-check",
+      "tier": "bronze",
+      "condition": {
+        "type": "quizzesPassed",
+        "value": 1
+      }
+    },
+    {
+      "id": "perfect-score",
+      "title": "Perfect Score",
+      "description": "Answer every question in a quiz correctly.",
+      "icon": "target",
+      "tier": "silver",
+      "condition": {
+        "type": "perfectQuiz",
+        "value": 1
+      }
+    },
+    {
+      "id": "streak-3",
+      "title": "Three-Day Streak",
+      "description": "Study three days in a row.",
+      "icon": "flame",
+      "tier": "bronze",
+      "condition": {
+        "type": "streak",
+        "value": 3
+      }
+    },
+    {
+      "id": "streak-7",
+      "title": "Seven-Day Streak",
+      "description": "Study seven days in a row.",
+      "icon": "flame",
+      "tier": "gold",
+      "condition": {
+        "type": "streak",
+        "value": 7
+      }
+    },
+    {
+      "id": "bookworm",
+      "title": "Bookworm",
+      "description": "Bookmark five lessons.",
+      "icon": "bookmark",
+      "tier": "bronze",
+      "condition": {
+        "type": "bookmarks",
+        "value": 5
+      }
+    },
+    {
+      "id": "note-taker",
+      "title": "Note Taker",
+      "description": "Write a note on any lesson.",
+      "icon": "notebook-pen",
+      "tier": "bronze",
+      "condition": {
+        "type": "notes",
+        "value": 1
+      }
+    },
+    {
+      "id": "lab-explorer",
+      "title": "Lab Explorer",
+      "description": "Run your first interactive lab command.",
+      "icon": "flask",
+      "tier": "silver",
+      "condition": {
+        "type": "labRuns",
+        "value": 1
+      }
+    },
+    {
+      "id": "dockerfile-master",
+      "title": "Dockerfile Master",
+      "description": "Complete the Dockerfile Masterclass.",
+      "icon": "file-code",
+      "tier": "gold",
+      "condition": {
+        "type": "courseCompleted",
+        "value": "dockerfile-masterclass"
+      }
+    },
+    {
+      "id": "compose-specialist",
+      "title": "Compose Specialist",
+      "description": "Complete the Docker Compose course.",
+      "icon": "boxes",
+      "tier": "gold",
+      "condition": {
+        "type": "courseCompleted",
+        "value": "docker-compose"
+      }
+    },
+    {
+      "id": "security-aware",
+      "title": "Security Aware",
+      "description": "Complete the Docker Security course.",
+      "icon": "shield",
+      "tier": "gold",
+      "condition": {
+        "type": "courseCompleted",
+        "value": "docker-security"
+      }
+    },
+    {
+      "id": "troubleshooter",
+      "title": "Troubleshooter",
+      "description": "Complete the Docker Troubleshooting course.",
+      "icon": "wrench",
+      "tier": "gold",
+      "condition": {
+        "type": "courseCompleted",
+        "value": "docker-troubleshooting"
+      }
+    },
+    {
+      "id": "command-line-hero",
+      "title": "Command Line Hero",
+      "description": "Explore ten commands in the reference.",
+      "icon": "terminal",
+      "tier": "silver",
+      "condition": {
+        "type": "commandsViewed",
+        "value": 10
+      }
+    },
+    {
+      "id": "path-finisher",
+      "title": "Path Finisher",
+      "description": "Complete any learning path.",
+      "icon": "map",
+      "tier": "platinum",
+      "condition": {
+        "type": "pathsCompleted",
+        "value": 1
+      }
+    }
+  ],
+  "glossary": [
+    {
+      "term": "Image",
+      "definition": "An immutable package of layered filesystem content plus runtime configuration."
+    },
+    {
+      "term": "Container",
+      "definition": "An isolated process (or group) created from an image, with its own namespaces and cgroups."
+    },
+    {
+      "term": "Layer",
+      "definition": "A filesystem diff in an image. Layers are content-addressed and shared."
+    },
+    {
+      "term": "Writable layer",
+      "definition": "The per-container layer that records runtime changes. Deleted with the container."
+    },
+    {
+      "term": "Registry",
+      "definition": "A service that stores and distributes image manifests and layers."
+    },
+    {
+      "term": "Tag",
+      "definition": "A mutable human-readable pointer to an image digest."
+    },
+    {
+      "term": "Digest",
+      "definition": "The immutable content hash identifying an image manifest."
+    },
+    {
+      "term": "Dockerfile",
+      "definition": "A text recipe of instructions used to build an image."
+    },
+    {
+      "term": "Build context",
+      "definition": "The files sent to the builder; filtered by .dockerignore."
+    },
+    {
+      "term": "BuildKit",
+      "definition": "The modern build engine that executes a DAG of build operations with advanced caching."
+    },
+    {
+      "term": "buildx",
+      "definition": "A Docker CLI plugin for extended BuildKit builds, including multi-platform output."
+    },
+    {
+      "term": "Multi-stage build",
+      "definition": "A Dockerfile with several FROM stages where only the final stage ships."
+    },
+    {
+      "term": "Cache mount",
+      "definition": "A BuildKit mount that persists a directory across builds without adding it to the image."
+    },
+    {
+      "term": "Compose",
+      "definition": "A tool and specification for defining and running multi-container applications."
+    },
+    {
+      "term": "Project",
+      "definition": "The Compose isolation unit; resource names are prefixed with the project name."
+    },
+    {
+      "term": "Service",
+      "definition": "A Compose definition of a container, its image/build, configuration and dependencies."
+    },
+    {
+      "term": "Profile",
+      "definition": "An opt-in group of Compose services enabled with --profile."
+    },
+    {
+      "term": "Secret",
+      "definition": "A sensitive value mounted at runtime, not baked into an image."
+    },
+    {
+      "term": "Config",
+      "definition": "A non-secret configuration file mounted at runtime."
+    },
+    {
+      "term": "Health check",
+      "definition": "A command that determines whether a container is healthy, distinct from running."
+    },
+    {
+      "term": "Restart policy",
+      "definition": "A rule controlling whether Docker restarts a container after exit."
+    },
+    {
+      "term": "Namespace",
+      "definition": "A Linux feature that gives a process a private view of a system resource."
+    },
+    {
+      "term": "Cgroup",
+      "definition": "A Linux feature that accounts for and limits resource usage."
+    },
+    {
+      "term": "PID 1",
+      "definition": "The first process in a container; its exit terminates the container."
+    },
+    {
+      "term": "OOM kill",
+      "definition": "The kernel terminating a process that exceeded a memory limit; usually exit 137."
+    },
+    {
+      "term": "Volume",
+      "definition": "Docker-managed persistent storage that outlives containers."
+    },
+    {
+      "term": "Bind mount",
+      "definition": "A direct mapping of a host path into a container."
+    },
+    {
+      "term": "tmpfs",
+      "definition": "A memory-backed filesystem that disappears when the container stops."
+    },
+    {
+      "term": "Bridge network",
+      "definition": "The default single-host network driver; user-defined bridges provide DNS."
+    },
+    {
+      "term": "Overlay network",
+      "definition": "A multi-host network driver used by Swarm."
+    },
+    {
+      "term": "Embedded DNS",
+      "definition": "Docker’s name resolution service at 127.0.0.11 on user-defined networks."
+    },
+    {
+      "term": "ENTRYPOINT",
+      "definition": "The executable a container runs; runtime arguments are appended to it."
+    },
+    {
+      "term": "CMD",
+      "definition": "Default arguments or command for a container, replaceable at docker run."
+    },
+    {
+      "term": "Base image",
+      "definition": "The starting filesystem for a Dockerfile stage."
+    },
+    {
+      "term": "Distroless",
+      "definition": "A minimal image containing an application and runtime but no package manager or shell."
+    },
+    {
+      "term": "Rootless",
+      "definition": "Running the Docker daemon as a non-root user to reduce privilege."
+    },
+    {
+      "term": "SBOM",
+      "definition": "A software bill of materials listing components and versions in an image."
+    },
+    {
+      "term": "Provenance",
+      "definition": "Attestation describing how and from what an image was built."
+    },
+    {
+      "term": "OCI",
+      "definition": "Open Container Initiative, the standards body for image and runtime formats."
+    },
+    {
+      "term": "Immutable infrastructure",
+      "definition": "A practice of replacing artifacts rather than mutating running systems."
+    },
+    {
+      "term": "Zero-downtime deployment",
+      "definition": "Releasing a new version without dropping user requests."
+    }
+  ],
+  "sources": [
+    {
+      "title": "Docker documentation",
+      "url": "https://docs.docker.com/"
+    },
+    {
+      "title": "Docker CLI reference",
+      "url": "https://docs.docker.com/reference/cli/docker/"
+    },
+    {
+      "title": "Compose file reference",
+      "url": "https://docs.docker.com/reference/compose-file/"
+    },
+    {
+      "title": "Dockerfile reference",
+      "url": "https://docs.docker.com/reference/dockerfile/"
+    },
+    {
+      "title": "BuildKit",
+      "url": "https://docs.docker.com/build/buildkit/"
+    }
+  ]
+}

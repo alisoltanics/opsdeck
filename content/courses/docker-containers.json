@@ -1,0 +1,514 @@
+{
+  "id": "docker-containers",
+  "order": 4,
+  "title": "Docker Containers",
+  "subtitle": "Lifecycle, configuration and day-to-day operations",
+  "level": "Beginner",
+  "duration": "1h 50m",
+  "icon": "container",
+  "accent": "orange",
+  "description": "Go beyond docker run. Understand container state, process behaviour, configuration, port publishing and resource policy.",
+  "outcomes": [
+    "Reason about container lifecycle and exit codes",
+    "Configure containers with env, files and secrets",
+    "Publish ports safely and set restart/resource policy"
+  ],
+  "modules": [
+    {
+      "id": "container-operations",
+      "title": "Container operations",
+      "summary": "State, processes and configuration.",
+      "lessons": [
+        {
+          "id": "container-lifecycle",
+          "title": "The container lifecycle",
+          "duration": "9 min",
+          "summary": "Created, running, paused, stopped, removed: what each state means and how to move between them.",
+          "objectives": [
+            "Name every lifecycle state",
+            "Predict the state after each command",
+            "Understand restart policies and exit codes"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "State is derived from the main process",
+              "body": "A container is **created** when its filesystem and config exist. It is **running** while PID 1 is alive, **paused** when the freezer cgroup is engaged, and **exited** when PID 1 terminates. It remains in the exited state — with its writable layer and name — until removed.\n\nRestart policies act on exit. `unless-stopped` restarts on failure or daemon restart but respects a manual stop. `always` restarts even after a manual stop when the daemon starts."
+            },
+            {
+              "type": "diagram",
+              "diagram": "container-lifecycle",
+              "caption": "The container state machine. Removal is the only irreversible transition."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name app --restart unless-stopped nginx:alpine\ndocker inspect app --format '{{.State.Status}} pid={{.State.Pid}}'\ndocker pause app\ndocker inspect app --format '{{.State.Status}}'\ndocker unpause app\ndocker stop app\ndocker inspect app --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}'\ndocker rm app",
+              "title": null,
+              "output": null,
+              "note": "Exit code 0 is success; 137 is SIGKILL/OOM; 143 is SIGTERM. `docker inspect` records OOMKilled explicitly."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "State audit",
+              "prompt": "Start a container, pause it, stop it, and print status/exit code at each step.",
+              "command": "docker run -d --name state-demo alpine sleep 120",
+              "expected": "running → paused → exited with exit code 0 or 143 depending on handler.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "OOM investigation",
+              "prompt": "Inspect a container and check OOMKilled.",
+              "command": "docker inspect state-demo --format '{{.State.OOMKilled}}'",
+              "expected": "docker inspect --format \"{{.State.OOMKilled}}\" NAME",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "A stopped container still exists until…",
+                "options": [
+                  "The daemon restarts",
+                  "It is removed with docker rm",
+                  "The image is pruned",
+                  "You log out"
+                ],
+                "answer": 1,
+                "explain": "Stop preserves the container; rm deletes it."
+              },
+              {
+                "question": "Which restart policy respects a manual stop across daemon restarts?",
+                "options": [
+                  "always",
+                  "on-failure",
+                  "unless-stopped",
+                  "no"
+                ],
+                "answer": 2,
+                "explain": "unless-stopped does not restart containers that were explicitly stopped."
+              },
+              {
+                "question": "Exit code 143 indicates…",
+                "options": [
+                  "OOM kill",
+                  "SIGTERM termination",
+                  "Success",
+                  "Missing entrypoint"
+                ],
+                "answer": 1,
+                "explain": "128 + 15 = 143, the container received SIGTERM."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "run-exec-logs",
+            "config-and-resources"
+          ],
+          "tags": [
+            "containers"
+          ],
+          "commands": [
+            "docker start",
+            "docker stop",
+            "docker pause",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Container lifecycle",
+              "url": "https://docs.docker.com/get-started/docker-concepts/the-basics/how-containers-work/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "run-exec-logs",
+          "title": "run, exec and logs",
+          "duration": "12 min",
+          "summary": "The daily trio, including detached mode, interactive mode, TTY allocation and log streaming.",
+          "objectives": [
+            "Choose flags for interactive and detached containers",
+            "Use exec without creating a shell dependency",
+            "Stream logs without losing the terminal"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Detached vs interactive",
+              "body": "`-d` detaches and prints the container ID. `-it` allocates a TTY and keeps stdin open — used for shells and interactive CLIs. `--rm` removes the container on exit. Combining `-d` and `-it` is usually a mistake: a detached container does not need your terminal."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# detached service\ndocker run -d --name api -p 3000:3000 my-api:1.0\n\n# interactive one-off\ndocker run --rm -it alpine sh\n\n# run a command in an existing container, without a TTY\ndocker exec api node -e \"console.log(process.version)\"\n\n# follow logs, then detach with Ctrl-C (container keeps running)\ndocker logs -f --tail 100 api\n\n# logs since a timestamp\ndocker logs --since 10m api",
+              "title": null,
+              "output": "v20.18.0\nGET /health 200 3ms\nGET /api/users 200 12ms",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Do not build containers that require a TTY",
+              "body": "A service should log to stdout/stderr and run without stdin. `-it` is for humans, not for production entrypoints."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "One-off command",
+              "prompt": "Use alpine to print the current date and remove the container afterwards.",
+              "command": "docker run --rm alpine date",
+              "expected": "docker run --rm alpine date",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Log window",
+              "prompt": "Show the last 50 lines from a container and then follow new lines.",
+              "command": null,
+              "expected": "docker logs --tail 50 -f NAME",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does -it do?",
+                "options": [
+                  "Detaches the container",
+                  "Allocates a TTY and keeps stdin open",
+                  "Sets an init process",
+                  "Publishes a port"
+                ],
+                "answer": 1,
+                "explain": "It makes an interactive terminal session."
+              },
+              {
+                "question": "Which command runs a second process in a running container?",
+                "options": [
+                  "docker run",
+                  "docker exec",
+                  "docker start",
+                  "docker attach"
+                ],
+                "answer": 1,
+                "explain": "exec targets an existing running container."
+              },
+              {
+                "question": "Where should application logs go?",
+                "options": [
+                  "A file inside the container",
+                  "stdout and stderr",
+                  "A bind mount only",
+                  "The daemon journal"
+                ],
+                "answer": 1,
+                "explain": "Docker captures stdout/stderr through the configured logging driver."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "container-lifecycle",
+            "logging-drivers"
+          ],
+          "tags": [
+            "containers",
+            "cli"
+          ],
+          "commands": [
+            "docker run",
+            "docker exec",
+            "docker logs"
+          ],
+          "sources": [
+            {
+              "title": "docker run",
+              "url": "https://docs.docker.com/reference/cli/docker/container/run/"
+            },
+            {
+              "title": "View container logs",
+              "url": "https://docs.docker.com/engine/reference/commandline/logs/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "ports-and-publishing",
+          "title": "Ports and publishing",
+          "duration": "9 min",
+          "summary": "EXPOSE documents. -p publishes. The distinction prevents a whole class of connectivity bugs.",
+          "objectives": [
+            "Explain EXPOSE vs -p",
+            "Bind published ports to loopback or specific interfaces",
+            "Diagnose port conflicts"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Two different things",
+              "body": "`EXPOSE 3000` in a Dockerfile is documentation: it records intent and is visible in `docker inspect`. It does not make the port reachable from the host. `-p 8080:3000` (or `--publish`) creates a host binding that forwards traffic to the container.\n\nThe binding syntax is `[host_ip:]host_port:container_port[/protocol]`. Omitting host_ip binds on all interfaces (`0.0.0.0` and often `::`). Use `127.0.0.1:8080:3000` for local-only services."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name web -p 127.0.0.1:8080:80 nginx:alpine\ndocker port web\ndocker inspect web --format '{{json .NetworkSettings.Ports}}'\n\n# random host port\ndocker run -d --name web-random -P nginx:alpine\ndocker port web-random 80/tcp",
+              "title": null,
+              "output": "80/tcp -> 127.0.0.1:8080\n{\"80/tcp\":[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"8080\"}]}",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Port conflicts are a host problem",
+              "body": "If bind fails with \"address already in use\", another process or container owns the host port. Find it with `ss -ltnp` or `docker ps --format` and choose a different host port."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Loopback only",
+              "prompt": "Publish nginx on 127.0.0.1:8090.",
+              "command": "docker run -d --name web-loop -p 127.0.0.1:8090:80 nginx:alpine",
+              "expected": "The port is reachable only from the host.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Find the owner",
+              "prompt": "A host port is already in use. Find the process listening on it.",
+              "command": "ss -ltnp | grep ':8090'",
+              "expected": "ss -ltnp | grep :PORT or lsof -i :PORT.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Does EXPOSE publish a port to the host?",
+                "options": [
+                  "Yes",
+                  "No, it documents intent",
+                  "Only with -P",
+                  "Only in Compose"
+                ],
+                "answer": 1,
+                "explain": "Publishing requires -p or a compose ports entry."
+              },
+              {
+                "question": "Which binding exposes a service only on localhost?",
+                "options": [
+                  "-p 8080:80",
+                  "-p 127.0.0.1:8080:80",
+                  "-p 0.0.0.0:8080:80",
+                  "-P"
+                ],
+                "answer": 1,
+                "explain": "Prefixing the host IP restricts the listener."
+              },
+              {
+                "question": "What does -P do?",
+                "options": [
+                  "Publishes all EXPOSEd ports to random host ports",
+                  "Privileged mode",
+                  "Pauses the container",
+                  "Pulls the image"
+                ],
+                "answer": 0,
+                "explain": "Capital P publishes every exposed port on an ephemeral host port."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "networking-drivers",
+            "bridge-dns",
+            "network-troubleshooting"
+          ],
+          "tags": [
+            "networking",
+            "containers"
+          ],
+          "commands": [
+            "docker run",
+            "docker port",
+            "docker inspect"
+          ],
+          "sources": [
+            {
+              "title": "Port publishing",
+              "url": "https://docs.docker.com/engine/network/"
+            },
+            {
+              "title": "docker run",
+              "url": "https://docs.docker.com/reference/cli/docker/container/run/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "config-and-resources",
+          "title": "Environment, restart policy and resources",
+          "duration": "11 min",
+          "summary": "Configure containers without rebuilding, and keep one noisy service from consuming the host.",
+          "objectives": [
+            "Inject configuration with -e and --env-file",
+            "Choose a restart policy deliberately",
+            "Apply CPU, memory and PID limits"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Configuration at runtime",
+              "body": "Environment variables are the simplest configuration channel: `-e KEY=value` or `--env-file .env`. They appear in `docker inspect` and in the process environment, so they are **not** suitable for long-lived secrets. Mount secrets read-only or use Compose secrets for anything sensitive.\n\nValues in the image are defaults; runtime flags override them. Use `docker run --env-file` for grouped settings and keep secrets out of the file."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker run -d --name api \\\n  --env-file ./app.env \\\n  -e LOG_LEVEL=info \\\n  --restart unless-stopped \\\n  --memory 512m --memory-swap 512m \\\n  --cpus 1.5 --pids-limit 256 \\\n  -p 127.0.0.1:3000:3000 \\\n  my-api:1.0\n\ndocker inspect api --format '{{json .HostConfig.Memory}} {{json .HostConfig.NanoCpus}}'\ndocker stats --no-stream api",
+              "title": null,
+              "output": "536870912 1500000000\nCONTAINER ID   NAME   CPU %   MEM USAGE / LIMIT   MEM %\n...             api    0.4%    82.1MiB / 512MiB    16.0%",
+              "note": null
+            },
+            {
+              "type": "table",
+              "head": [
+                "Flag",
+                "Effect"
+              ],
+              "rows": [
+                [
+                  "--restart no",
+                  "Never restart automatically"
+                ],
+                [
+                  "--restart on-failure[:n]",
+                  "Restart on non-zero exit, optionally limited"
+                ],
+                [
+                  "--restart always",
+                  "Always restart, including after daemon start"
+                ],
+                [
+                  "--restart unless-stopped",
+                  "Like always, but respects manual stop"
+                ],
+                [
+                  "--memory",
+                  "Hard memory limit (OOM kill beyond it)"
+                ],
+                [
+                  "--cpus",
+                  "CPU quota in cores"
+                ],
+                [
+                  "--pids-limit",
+                  "Maximum processes/threads"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Memory swap defaults can surprise you",
+              "body": "Without `--memory-swap`, Docker may allow swap beyond `--memory`. Set both equal for a hard limit, or configure swap deliberately."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Hard limit",
+              "prompt": "Run nginx with a 256 MB hard limit and no swap.",
+              "command": "docker run -d --memory 256m --memory-swap 256m nginx:alpine",
+              "expected": "docker run --memory 256m --memory-swap 256m nginx:alpine",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Env file",
+              "prompt": "Create app.env with APP_PORT=3000 and start a container using it.",
+              "command": "printf \"APP_PORT=3000\\n\" > app.env && docker run --rm --env-file app.env alpine env",
+              "expected": "Use --env-file app.env and verify with docker exec env.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Where should production secrets go?",
+                "options": [
+                  "-e flags in a script",
+                  "Compose secrets or a mounted secret store",
+                  "Baked into the image",
+                  "In the image tag"
+                ],
+                "answer": 1,
+                "explain": "Environment variables are visible in inspect; use secret mechanisms."
+              },
+              {
+                "question": "Which restart policy restarts after a daemon restart but not after a manual stop?",
+                "options": [
+                  "always",
+                  "unless-stopped",
+                  "on-failure",
+                  "no"
+                ],
+                "answer": 1,
+                "explain": "unless-stopped is the practical default for services."
+              },
+              {
+                "question": "A container hits its memory limit. What happens?",
+                "options": [
+                  "It is paused",
+                  "The kernel OOM killer terminates processes",
+                  "Docker raises the limit",
+                  "The host reboots"
+                ],
+                "answer": 1,
+                "explain": "Cgroup memory limits lead to OOM kills, commonly exit 137."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "resource-limits",
+            "secrets-management",
+            "config-and-resources"
+          ],
+          "tags": [
+            "containers",
+            "configuration"
+          ],
+          "commands": [
+            "docker run",
+            "docker inspect",
+            "docker stats"
+          ],
+          "sources": [
+            {
+              "title": "Resource constraints",
+              "url": "https://docs.docker.com/engine/containers/resource_constraints/"
+            },
+            {
+              "title": "Environment variables",
+              "url": "https://docs.docker.com/engine/reference/commandline/run/#env"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-fundamentals"
+  ]
+}

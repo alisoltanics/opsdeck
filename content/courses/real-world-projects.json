@@ -1,0 +1,649 @@
+{
+  "id": "real-world-projects",
+  "order": 18,
+  "title": "Real-world Docker Projects",
+  "subtitle": "Five complete stacks you can actually run",
+  "level": "Intermediate",
+  "duration": "3h 20m",
+  "icon": "blocks",
+  "accent": "orange",
+  "description": "Apply everything in complete, runnable projects: a Node/Postgres API, a TLS reverse proxy, a CI pipeline, a monitoring stack and a multi-stage Go service.",
+  "outcomes": [
+    "Assemble a production-shaped Compose application",
+    "Terminate TLS with a reverse proxy",
+    "Build and publish images in CI",
+    "Ship a multi-stage compiled service"
+  ],
+  "modules": [
+    {
+      "id": "project-stacks",
+      "title": "Project stacks",
+      "summary": "Complete walkthroughs.",
+      "lessons": [
+        {
+          "id": "project-node-postgres",
+          "title": "Project: Node API + PostgreSQL",
+          "duration": "18 min",
+          "summary": "A full-stack Compose project with health checks, migrations, secrets and a non-root image.",
+          "objectives": [
+            "Write a multi-stage Node Dockerfile",
+            "Compose an API with Postgres and a migration job",
+            "Use secrets and health-aware dependencies"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The shape of the project",
+              "body": "The API is a small Node service with a `/health/ready` endpoint. Postgres stores data. A one-shot `migrate` service runs schema migrations and must complete before the API starts. Configuration comes from an env file; the database password is a Compose secret."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1\nFROM node:20-alpine AS deps\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN --mount=type=cache,target=/root/.npm npm ci\n\nFROM deps AS build\nCOPY . .\nRUN npm run build && npm prune --omit=dev\n\nFROM node:20-alpine\nWORKDIR /app\nENV NODE_ENV=production\nCOPY --from=build --chown=node:node /app/node_modules ./node_modules\nCOPY --from=build --chown=node:node /app/dist ./dist\nCOPY --chown=node:node package.json ./\nUSER node\nEXPOSE 3000\nHEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \\\n  CMD node -e \"fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"\nCMD [\"node\", \"dist/server.js\"]",
+              "title": null,
+              "output": null,
+              "note": null
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "name: acme\nservices:\n  api:\n    build: .\n    image: acme/api:local\n    restart: unless-stopped\n    ports: [\"127.0.0.1:3000:3000\"]\n    environment:\n      NODE_ENV: production\n      DATABASE_URL: postgres://app:secret@db:5432/app\n    secrets: [db_password]\n    depends_on:\n      db: { condition: service_healthy }\n      migrate: { condition: service_completed_successfully }\n    healthcheck:\n      test: [\"CMD\", \"node\", \"healthcheck.js\"]\n      interval: 15s\n      timeout: 3s\n      retries: 3\n      start_period: 20s\n\n  migrate:\n    build: .\n    image: acme/api:local\n    command: [\"node\", \"dist/migrate.js\"]\n    environment:\n      DATABASE_URL: postgres://app:secret@db:5432/app\n    depends_on:\n      db: { condition: service_healthy }\n    restart: \"no\"\n\n  db:\n    image: postgres:16.4-alpine\n    restart: unless-stopped\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_DB: app\n      POSTGRES_PASSWORD_FILE: /run/secrets/db_password\n    secrets: [db_password]\n    volumes: [\"pgdata:/var/lib/postgresql/data\"]\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U app -d app\"]\n      interval: 5s\n      timeout: 3s\n      retries: 12\n\nsecrets:\n  db_password:\n    file: ./secrets/db_password.txt\nvolumes:\n  pgdata:",
+              "title": null,
+              "output": null,
+              "note": "The migrate service reuses the API image. One artifact, two commands."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "printf 'change-me' > secrets/db_password.txt\ndocker compose up -d --build --wait\ndocker compose ps\ncurl -fsS http://127.0.0.1:3000/health/ready\ndocker compose logs -f api\ndocker compose down",
+              "title": null,
+              "output": null,
+              "note": "`--wait` returns after services are healthy. The migration job must exit 0."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Seed data is a separate one-shot",
+              "body": "Add a `seed` service under a profile and run it deliberately. Do not seed on every boot."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Run the stack",
+              "prompt": "Create the secret file and start the project.",
+              "command": null,
+              "expected": "docker compose up -d --build --wait",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Break it",
+              "prompt": "Point DATABASE_URL at the wrong host and observe the readiness failure.",
+              "command": null,
+              "expected": "The API becomes unhealthy; logs show connection errors; dependent migration never completes.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why is migrate a separate service?",
+                "options": [
+                  "It must run once and complete before the API",
+                  "It uses less memory",
+                  "It needs a different network",
+                  "It cannot be in the image"
+                ],
+                "answer": 0,
+                "explain": "The completion condition orders a one-shot job."
+              },
+              {
+                "question": "Where does the database password come from?",
+                "options": [
+                  "An env var in the file",
+                  "A Compose secret file",
+                  "The image",
+                  "The volume"
+                ],
+                "answer": 1,
+                "explain": "POSTGRES_PASSWORD_FILE reads the mounted secret."
+              },
+              {
+                "question": "Which command waits for health before returning?",
+                "options": [
+                  "up -d --wait",
+                  "up -d",
+                  "compose ps",
+                  "compose logs"
+                ],
+                "answer": 0,
+                "explain": "--wait waits for health."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "multi-stage-builds",
+            "compose-health-dependencies",
+            "production-compose"
+          ],
+          "tags": [
+            "project",
+            "compose",
+            "node"
+          ],
+          "commands": [
+            "docker compose",
+            "docker build"
+          ],
+          "sources": [
+            {
+              "title": "Compose sample",
+              "url": "https://docs.docker.com/compose/samples/"
+            },
+            {
+              "title": "Postgres image",
+              "url": "https://docs.docker.com/https://hub.docker.com/_/postgres"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "project-reverse-proxy",
+          "title": "Project: TLS reverse proxy",
+          "duration": "15 min",
+          "summary": "Caddy or nginx in front of two services, with automatic certificates and a clean network split.",
+          "objectives": [
+            "Design a frontend/backend network split",
+            "Terminate TLS at the proxy",
+            "Route by host and path"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Only the proxy is public",
+              "body": "The proxy publishes 80/443 and joins the frontend network. The API and web app join frontend; the database joins a private backend network. Only the proxy is reachable from the internet, and the database is not reachable from the proxy."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "name: acme\nservices:\n  caddy:\n    image: caddy:2.8-alpine\n    restart: unless-stopped\n    ports: [\"80:80\", \"443:443\"]\n    volumes:\n      - ./Caddyfile:/etc/caddy/Caddyfile:ro\n      - caddy-data:/data\n      - caddy-config:/config\n    networks: [frontend]\n  web:\n    image: acme/web:1.4\n    restart: unless-stopped\n    networks: [frontend, backend]\n  api:\n    image: acme/api:1.4\n    restart: unless-stopped\n    networks: [frontend, backend]\n  db:\n    image: postgres:16.4-alpine\n    restart: unless-stopped\n    networks: [backend]\n    volumes: [\"pgdata:/var/lib/postgresql/data\"]\n\nnetworks:\n  frontend:\n  backend:\n    internal: true\nvolumes:\n  caddy-data:\n  caddy-config:\n  pgdata:",
+              "title": null,
+              "output": null,
+              "note": null
+            },
+            {
+              "type": "code",
+              "language": "caddyfile",
+              "code": "acme.example.com {\n  encode zstd gzip\n  handle /api/* {\n    reverse_proxy api:3000\n  }\n  handle {\n    reverse_proxy web:3000\n  }\n  header {\n    Strict-Transport-Security \"max-age=31536000; includeSubDomains\"\n    X-Content-Type-Options \"nosniff\"\n    Referrer-Policy \"strict-origin-when-cross-origin\"\n  }\n}",
+              "title": null,
+              "output": null,
+              "note": "Caddy obtains and renews certificates automatically when the domain resolves and ports 80/443 are reachable."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "TLS is not optional in production",
+              "body": "Terminate TLS at the edge and forward only over private networks. If you terminate elsewhere, forward the correct scheme/headers and trust only known proxies."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Network split",
+              "prompt": "Write networks so only caddy and web share a public network.",
+              "command": null,
+              "expected": "caddy frontend; web frontend+backend; api backend; db backend.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Headers",
+              "prompt": "Add HSTS and nosniff headers to a Caddyfile.",
+              "command": null,
+              "expected": "Use the header block shown above.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which service publishes public ports?",
+                "options": [
+                  "web",
+                  "api",
+                  "db",
+                  "caddy"
+                ],
+                "answer": 3,
+                "explain": "Only the proxy is exposed."
+              },
+              {
+                "question": "Why is the backend network internal?",
+                "options": [
+                  "It is faster",
+                  "It removes external connectivity",
+                  "It enables TLS",
+                  "It reduces image size"
+                ],
+                "answer": 1,
+                "explain": "Internal networks isolate the database tier."
+              },
+              {
+                "question": "Who obtains certificates in the Caddy example?",
+                "options": [
+                  "Docker",
+                  "Caddy",
+                  "Postgres",
+                  "The API"
+                ],
+                "answer": 1,
+                "explain": "Caddy automates ACME."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "compose-networks-volumes",
+            "production-compose",
+            "zero-downtime"
+          ],
+          "tags": [
+            "project",
+            "networking",
+            "tls"
+          ],
+          "commands": [
+            "docker compose",
+            "docker network inspect"
+          ],
+          "sources": [
+            {
+              "title": "Caddy",
+              "url": "https://docs.docker.com/https://caddyserver.com/docs/"
+            },
+            {
+              "title": "Compose networks",
+              "url": "https://docs.docker.com/compose/compose-file/06-networks/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "project-ci-pipeline",
+          "title": "Project: CI build and publish",
+          "duration": "14 min",
+          "summary": "A GitHub Actions pipeline that builds multi-platform images with cache and push-by-digest discipline.",
+          "objectives": [
+            "Build and push an image in CI",
+            "Use registry cache across runs",
+            "Scan and sign as a gate"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "CI is a Docker client",
+              "body": "The runner needs the Docker CLI, Buildx and registry credentials. Use short-lived tokens, never print them, and prefer digest-pinned actions. Build multi-platform only if you actually deploy multiple architectures; it is slower."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "name: image\non:\n  push:\n    branches: [main]\n    tags: [\"v*\"]\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n      id-token: write\n    steps:\n      - uses: actions/checkout@v4\n      - uses: docker/setup-buildx-action@v3\n      - uses: docker/login-action@v3\n        with:\n          registry: ghcr.io\n          username: ${{ github.actor }}\n          password: ${{ secrets.GITHUB_TOKEN }}\n      - uses: docker/build-push-action@v6\n        with:\n          context: .\n          platforms: linux/amd64,linux/arm64\n          push: true\n          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}\n          cache-from: type=gha\n          cache-to: type=gha,mode=max\n          provenance: true\n          sbom: true",
+              "title": null,
+              "output": null,
+              "note": "`type=gha` uses GitHub Actions cache; `type=registry` works across CI systems."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# Local reproduction of the CI build\ndocker buildx build \\\n  --platform linux/amd64 \\\n  --cache-from type=registry,ref=ghcr.io/acme/api:cache \\\n  --cache-to type=registry,ref=ghcr.io/acme/api:cache,mode=max \\\n  -t ghcr.io/acme/api:local --load .\n\ndocker scout cves ghcr.io/acme/api:local",
+              "title": null,
+              "output": null,
+              "note": "Reproduce CI locally before changing the workflow; it shortens the feedback loop."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Do not build on every push to every branch",
+              "body": "Use path filters and concurrency cancellation. CI minutes are a finite resource and stale builds waste them."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Pipeline",
+              "prompt": "Write the login and build-push steps for GHCR.",
+              "command": null,
+              "expected": "docker/login-action with GITHUB_TOKEN and build-push-action with tags/push.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Cache",
+              "prompt": "Add registry cache to a buildx build.",
+              "command": null,
+              "expected": "--cache-from/--cache-to type=registry,ref=...,mode=max.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which cache backend is native to GitHub Actions?",
+                "options": [
+                  "type=gha",
+                  "type=local",
+                  "type=s3",
+                  "type=azure"
+                ],
+                "answer": 0,
+                "explain": "The gha backend stores cache in Actions."
+              },
+              {
+                "question": "Why use short-lived registry tokens?",
+                "options": [
+                  "Faster pushes",
+                  "Limit blast radius if leaked",
+                  "Enable TLS",
+                  "Reduce image size"
+                ],
+                "answer": 1,
+                "explain": "CI credentials should be scoped and temporary."
+              },
+              {
+                "question": "What does provenance attest?",
+                "options": [
+                  "Vulnerability status",
+                  "How and from what the image was built",
+                  "The registry region",
+                  "The runtime user"
+                ],
+                "answer": 1,
+                "explain": "It records build provenance."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "build-cache",
+            "multi-platform-bake",
+            "image-provenance"
+          ],
+          "tags": [
+            "project",
+            "ci",
+            "registry"
+          ],
+          "commands": [
+            "docker buildx build",
+            "docker push"
+          ],
+          "sources": [
+            {
+              "title": "GitHub Actions",
+              "url": "https://docs.docker.com/build/ci/github-actions/"
+            },
+            {
+              "title": "Build cache",
+              "url": "https://docs.docker.com/build/cache/backends/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "project-monitoring-stack",
+          "title": "Project: monitoring stack",
+          "duration": "15 min",
+          "summary": "A complete local observability stack with alerting rules and a dashboard you can extend.",
+          "objectives": [
+            "Run Prometheus, Grafana, cAdvisor and node-exporter",
+            "Write an alert rule",
+            "Secure the stack"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What to run",
+              "body": "cAdvisor for container metrics, node-exporter for host metrics, Prometheus for storage and alerting, Grafana for dashboards. Keep all ports on loopback and put authentication in front if remote access is needed."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "name: ops-monitoring\nservices:\n  cadvisor:\n    image: gcr.io/cadvisor/cadvisor:v0.49.1\n    ports: [\"127.0.0.1:8080:8080\"]\n    volumes:\n      - /:/rootfs:ro\n      - /var/run:/var/run:ro\n      - /sys:/sys:ro\n      - /var/lib/docker/:/var/lib/docker:ro\n    devices: [\"/dev/kmsg\"]\n    restart: unless-stopped\n    networks: [monitoring]\n  node-exporter:\n    image: prom/node-exporter:v1.8.2\n    ports: [\"127.0.0.1:9100:9100\"]\n    pid: host\n    restart: unless-stopped\n    networks: [monitoring]\n  prometheus:\n    image: prom/prometheus:v2.55.1\n    ports: [\"127.0.0.1:9090:9090\"]\n    volumes:\n      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro\n      - ./alerts.yml:/etc/prometheus/alerts.yml:ro\n      - prometheus-data:/prometheus\n    restart: unless-stopped\n    networks: [monitoring]\n  grafana:\n    image: grafana/grafana:11.3.0\n    ports: [\"127.0.0.1:3001:3000\"]\n    volumes: [\"grafana-data:/var/lib/grafana\"]\n    restart: unless-stopped\n    depends_on: [prometheus]\n    networks: [monitoring]\nnetworks:\n  monitoring:\nvolumes:\n  prometheus-data:\n  grafana-data:",
+              "title": null,
+              "output": null,
+              "note": null
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "# alerts.yml\ngroups:\n  - name: containers\n    rules:\n      - alert: ContainerDown\n        expr: up{job=\"cadvisor\"} == 0\n        for: 2m\n        labels: { severity: page }\n        annotations:\n          summary: \"cAdvisor target is down\"\n      - alert: HighContainerCPU\n        expr: sum(rate(container_cpu_usage_seconds_total{container!=\"\"}[5m])) by (name) > 0.8\n        for: 10m\n        labels: { severity: warning }",
+              "title": null,
+              "output": null,
+              "note": "Tune thresholds to your workload; a fixed 0.8 core alert is a starting point, not a universal rule."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Do not expose cAdvisor or Prometheus publicly",
+              "body": "They have no authentication by default. Bind to loopback, use a private network, or put an authenticated proxy in front."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Deploy",
+              "prompt": "Run the four-service monitoring stack locally.",
+              "command": null,
+              "expected": "docker compose up -d and check all services are running.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Alert",
+              "prompt": "Write a rule for a container restarting repeatedly.",
+              "command": null,
+              "expected": "Use changes(container_start_time_seconds[10m]) or a restart counter rate.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does node-exporter provide?",
+                "options": [
+                  "Container metrics",
+                  "Host-level metrics",
+                  "Dashboards",
+                  "Alert routing"
+                ],
+                "answer": 1,
+                "explain": "It exposes host metrics."
+              },
+              {
+                "question": "Where should monitoring ports bind?",
+                "options": [
+                  "0.0.0.0",
+                  "127.0.0.1",
+                  "The public IP",
+                  "A random interface"
+                ],
+                "answer": 1,
+                "explain": "Loopback prevents accidental exposure."
+              },
+              {
+                "question": "What does Prometheus use to evaluate alerts?",
+                "options": [
+                  "Alert rules",
+                  "Grafana dashboards",
+                  "Docker health checks",
+                  "Compose profiles"
+                ],
+                "answer": 0,
+                "explain": "Alerting rules evaluate PromQL expressions."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "monitoring-stack",
+            "production-observability",
+            "healthchecks"
+          ],
+          "tags": [
+            "project",
+            "monitoring",
+            "compose"
+          ],
+          "commands": [
+            "docker compose",
+            "docker stats"
+          ],
+          "sources": [
+            {
+              "title": "Prometheus",
+              "url": "https://docs.docker.com/https://prometheus.io/docs/"
+            },
+            {
+              "title": "cAdvisor",
+              "url": "https://docs.docker.com/https://github.com/google/cadvisor"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "project-go-multistage",
+          "title": "Project: multi-stage Go service",
+          "duration": "14 min",
+          "summary": "A static binary, a scratch runtime, non-root execution and multi-platform builds.",
+          "objectives": [
+            "Build a static Go binary in a builder stage",
+            "Ship a minimal scratch/distroless runtime",
+            "Cross-compile for amd64 and arm64"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The smallest useful runtime",
+              "body": "Go can produce a fully static binary with `CGO_ENABLED=0`. A `scratch` runtime contains only the binary and CA certificates. If you need a shell for debugging, use distroless or a debug variant; do not add a shell to production for convenience."
+            },
+            {
+              "type": "code",
+              "language": "dockerfile",
+              "code": "# syntax=docker/dockerfile:1\nFROM golang:1.23-alpine AS build\nWORKDIR /src\nCOPY go.mod go.sum ./\nRUN --mount=type=cache,target=/go/pkg/mod go mod download\nCOPY . .\nARG TARGETOS=linux\nARG TARGETARCH=amd64\nRUN --mount=type=cache,target=/root/.cache/go-build \\\n    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \\\n    go build -trimpath -ldflags=\"-s -w\" -o /out/server ./cmd/server\n\nFROM scratch\nCOPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/\nCOPY --from=build /out/server /server\nUSER 65532:65532\nEXPOSE 8080\nENTRYPOINT [\"/server\"]",
+              "title": null,
+              "output": null,
+              "note": "The binary must be static. If it needs libc, use distroless/base instead of scratch."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker buildx build \\\n  --platform linux/amd64,linux/arm64 \\\n  -t ghcr.io/acme/go-service:1.0 \\\n  --push .\n\ndocker image inspect ghcr.io/acme/go-service:1.0 --format '{{.Size}}'",
+              "title": null,
+              "output": "8421337",
+              "note": "A small image is not automatically faster at runtime, but it pulls faster and has a tiny attack surface."
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Cross-compile instead of emulating",
+              "body": "Set GOOS/GOARCH in the builder to produce native binaries for each platform; QEMU emulation is slower and can hide architecture-specific bugs."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Static build",
+              "prompt": "Write the Go build RUN with static linking and stripped symbols.",
+              "command": null,
+              "expected": "CGO_ENABLED=0 go build -trimpath -ldflags=\"-s -w\" -o /out/server ./cmd/server",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Multi-arch",
+              "prompt": "Build and push for amd64 and arm64.",
+              "command": null,
+              "expected": "docker buildx build --platform linux/amd64,linux/arm64 --push -t REPO:TAG .",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why CGO_ENABLED=0?",
+                "options": [
+                  "It makes the binary static",
+                  "It enables TLS",
+                  "It reduces memory",
+                  "It compiles faster"
+                ],
+                "answer": 0,
+                "explain": "A static binary can run in scratch."
+              },
+              {
+                "question": "What must be copied into a scratch image for HTTPS?",
+                "options": [
+                  "CA certificates",
+                  "A shell",
+                  "glibc",
+                  "curl"
+                ],
+                "answer": 0,
+                "explain": "TLS verification needs a CA bundle."
+              },
+              {
+                "question": "How do you build for arm64 from an amd64 host without emulation?",
+                "options": [
+                  "GOARCH=arm64 cross-compilation",
+                  "QEMU only",
+                  "Use host networking",
+                  "Build on the target only"
+                ],
+                "answer": 0,
+                "explain": "Go cross-compiles natively."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "multi-stage-builds",
+            "multi-platform-bake",
+            "production-readiness"
+          ],
+          "tags": [
+            "project",
+            "go",
+            "build"
+          ],
+          "commands": [
+            "docker buildx build",
+            "docker image inspect"
+          ],
+          "sources": [
+            {
+              "title": "Multi-stage",
+              "url": "https://docs.docker.com/build/building/multi-stage/"
+            },
+            {
+              "title": "Multi-platform",
+              "url": "https://docs.docker.com/build/building/multi-platform/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "dockerfile-masterclass",
+    "docker-build-buildkit",
+    "docker-compose"
+  ]
+}

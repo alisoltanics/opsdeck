@@ -1,0 +1,431 @@
+{
+  "id": "docker-cli",
+  "order": 3,
+  "title": "Docker CLI Complete Reference",
+  "subtitle": "A working map of every command family",
+  "level": "Beginner",
+  "duration": "1h 40m",
+  "icon": "terminal",
+  "accent": "violet",
+  "description": "The Docker CLI has a large but highly regular surface. Learn the grammar, the command families, and the inspection commands that answer almost every question.",
+  "outcomes": [
+    "Navigate docker help and per-command help efficiently",
+    "Group commands by object and lifecycle",
+    "Use inspect, logs, stats and events as a debugging toolkit"
+  ],
+  "modules": [
+    {
+      "id": "cli-foundations",
+      "title": "CLI foundations",
+      "summary": "Grammar, help and output control.",
+      "lessons": [
+        {
+          "id": "cli-anatomy",
+          "title": "CLI anatomy and help",
+          "duration": "10 min",
+          "summary": "Docker commands follow a predictable grammar. Once you see it, the reference stops being intimidating.",
+          "objectives": [
+            "Parse docker [OPTIONS] COMMAND [ARGS]",
+            "Use management commands and aliases",
+            "Discover flags with --help instead of guessing"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The grammar",
+              "body": "Most commands follow `docker <object> <verb> [options] [target]`. Management commands group verbs: `docker container ls`, `docker image rm`, `docker network inspect`. Shorthands exist for daily use: `docker ps` = `docker container ls`, `docker images` = `docker image ls`, `docker rmi` = `docker image rm`.\n\nGlobal options come before the command (`--context`, `--host`, `--log-level`, `-H`). Command options come after the verb."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker --help\ndocker container --help\ndocker run --help\ndocker compose --help\ndocker compose up --help",
+              "title": null,
+              "output": null,
+              "note": "The --help output in OpsDeck is read live from your installed CLI, so flags always match your engine version."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Family",
+                "Common commands"
+              ],
+              "rows": [
+                [
+                  "Container",
+                  "run, create, start, stop, restart, exec, logs, inspect, cp, rm"
+                ],
+                [
+                  "Image",
+                  "pull, push, build, tag, ls, inspect, history, prune, save, load"
+                ],
+                [
+                  "Volume",
+                  "create, ls, inspect, rm, prune"
+                ],
+                [
+                  "Network",
+                  "create, ls, inspect, connect, disconnect, rm, prune"
+                ],
+                [
+                  "System",
+                  "df, info, events, prune, version"
+                ],
+                [
+                  "Compose",
+                  "up, down, ps, logs, config, build, exec, run, pull"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Use --format for machines, tables for humans",
+              "body": "Most list commands accept `--format` with Go templates and `{{json .}}` for JSON lines. That is how OpsDeck reads your engine without parsing tables."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Find the flag",
+              "prompt": "Find the option that lets docker run set a container hostname.",
+              "command": "docker run --help | grep -i hostname",
+              "expected": "docker run --help shows -h, --hostname string.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Expand an alias",
+              "prompt": "Rewrite docker rmi -f abc123 using management commands.",
+              "command": null,
+              "expected": "docker image rm --force abc123",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the canonical form of docker ps?",
+                "options": [
+                  "docker list containers",
+                  "docker container ls",
+                  "docker containers",
+                  "docker inspect ps"
+                ],
+                "answer": 1,
+                "explain": "docker ps is an alias for docker container ls."
+              },
+              {
+                "question": "Where do global options belong?",
+                "options": [
+                  "After the command",
+                  "Before the command",
+                  "Inside the image name",
+                  "Anywhere"
+                ],
+                "answer": 1,
+                "explain": "Global options such as --context and --host precede the command."
+              },
+              {
+                "question": "Which output format is best for scripts?",
+                "options": [
+                  "Default table",
+                  "--format json",
+                  "--quiet only",
+                  "--no-trunc table"
+                ],
+                "answer": 1,
+                "explain": "JSON output is stable and parseable."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "container-commands",
+            "image-system-commands"
+          ],
+          "tags": [
+            "cli"
+          ],
+          "commands": [
+            "docker help",
+            "docker container",
+            "docker image"
+          ],
+          "sources": [
+            {
+              "title": "CLI reference",
+              "url": "https://docs.docker.com/reference/cli/"
+            },
+            {
+              "title": "Use the Docker command line",
+              "url": "https://docs.docker.com/engine/reference/commandline/cli/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "container-commands",
+          "title": "Container lifecycle commands",
+          "duration": "11 min",
+          "summary": "The complete set of verbs that move a container from created to removed.",
+          "objectives": [
+            "Choose between run, create, start and exec",
+            "Manage stopped containers",
+            "Copy files and inspect state"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Create is not start",
+              "body": "`docker create` builds a container and its writable layer without starting it. `docker start` starts an existing container. `docker run` is create + start. This matters for orchestration and for restarting a configured container without losing its layer.\n\n`docker exec` runs an additional process inside a running container. It is not a lifecycle command and does not restart or replace the main process."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker create --name worker -e MODE=batch alpine sleep 3600\ndocker start worker\ndocker exec -it worker sh\ndocker pause worker && docker unpause worker\ndocker stop worker\ndocker rm worker\n\ndocker cp ./config.json worker:/app/config.json\ndocker inspect worker --format '{{.State.Status}} {{.State.ExitCode}}'",
+              "title": null,
+              "output": null,
+              "note": "Stopping sends SIGTERM, waits (`--time`, default 10s), then SIGKILL. Handle SIGTERM in your app for graceful shutdown."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Verb",
+                "Effect"
+              ],
+              "rows": [
+                [
+                  "run",
+                  "Create + start a new container"
+                ],
+                [
+                  "start / stop",
+                  "Start or gracefully stop an existing container"
+                ],
+                [
+                  "restart",
+                  "Stop + start"
+                ],
+                [
+                  "pause / unpause",
+                  "Freeze or resume processes with the freezer cgroup"
+                ],
+                [
+                  "exec",
+                  "Run an extra process in a running container"
+                ],
+                [
+                  "rm",
+                  "Remove a stopped container (use -f to force)"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "docker attach is rarely what you want",
+              "body": "Attaching to PID 1 means Ctrl-C can kill the container. Use `docker exec -it` for shells unless you are deliberately attaching to a TUI process."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Graceful stop",
+              "prompt": "Stop a container with a 30-second grace period.",
+              "command": "docker stop --time 30 worker",
+              "expected": "docker stop --time 30 NAME",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Copy out",
+              "prompt": "Copy /etc/nginx/nginx.conf from a container to the current directory.",
+              "command": "docker cp web:/etc/nginx/nginx.conf ./nginx.conf",
+              "expected": "docker cp web:/etc/nginx/nginx.conf ./nginx.conf",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which command creates but does not start?",
+                "options": [
+                  "docker run",
+                  "docker create",
+                  "docker exec",
+                  "docker start"
+                ],
+                "answer": 1,
+                "explain": "create allocates the container; start runs it."
+              },
+              {
+                "question": "How do you run a shell in a running container?",
+                "options": [
+                  "docker attach",
+                  "docker exec -it NAME sh",
+                  "docker start -it",
+                  "docker logs -f"
+                ],
+                "answer": 1,
+                "explain": "exec starts another process."
+              },
+              {
+                "question": "What signal does docker stop send first?",
+                "options": [
+                  "SIGKILL",
+                  "SIGTERM",
+                  "SIGINT",
+                  "SIGHUP"
+                ],
+                "answer": 1,
+                "explain": "It sends SIGTERM, then SIGKILL after the timeout."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "container-lifecycle",
+            "run-exec-logs"
+          ],
+          "tags": [
+            "cli",
+            "containers"
+          ],
+          "commands": [
+            "docker create",
+            "docker start",
+            "docker stop",
+            "docker exec",
+            "docker cp"
+          ],
+          "sources": [
+            {
+              "title": "Container commands",
+              "url": "https://docs.docker.com/reference/cli/docker/container/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "image-system-commands",
+          "title": "Image and system commands",
+          "duration": "10 min",
+          "summary": "Inspect, transfer, clean and measure images without guessing.",
+          "objectives": [
+            "Inspect image metadata and layer history",
+            "Move images with save/load",
+            "Reclaim disk safely"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Inspection before deletion",
+              "body": "`docker image inspect` exposes config, environment, entrypoint, labels and digests. `docker image history` shows the layers and the commands that created them — invaluable for finding accidental secrets or oversized layers."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker image ls --digests\ndocker image inspect nginx:alpine --format '{{.Config.Entrypoint}} {{.Config.Cmd}}'\ndocker image history nginx:alpine\ndocker image save -o nginx.tar nginx:alpine\ndocker image load -i nginx.tar\n\ndocker system df\ndocker image prune -a\ndocker system prune --volumes",
+              "title": null,
+              "output": "TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE\nImages          107       10        101.4GB   61.28GB (60%)",
+              "note": "`docker system prune --volumes` removes unused volumes too. Read the confirmation prompt; it is not recoverable."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Prune is destructive",
+              "body": "`docker system prune -a --volumes` removes every unused image, network, build cache and volume. Back up named volumes first."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Find the entrypoint",
+              "prompt": "Print the Entrypoint and Cmd of redis:7-alpine.",
+              "command": "docker image inspect redis:7-alpine --format '{{.Config.Entrypoint}} / {{.Config.Cmd}}'",
+              "expected": "The inspect output shows the entrypoint and default command.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Measure disk",
+              "prompt": "Show disk usage by images, containers, volumes and build cache.",
+              "command": "docker system df",
+              "expected": "docker system df prints one row per type with reclaimable space.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which command shows the layers of an image?",
+                "options": [
+                  "docker image ls",
+                  "docker image history",
+                  "docker inspect",
+                  "docker diff"
+                ],
+                "answer": 1,
+                "explain": "image history lists layers and their creating commands."
+              },
+              {
+                "question": "How do you move an image to an offline host?",
+                "options": [
+                  "docker push",
+                  "docker save then docker load",
+                  "docker cp",
+                  "docker export"
+                ],
+                "answer": 1,
+                "explain": "save writes a tar archive; load restores it."
+              },
+              {
+                "question": "Which prune removes unused volumes?",
+                "options": [
+                  "docker image prune",
+                  "docker volume prune",
+                  "docker network prune",
+                  "docker builder prune"
+                ],
+                "answer": 1,
+                "explain": "volume prune removes volumes not used by containers."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "image-anatomy",
+            "cleanup-and-pruning"
+          ],
+          "tags": [
+            "cli",
+            "images",
+            "system"
+          ],
+          "commands": [
+            "docker image",
+            "docker system df",
+            "docker image prune"
+          ],
+          "sources": [
+            {
+              "title": "Image commands",
+              "url": "https://docs.docker.com/reference/cli/docker/image/"
+            },
+            {
+              "title": "System commands",
+              "url": "https://docs.docker.com/reference/cli/docker/system/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-fundamentals"
+  ]
+}

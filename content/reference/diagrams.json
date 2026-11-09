@@ -1,0 +1,1096 @@
+{
+  "diagrams": {
+    "docker-architecture": {
+      "title": "Docker architecture",
+      "description": "The CLI talks to the daemon over an API. The daemon stores images and delegates container execution to containerd, shims and runc.",
+      "width": 960,
+      "height": 440,
+      "nodes": [
+        {
+          "id": "client",
+          "label": "Docker CLI",
+          "sub": "docker run / build / ps",
+          "x": 30,
+          "y": 170,
+          "w": 160,
+          "h": 86,
+          "kind": "client",
+          "detail": "Parses commands and calls the Docker API. It is a client, not the engine.",
+          "lesson": "client-server-architecture"
+        },
+        {
+          "id": "daemon",
+          "label": "dockerd",
+          "sub": "API · images · networks · volumes",
+          "x": 260,
+          "y": 170,
+          "w": 190,
+          "h": 86,
+          "kind": "daemon",
+          "detail": "The long-running daemon that owns Docker objects and serves the API.",
+          "lesson": "client-server-architecture"
+        },
+        {
+          "id": "containerd",
+          "label": "containerd",
+          "sub": "container lifecycle",
+          "x": 520,
+          "y": 170,
+          "w": 170,
+          "h": 86,
+          "kind": "runtime",
+          "detail": "Prepares snapshots and delegates execution to an OCI runtime.",
+          "lesson": "daemon-containerd-runc"
+        },
+        {
+          "id": "shim",
+          "label": "containerd-shim",
+          "sub": "supervises the process",
+          "x": 750,
+          "y": 170,
+          "w": 175,
+          "h": 86,
+          "kind": "runtime",
+          "detail": "Keeps the container alive if containerd restarts and reports exit status.",
+          "lesson": "daemon-containerd-runc"
+        },
+        {
+          "id": "registry",
+          "label": "Registry",
+          "sub": "image distribution",
+          "x": 520,
+          "y": 40,
+          "w": 170,
+          "h": 76,
+          "kind": "registry",
+          "detail": "Stores and distributes image manifests and layer blobs.",
+          "lesson": "images-containers-registries"
+        },
+        {
+          "id": "layer",
+          "label": "Image store",
+          "sub": "content-addressed layers",
+          "x": 260,
+          "y": 330,
+          "w": 190,
+          "h": 76,
+          "kind": "image",
+          "detail": "Local layer store. Shared layers are stored once.",
+          "lesson": "image-anatomy"
+        },
+        {
+          "id": "container",
+          "label": "Container process",
+          "sub": "namespaces + cgroups",
+          "x": 750,
+          "y": 330,
+          "w": 175,
+          "h": 76,
+          "kind": "container",
+          "detail": "An isolated process using the host kernel, constrained by cgroups.",
+          "lesson": "namespaces-cgroups"
+        }
+      ],
+      "edges": [
+        {
+          "from": "client",
+          "to": "daemon",
+          "label": "HTTP API",
+          "style": "solid"
+        },
+        {
+          "from": "daemon",
+          "to": "registry",
+          "label": "pull / push",
+          "style": "solid"
+        },
+        {
+          "from": "daemon",
+          "to": "containerd",
+          "label": "gRPC",
+          "style": "solid"
+        },
+        {
+          "from": "containerd",
+          "to": "shim",
+          "label": "start",
+          "style": "solid"
+        },
+        {
+          "from": "shim",
+          "to": "container",
+          "label": "supervise",
+          "style": "solid"
+        },
+        {
+          "from": "daemon",
+          "to": "layer",
+          "label": "store",
+          "style": "solid"
+        }
+      ]
+    },
+    "image-layers": {
+      "title": "Image layers and copy-on-write",
+      "description": "Read-only layers are shared between images. A container adds one writable layer on top.",
+      "width": 960,
+      "height": 460,
+      "nodes": [
+        {
+          "id": "writable",
+          "label": "Writable container layer",
+          "sub": "deleted with the container",
+          "x": 300,
+          "y": 30,
+          "w": 360,
+          "h": 66,
+          "kind": "writable",
+          "detail": "Changes at runtime are written here using copy-on-write. It is not part of the image.",
+          "lesson": "container-lifecycle"
+        },
+        {
+          "id": "app",
+          "label": "Application layer",
+          "sub": "COPY . . / build output",
+          "x": 300,
+          "y": 112,
+          "w": 360,
+          "h": 66,
+          "kind": "layer",
+          "detail": "Your application and build output.",
+          "lesson": "image-anatomy"
+        },
+        {
+          "id": "deps",
+          "label": "Dependency layer",
+          "sub": "npm ci / pip install",
+          "x": 300,
+          "y": 194,
+          "w": 360,
+          "h": 66,
+          "kind": "layer",
+          "detail": "Installed dependencies. Cache this layer independently of source edits.",
+          "lesson": "layer-caching"
+        },
+        {
+          "id": "runtime",
+          "label": "Runtime layer",
+          "sub": "node / python / JRE",
+          "x": 300,
+          "y": 276,
+          "w": 360,
+          "h": 66,
+          "kind": "layer",
+          "detail": "Language runtime and system packages.",
+          "lesson": "image-anatomy"
+        },
+        {
+          "id": "base",
+          "label": "Base layer",
+          "sub": "alpine / debian / distroless",
+          "x": 300,
+          "y": 358,
+          "w": 360,
+          "h": 66,
+          "kind": "base",
+          "detail": "The base image filesystem. Pin its version for reproducibility.",
+          "lesson": "production-dockerfile"
+        },
+        {
+          "id": "image",
+          "label": "Image",
+          "sub": "immutable",
+          "x": 710,
+          "y": 194,
+          "w": 200,
+          "h": 140,
+          "kind": "image",
+          "detail": "The image is the stack of read-only layers plus config metadata.",
+          "lesson": "image-anatomy"
+        }
+      ],
+      "edges": [
+        {
+          "from": "base",
+          "to": "runtime",
+          "label": "FROM",
+          "style": "solid"
+        },
+        {
+          "from": "runtime",
+          "to": "deps",
+          "label": "RUN",
+          "style": "solid"
+        },
+        {
+          "from": "deps",
+          "to": "app",
+          "label": "COPY",
+          "style": "solid"
+        },
+        {
+          "from": "app",
+          "to": "writable",
+          "label": "container start",
+          "style": "dashed"
+        },
+        {
+          "from": "app",
+          "to": "image",
+          "label": "manifest",
+          "style": "dashed"
+        }
+      ]
+    },
+    "container-lifecycle": {
+      "title": "Container lifecycle",
+      "description": "A container is created, runs while PID 1 lives, and remains in the exited state until removed.",
+      "width": 960,
+      "height": 420,
+      "nodes": [
+        {
+          "id": "created",
+          "label": "Created",
+          "sub": "config + writable layer",
+          "x": 30,
+          "y": 160,
+          "w": 150,
+          "h": 82,
+          "kind": "idle",
+          "detail": "docker create allocates the container without starting it.",
+          "lesson": "container-commands"
+        },
+        {
+          "id": "running",
+          "label": "Running",
+          "sub": "PID 1 alive",
+          "x": 230,
+          "y": 160,
+          "w": 150,
+          "h": 82,
+          "kind": "running",
+          "detail": "The main process is running. Exec starts extra processes.",
+          "lesson": "container-lifecycle"
+        },
+        {
+          "id": "paused",
+          "label": "Paused",
+          "sub": "freezer cgroup",
+          "x": 430,
+          "y": 50,
+          "w": 150,
+          "h": 82,
+          "kind": "paused",
+          "detail": "Processes are frozen but state is preserved.",
+          "lesson": "container-lifecycle"
+        },
+        {
+          "id": "restarting",
+          "label": "Restarting",
+          "sub": "policy",
+          "x": 430,
+          "y": 280,
+          "w": 150,
+          "h": 82,
+          "kind": "warning",
+          "detail": "A restart policy is restarting the container.",
+          "lesson": "config-and-resources"
+        },
+        {
+          "id": "exited",
+          "label": "Exited",
+          "sub": "exit code recorded",
+          "x": 630,
+          "y": 160,
+          "w": 150,
+          "h": 82,
+          "kind": "exited",
+          "detail": "PID 1 terminated. The writable layer and name remain.",
+          "lesson": "container-exits"
+        },
+        {
+          "id": "removed",
+          "label": "Removed",
+          "sub": "irreversible",
+          "x": 820,
+          "y": 160,
+          "w": 120,
+          "h": 82,
+          "kind": "removed",
+          "detail": "docker rm deletes the container and its writable layer.",
+          "lesson": "cleanup-and-pruning"
+        }
+      ],
+      "edges": [
+        {
+          "from": "created",
+          "to": "running",
+          "label": "start",
+          "style": "solid"
+        },
+        {
+          "from": "running",
+          "to": "paused",
+          "label": "pause",
+          "style": "solid"
+        },
+        {
+          "from": "paused",
+          "to": "running",
+          "label": "unpause",
+          "style": "solid"
+        },
+        {
+          "from": "running",
+          "to": "restarting",
+          "label": "exit + policy",
+          "style": "solid"
+        },
+        {
+          "from": "restarting",
+          "to": "running",
+          "label": "restart",
+          "style": "solid"
+        },
+        {
+          "from": "running",
+          "to": "exited",
+          "label": "stop / crash",
+          "style": "solid"
+        },
+        {
+          "from": "exited",
+          "to": "running",
+          "label": "start",
+          "style": "solid"
+        },
+        {
+          "from": "exited",
+          "to": "removed",
+          "label": "rm",
+          "style": "solid"
+        }
+      ]
+    },
+    "runtime-stack": {
+      "title": "Runtime stack",
+      "description": "Each layer has a narrow responsibility. Runc is short-lived; the shim supervises the process.",
+      "width": 960,
+      "height": 400,
+      "nodes": [
+        {
+          "id": "cli",
+          "label": "docker CLI",
+          "sub": "client",
+          "x": 40,
+          "y": 150,
+          "w": 140,
+          "h": 80,
+          "kind": "client",
+          "detail": "Sends API requests.",
+          "lesson": "client-server-architecture"
+        },
+        {
+          "id": "dockerd",
+          "label": "dockerd",
+          "sub": "API + orchestration",
+          "x": 230,
+          "y": 150,
+          "w": 160,
+          "h": 80,
+          "kind": "daemon",
+          "detail": "Owns Docker objects.",
+          "lesson": "daemon-containerd-runc"
+        },
+        {
+          "id": "containerd",
+          "label": "containerd",
+          "sub": "lifecycle + images",
+          "x": 440,
+          "y": 150,
+          "w": 160,
+          "h": 80,
+          "kind": "runtime",
+          "detail": "Delegates execution.",
+          "lesson": "daemon-containerd-runc"
+        },
+        {
+          "id": "shim",
+          "label": "shim",
+          "sub": "process supervisor",
+          "x": 650,
+          "y": 150,
+          "w": 150,
+          "h": 80,
+          "kind": "runtime",
+          "detail": "Outlives containerd.",
+          "lesson": "daemon-containerd-runc"
+        },
+        {
+          "id": "runc",
+          "label": "runc",
+          "sub": "creates namespaces/cgroups",
+          "x": 440,
+          "y": 300,
+          "w": 160,
+          "h": 70,
+          "kind": "tool",
+          "detail": "Execs the container process and exits.",
+          "lesson": "namespaces-cgroups"
+        },
+        {
+          "id": "process",
+          "label": "container process",
+          "sub": "PID 1 inside",
+          "x": 760,
+          "y": 300,
+          "w": 160,
+          "h": 70,
+          "kind": "container",
+          "detail": "The application process.",
+          "lesson": "container-lifecycle"
+        }
+      ],
+      "edges": [
+        {
+          "from": "cli",
+          "to": "dockerd",
+          "label": "API",
+          "style": "solid"
+        },
+        {
+          "from": "dockerd",
+          "to": "containerd",
+          "label": "gRPC",
+          "style": "solid"
+        },
+        {
+          "from": "containerd",
+          "to": "shim",
+          "label": "start",
+          "style": "solid"
+        },
+        {
+          "from": "containerd",
+          "to": "runc",
+          "label": "exec",
+          "style": "dashed"
+        },
+        {
+          "from": "runc",
+          "to": "process",
+          "label": "exec",
+          "style": "solid"
+        },
+        {
+          "from": "shim",
+          "to": "process",
+          "label": "supervise",
+          "style": "solid"
+        }
+      ]
+    },
+    "delivery-flow": {
+      "title": "Build, ship, run",
+      "description": "The same immutable image moves through environments. Configuration is injected at runtime.",
+      "width": 960,
+      "height": 400,
+      "nodes": [
+        {
+          "id": "source",
+          "label": "Source + Dockerfile",
+          "sub": "build context",
+          "x": 30,
+          "y": 150,
+          "w": 165,
+          "h": 80,
+          "kind": "source",
+          "detail": "Code, Dockerfile and .dockerignore define the build.",
+          "lesson": "dockerfile-anatomy"
+        },
+        {
+          "id": "build",
+          "label": "Build",
+          "sub": "docker build / buildx",
+          "x": 235,
+          "y": 150,
+          "w": 160,
+          "h": 80,
+          "kind": "build",
+          "detail": "Produces an immutable image.",
+          "lesson": "buildkit-architecture"
+        },
+        {
+          "id": "image",
+          "label": "Image",
+          "sub": "tag + digest",
+          "x": 435,
+          "y": 150,
+          "w": 150,
+          "h": 80,
+          "kind": "image",
+          "detail": "The artifact that is promoted.",
+          "lesson": "push-pull-digests"
+        },
+        {
+          "id": "registry",
+          "label": "Registry",
+          "sub": "distribution",
+          "x": 625,
+          "y": 150,
+          "w": 150,
+          "h": 80,
+          "kind": "registry",
+          "detail": "Stores and serves the image.",
+          "lesson": "registry-auth"
+        },
+        {
+          "id": "run",
+          "label": "Run",
+          "sub": "dev / staging / prod",
+          "x": 815,
+          "y": 150,
+          "w": 115,
+          "h": 80,
+          "kind": "running",
+          "detail": "Containers from the same image in every environment.",
+          "lesson": "production-readiness"
+        },
+        {
+          "id": "config",
+          "label": "Runtime config",
+          "sub": "env · secrets",
+          "x": 625,
+          "y": 300,
+          "w": 150,
+          "h": 60,
+          "kind": "config",
+          "detail": "Configuration is injected at runtime, never rebuilt into the image.",
+          "lesson": "secrets-management"
+        }
+      ],
+      "edges": [
+        {
+          "from": "source",
+          "to": "build",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "build",
+          "to": "image",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "image",
+          "to": "registry",
+          "label": "push",
+          "style": "solid"
+        },
+        {
+          "from": "registry",
+          "to": "run",
+          "label": "pull",
+          "style": "solid"
+        },
+        {
+          "from": "config",
+          "to": "run",
+          "label": "inject",
+          "style": "dashed"
+        }
+      ]
+    },
+    "network-topology": {
+      "title": "Bridge network topology",
+      "description": "Containers attach to a host bridge. User-defined bridges provide embedded DNS and isolation.",
+      "width": 960,
+      "height": 440,
+      "nodes": [
+        {
+          "id": "internet",
+          "label": "Internet",
+          "sub": "external",
+          "x": 40,
+          "y": 170,
+          "w": 140,
+          "h": 80,
+          "kind": "cloud",
+          "detail": "Traffic reaches published ports through host NAT.",
+          "lesson": "ports-and-publishing"
+        },
+        {
+          "id": "host",
+          "label": "Host network",
+          "sub": "eth0 + NAT",
+          "x": 240,
+          "y": 170,
+          "w": 170,
+          "h": 80,
+          "kind": "host",
+          "detail": "The host routes and NATs container traffic.",
+          "lesson": "networking-drivers"
+        },
+        {
+          "id": "bridge",
+          "label": "docker0 / app-net",
+          "sub": "Linux bridge",
+          "x": 480,
+          "y": 170,
+          "w": 190,
+          "h": 80,
+          "kind": "network",
+          "detail": "A virtual switch. User-defined bridges provide DNS.",
+          "lesson": "bridge-dns"
+        },
+        {
+          "id": "api",
+          "label": "api",
+          "sub": "172.20.0.2",
+          "x": 740,
+          "y": 70,
+          "w": 160,
+          "h": 66,
+          "kind": "container",
+          "detail": "Reachable by name on the network.",
+          "lesson": "bridge-dns"
+        },
+        {
+          "id": "db",
+          "label": "db",
+          "sub": "172.20.0.3",
+          "x": 740,
+          "y": 170,
+          "w": 160,
+          "h": 66,
+          "kind": "container",
+          "detail": "Not exposed to the host unless published.",
+          "lesson": "compose-networks-volumes"
+        },
+        {
+          "id": "proxy",
+          "label": "proxy",
+          "sub": "172.20.0.4",
+          "x": 740,
+          "y": 270,
+          "w": 160,
+          "h": 66,
+          "kind": "container",
+          "detail": "Only the proxy publishes 80/443.",
+          "lesson": "project-reverse-proxy"
+        }
+      ],
+      "edges": [
+        {
+          "from": "internet",
+          "to": "host",
+          "label": "443",
+          "style": "solid"
+        },
+        {
+          "from": "host",
+          "to": "bridge",
+          "label": "veth",
+          "style": "solid"
+        },
+        {
+          "from": "bridge",
+          "to": "api",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "bridge",
+          "to": "db",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "bridge",
+          "to": "proxy",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "proxy",
+          "to": "api",
+          "label": "frontend",
+          "style": "dashed"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "label": "backend",
+          "style": "dashed"
+        }
+      ]
+    },
+    "compose-architecture": {
+      "title": "Compose project model",
+      "description": "A Compose file resolves into a project. Resource names are prefixed with the project name.",
+      "width": 960,
+      "height": 430,
+      "nodes": [
+        {
+          "id": "file",
+          "label": "compose.yaml",
+          "sub": "services · networks · volumes",
+          "x": 40,
+          "y": 160,
+          "w": 200,
+          "h": 90,
+          "kind": "source",
+          "detail": "Declarative model, optionally merged with override files.",
+          "lesson": "compose-architecture"
+        },
+        {
+          "id": "cli",
+          "label": "Compose CLI",
+          "sub": "config · up · down",
+          "x": 300,
+          "y": 160,
+          "w": 170,
+          "h": 90,
+          "kind": "client",
+          "detail": "Resolves variables, validates and calls the Docker API.",
+          "lesson": "compose-architecture"
+        },
+        {
+          "id": "project",
+          "label": "Project",
+          "sub": "name: acme",
+          "x": 540,
+          "y": 160,
+          "w": 160,
+          "h": 90,
+          "kind": "daemon",
+          "detail": "The isolation boundary. Resource names are prefixed.",
+          "lesson": "compose-architecture"
+        },
+        {
+          "id": "services",
+          "label": "Services",
+          "sub": "api · db · proxy",
+          "x": 760,
+          "y": 40,
+          "w": 160,
+          "h": 66,
+          "kind": "container",
+          "detail": "Containers with configuration, dependencies and health.",
+          "lesson": "compose-services"
+        },
+        {
+          "id": "networks",
+          "label": "Networks",
+          "sub": "frontend · backend",
+          "x": 760,
+          "y": 130,
+          "w": 160,
+          "h": 66,
+          "kind": "network",
+          "detail": "Project networks and external networks.",
+          "lesson": "compose-networks-volumes"
+        },
+        {
+          "id": "volumes",
+          "label": "Volumes",
+          "sub": "pgdata",
+          "x": 760,
+          "y": 220,
+          "w": 160,
+          "h": 66,
+          "kind": "volume",
+          "detail": "Persistent storage declared by the project.",
+          "lesson": "compose-networks-volumes"
+        },
+        {
+          "id": "secrets",
+          "label": "Secrets / configs",
+          "sub": "/run/secrets",
+          "x": 760,
+          "y": 310,
+          "w": 160,
+          "h": 66,
+          "kind": "config",
+          "detail": "Files mounted at runtime, not baked into images.",
+          "lesson": "compose-environment-secrets"
+        }
+      ],
+      "edges": [
+        {
+          "from": "file",
+          "to": "cli",
+          "label": "parse",
+          "style": "solid"
+        },
+        {
+          "from": "cli",
+          "to": "project",
+          "label": "create",
+          "style": "solid"
+        },
+        {
+          "from": "project",
+          "to": "services",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "project",
+          "to": "networks",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "project",
+          "to": "volumes",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "project",
+          "to": "secrets",
+          "label": "",
+          "style": "solid"
+        }
+      ]
+    },
+    "volume-storage": {
+      "title": "Where container data lives",
+      "description": "The writable layer is disposable. Volumes and bind mounts persist; tmpfs lives in memory.",
+      "width": 960,
+      "height": 430,
+      "nodes": [
+        {
+          "id": "container",
+          "label": "Container",
+          "sub": "process + mounts",
+          "x": 60,
+          "y": 160,
+          "w": 180,
+          "h": 100,
+          "kind": "container",
+          "detail": "Sees mount points as ordinary paths.",
+          "lesson": "storage-and-volumes"
+        },
+        {
+          "id": "writable",
+          "label": "Writable layer",
+          "sub": "deleted with container",
+          "x": 330,
+          "y": 40,
+          "w": 220,
+          "h": 76,
+          "kind": "writable",
+          "detail": "Copied-on-write files. Not persistent.",
+          "lesson": "storage-and-volumes"
+        },
+        {
+          "id": "volume",
+          "label": "Named volume",
+          "sub": "Docker-managed",
+          "x": 330,
+          "y": 150,
+          "w": 220,
+          "h": 76,
+          "kind": "volume",
+          "detail": "Lives under the Docker root, survives containers.",
+          "lesson": "storage-and-volumes"
+        },
+        {
+          "id": "bind",
+          "label": "Bind mount",
+          "sub": "host path",
+          "x": 330,
+          "y": 260,
+          "w": 220,
+          "h": 76,
+          "kind": "host",
+          "detail": "Direct host path. UID/GID and permissions are shared.",
+          "lesson": "bind-mounts"
+        },
+        {
+          "id": "tmpfs",
+          "label": "tmpfs",
+          "sub": "memory only",
+          "x": 330,
+          "y": 350,
+          "w": 220,
+          "h": 60,
+          "kind": "memory",
+          "detail": "RAM-backed, removed on stop. Good for secrets and scratch space.",
+          "lesson": "storage-and-volumes"
+        },
+        {
+          "id": "backup",
+          "label": "Backup",
+          "sub": "tar / pg_dump",
+          "x": 700,
+          "y": 150,
+          "w": 180,
+          "h": 76,
+          "kind": "artifact",
+          "detail": "Back up volumes with a helper container and test restores.",
+          "lesson": "volume-backup"
+        }
+      ],
+      "edges": [
+        {
+          "from": "container",
+          "to": "writable",
+          "label": "ephemeral",
+          "style": "solid"
+        },
+        {
+          "from": "container",
+          "to": "volume",
+          "label": "persist",
+          "style": "solid"
+        },
+        {
+          "from": "container",
+          "to": "bind",
+          "label": "dev / config",
+          "style": "solid"
+        },
+        {
+          "from": "container",
+          "to": "tmpfs",
+          "label": "scratch",
+          "style": "dashed"
+        },
+        {
+          "from": "volume",
+          "to": "backup",
+          "label": "tar",
+          "style": "solid"
+        },
+        {
+          "from": "bind",
+          "to": "backup",
+          "label": "host copy",
+          "style": "dashed"
+        }
+      ]
+    },
+    "build-process": {
+      "title": "BuildKit build pipeline",
+      "description": "The Dockerfile is parsed into a DAG. Independent steps run in parallel and results are content-addressed in the cache.",
+      "width": 960,
+      "height": 420,
+      "nodes": [
+        {
+          "id": "context",
+          "label": "Build context",
+          "sub": ".dockerignore filtered",
+          "x": 30,
+          "y": 150,
+          "w": 170,
+          "h": 80,
+          "kind": "source",
+          "detail": "Files sent to the builder. Smaller is faster.",
+          "lesson": "layer-caching"
+        },
+        {
+          "id": "dockerfile",
+          "label": "Dockerfile",
+          "sub": "instructions",
+          "x": 230,
+          "y": 150,
+          "w": 160,
+          "h": 80,
+          "kind": "source",
+          "detail": "Parsed into build operations.",
+          "lesson": "dockerfile-anatomy"
+        },
+        {
+          "id": "dag",
+          "label": "Build DAG",
+          "sub": "parallel operations",
+          "x": 430,
+          "y": 150,
+          "w": 170,
+          "h": 80,
+          "kind": "build",
+          "detail": "Independent stages can run concurrently.",
+          "lesson": "buildkit-architecture"
+        },
+        {
+          "id": "cache",
+          "label": "Cache store",
+          "sub": "layers + mounts",
+          "x": 430,
+          "y": 300,
+          "w": 170,
+          "h": 70,
+          "kind": "artifact",
+          "detail": "Content-addressed layer cache and persistent cache mounts.",
+          "lesson": "build-cache"
+        },
+        {
+          "id": "image",
+          "label": "Image",
+          "sub": "manifest + config",
+          "x": 650,
+          "y": 150,
+          "w": 150,
+          "h": 80,
+          "kind": "image",
+          "detail": "The final stage output.",
+          "lesson": "image-anatomy"
+        },
+        {
+          "id": "registry",
+          "label": "Registry",
+          "sub": "push / cache",
+          "x": 830,
+          "y": 150,
+          "w": 110,
+          "h": 80,
+          "kind": "registry",
+          "detail": "Multi-platform results are pushed as an index.",
+          "lesson": "multi-platform-bake"
+        }
+      ],
+      "edges": [
+        {
+          "from": "context",
+          "to": "dag",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "dockerfile",
+          "to": "dag",
+          "label": "parse",
+          "style": "solid"
+        },
+        {
+          "from": "dag",
+          "to": "cache",
+          "label": "read/write",
+          "style": "solid"
+        },
+        {
+          "from": "dag",
+          "to": "image",
+          "label": "commit",
+          "style": "solid"
+        },
+        {
+          "from": "image",
+          "to": "registry",
+          "label": "push",
+          "style": "solid"
+        },
+        {
+          "from": "cache",
+          "to": "registry",
+          "label": "cache export",
+          "style": "dashed"
+        }
+      ]
+    }
+  }
+}

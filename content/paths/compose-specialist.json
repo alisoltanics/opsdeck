@@ -1,0 +1,56 @@
+{
+  "id": "compose-specialist",
+  "title": "Docker Compose Specialist",
+  "subtitle": "Model and operate complete multi-container applications",
+  "level": "Intermediate",
+  "duration": "8h 15m",
+  "icon": "boxes",
+  "accent": "violet",
+  "description": "Become fluent in the Compose specification: services, networks, volumes, configuration, health, profiles and production discipline.",
+  "prerequisites": [
+    "docker-beginner"
+  ],
+  "outcomes": [
+    "Design a network topology",
+    "Use secrets and configs correctly",
+    "Write health-aware dependencies",
+    "Deploy a single-host production stack"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "docker-containers",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "docker-networking",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "docker-volumes",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "docker-compose",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "docker-production",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "docker-containers",
+      "docker-networking",
+      "docker-volumes",
+      "docker-compose",
+      "docker-production"
+    ]
+  }
+}

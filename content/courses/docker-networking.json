@@ -1,0 +1,567 @@
+{
+  "id": "docker-networking",
+  "order": 8,
+  "title": "Docker Networking",
+  "subtitle": "Drivers, DNS, isolation and connectivity debugging",
+  "level": "Intermediate",
+  "duration": "1h 45m",
+  "icon": "network",
+  "accent": "cyan",
+  "description": "Networks are where most \"it works on my machine\" bugs live. Learn the drivers, how Docker DNS resolves service names, and how to debug a connection systematically.",
+  "outcomes": [
+    "Select the right network driver",
+    "Create user-defined bridge networks with DNS",
+    "Distinguish publishing from exposing",
+    "Debug connectivity with inspect, exec and logs"
+  ],
+  "modules": [
+    {
+      "id": "network-model",
+      "title": "Network model",
+      "summary": "Drivers and the default topologies.",
+      "lessons": [
+        {
+          "id": "networking-drivers",
+          "title": "Network drivers",
+          "duration": "11 min",
+          "summary": "bridge, host, overlay, macvlan, ipvlan and none: what each is for.",
+          "objectives": [
+            "Match a driver to a use case",
+            "Explain the default bridge",
+            "Know the security implications of host networking"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Bridge is the default",
+              "body": "A bridge network is a virtual switch on the host. Containers get veth pairs and an IP on the bridge. The default `bridge` network exists automatically, but user-defined bridge networks are preferred because they provide automatic DNS resolution by container name.\n\n`host` removes network isolation: the container shares the host stack, so port mappings are ignored and conflicts are immediate. `overlay` spans multiple hosts (Swarm). `macvlan` gives containers real MAC addresses on the physical network. `none` disables networking entirely."
+            },
+            {
+              "type": "diagram",
+              "diagram": "network-topology",
+              "caption": "The host bridge connects containers to each other and, through NAT, to external networks."
+            },
+            {
+              "type": "table",
+              "head": [
+                "Driver",
+                "Use case",
+                "DNS by name"
+              ],
+              "rows": [
+                [
+                  "bridge (default)",
+                  "Simple single-host",
+                  "No (only --link)"
+                ],
+                [
+                  "bridge (user-defined)",
+                  "Most single-host apps",
+                  "Yes"
+                ],
+                [
+                  "host",
+                  "Performance / special networking",
+                  "Host resolver"
+                ],
+                [
+                  "overlay",
+                  "Multi-host Swarm",
+                  "Yes"
+                ],
+                [
+                  "macvlan",
+                  "Legacy apps needing L2 presence",
+                  "External"
+                ],
+                [
+                  "none",
+                  "Fully isolated",
+                  "No"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Host networking bypasses isolation",
+              "body": "A host-network container can bind any host port and reach localhost services. Avoid it unless you need the host stack and understand the blast radius."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Create a user network",
+              "prompt": "Create a bridge network named app-net and inspect its subnet.",
+              "command": "docker network create app-net",
+              "expected": "docker network create app-net; docker network inspect app-net.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Isolate",
+              "prompt": "Run a container with no network and prove it cannot resolve DNS.",
+              "command": "docker run --rm --network none alpine sh -c \"getent hosts example.com || echo isolated\"",
+              "expected": "docker run --rm --network none alpine ping -c1 1.1.1.1 fails.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which network provides DNS by container name?",
+                "options": [
+                  "The default bridge",
+                  "A user-defined bridge",
+                  "none",
+                  "host"
+                ],
+                "answer": 1,
+                "explain": "Embedded DNS works on user-defined networks."
+              },
+              {
+                "question": "Which driver shares the host network stack?",
+                "options": [
+                  "bridge",
+                  "overlay",
+                  "host",
+                  "macvlan"
+                ],
+                "answer": 2,
+                "explain": "Host networking removes the network namespace boundary."
+              },
+              {
+                "question": "Overlay networks are primarily used with…",
+                "options": [
+                  "Single-host Compose",
+                  "Swarm / multi-host",
+                  "macvlan",
+                  "Windows only"
+                ],
+                "answer": 1,
+                "explain": "Overlay spans hosts in a Swarm."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "bridge-dns",
+            "ports-and-publishing",
+            "network-troubleshooting"
+          ],
+          "tags": [
+            "networking"
+          ],
+          "commands": [
+            "docker network create",
+            "docker network ls",
+            "docker network inspect"
+          ],
+          "sources": [
+            {
+              "title": "Docker networking",
+              "url": "https://docs.docker.com/engine/network/"
+            },
+            {
+              "title": "Network drivers",
+              "url": "https://docs.docker.com/engine/network/drivers/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "bridge-dns",
+          "title": "Bridge networks and DNS",
+          "duration": "11 min",
+          "summary": "How service names resolve, why the default bridge behaves differently, and how aliases work.",
+          "objectives": [
+            "Connect containers to a user-defined network",
+            "Resolve services by name and alias",
+            "Understand embedded DNS at 127.0.0.11"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Embedded DNS",
+              "body": "On a user-defined network, Docker runs an embedded DNS server at `127.0.0.11` inside each container. It resolves container names and network aliases to current container IPs. This is what makes `postgres:5432` work in Compose without hard-coded IPs.\n\nOn the default bridge, only IP addresses and `--link` (legacy) work. Always create a user-defined network for multi-container applications."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker network create app-net\ndocker run -d --name db --network app-net postgres:16-alpine \\\n  -e POSTGRES_PASSWORD=secret\ndocker run -d --name api --network app-net my-api:1.0\n\n# from inside api, the name db resolves\ndocker exec api getent hosts db\ndocker exec api node -e \"require('net').connect(5432,'db').on('connect',()=>{console.log('ok');process.exit(0)})\"\n\n# attach an existing container to a second network\ndocker network connect app-net api\ndocker network inspect app-net",
+              "title": null,
+              "output": "172.20.0.2   db\nok",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Aliases let you rename services",
+              "body": "`--network-alias database` adds another DNS name. Compose uses this for service aliases and stable naming."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Name resolution",
+              "prompt": "Create two containers on a user-defined network and resolve one from the other.",
+              "command": null,
+              "expected": "getent hosts SERVICE returns the other container IP.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Alias",
+              "prompt": "Add alias database to a container named db on app-net.",
+              "command": "docker network connect --alias database app-net db",
+              "expected": "docker network connect --alias database app-net db",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What DNS server does Docker run inside user-defined networks?",
+                "options": [
+                  "8.8.8.8",
+                  "127.0.0.11",
+                  "The host resolver",
+                  "CoreDNS in every container"
+                ],
+                "answer": 1,
+                "explain": "Docker embedded DNS listens on 127.0.0.11."
+              },
+              {
+                "question": "Can containers on the default bridge resolve names automatically?",
+                "options": [
+                  "Yes",
+                  "No",
+                  "Only with Compose",
+                  "Only with --dns"
+                ],
+                "answer": 1,
+                "explain": "Default bridge name resolution requires legacy links."
+              },
+              {
+                "question": "What does a network alias do?",
+                "options": [
+                  "Adds a DNS name",
+                  "Publishes a port",
+                  "Creates a subnet",
+                  "Encrypts traffic"
+                ],
+                "answer": 0,
+                "explain": "Aliases are additional names in Docker DNS."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "networking-drivers",
+            "compose-networks-volumes",
+            "network-troubleshooting"
+          ],
+          "tags": [
+            "networking",
+            "dns"
+          ],
+          "commands": [
+            "docker network create",
+            "docker network connect",
+            "docker exec"
+          ],
+          "sources": [
+            {
+              "title": "Bridge networks",
+              "url": "https://docs.docker.com/engine/network/drivers/bridge/"
+            },
+            {
+              "title": "Embedded DNS",
+              "url": "https://docs.docker.com/engine/network/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "user-defined-networks-lab",
+          "title": "Lab: connect two services",
+          "duration": "12 min",
+          "summary": "Build a two-container application network from scratch and prove connectivity both ways.",
+          "objectives": [
+            "Create a network and attach containers",
+            "Verify DNS and TCP connectivity",
+            "Inspect and clean up network resources"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "The scenario",
+              "body": "Run Redis and a client container on a private network. Confirm the client resolves `cache` and can reach port 6379. Then connect the client to a second network and observe the additional interface."
+            },
+            {
+              "type": "steps",
+              "items": [
+                {
+                  "title": "Create the network",
+                  "body": "Create `opsdeck-net` with the bridge driver."
+                },
+                {
+                  "title": "Start Redis",
+                  "body": "Run redis:7-alpine with the name `cache` on that network."
+                },
+                {
+                  "title": "Test DNS and TCP",
+                  "body": "From an alpine client, resolve `cache` and use `nc -z cache 6379`."
+                },
+                {
+                  "title": "Inspect",
+                  "body": "Inspect the network and find both container IPs."
+                },
+                {
+                  "title": "Clean up",
+                  "body": "Remove the containers and the network."
+                }
+              ]
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "docker network create opsdeck-net\ndocker run -d --name cache --network opsdeck-net redis:7-alpine\ndocker run --rm --network opsdeck-net alpine sh -c 'getent hosts cache && nc -z cache 6379 && echo reachable'\ndocker network inspect opsdeck-net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{\"\\n\"}}{{end}}'\ndocker rm -f cache\ndocker network rm opsdeck-net",
+              "title": null,
+              "output": "172.18.0.2   cache\nreachable\ncache 172.18.0.2/16",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "Network cleanup is automatic… eventually",
+              "body": "Removing the last container can leave a user-defined network behind. Remove it explicitly when you are done, or let Compose manage it."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Second network",
+              "prompt": "Connect the running cache container to a second network.",
+              "command": "docker network create other-net && docker network connect other-net cache",
+              "expected": "docker network connect other-net cache",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Clean up",
+              "prompt": "Remove the containers and both networks.",
+              "command": null,
+              "expected": "docker rm -f cache; docker network rm opsdeck-net other-net",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why does cache resolve without --link?",
+                "options": [
+                  "Both containers are on a user-defined network",
+                  "Redis registers with DNS",
+                  "Alpine has a hosts entry",
+                  "Docker Hub provides DNS"
+                ],
+                "answer": 0,
+                "explain": "User-defined networks use Docker embedded DNS."
+              },
+              {
+                "question": "What command tests TCP reachability?",
+                "options": [
+                  "ping",
+                  "nc -z host port",
+                  "curl only",
+                  "dig"
+                ],
+                "answer": 1,
+                "explain": "nc -z attempts a TCP connection without sending data."
+              },
+              {
+                "question": "Where can you find container IPs on a network?",
+                "options": [
+                  "docker ps",
+                  "docker network inspect",
+                  "docker logs",
+                  "docker image inspect"
+                ],
+                "answer": 1,
+                "explain": "Network inspect lists connected containers and addresses."
+              }
+            ]
+          },
+          "lab": {
+            "id": "connect-two-services",
+            "title": "Private network with Redis",
+            "brief": "Use the lab terminal. Redis is on the approved image list and resource limits are applied automatically.",
+            "steps": [
+              {
+                "instruction": "Create the bridge network opsdeck-net.",
+                "command": "docker network create opsdeck-net"
+              },
+              {
+                "instruction": "Run redis:7-alpine as cache on opsdeck-net.",
+                "command": "docker run -d --name cache --network opsdeck-net redis:7-alpine"
+              },
+              {
+                "instruction": "Resolve cache and test port 6379 from alpine.",
+                "command": "docker run --rm --network opsdeck-net alpine sh -c 'getent hosts cache && nc -z cache 6379 && echo reachable'"
+              },
+              {
+                "instruction": "Inspect the network.",
+                "command": "docker network inspect opsdeck-net"
+              },
+              {
+                "instruction": "Remove the container and network.",
+                "command": "docker rm -f cache && docker network rm opsdeck-net"
+              }
+            ]
+          },
+          "related": [
+            "bridge-dns",
+            "network-troubleshooting",
+            "compose-networks-volumes"
+          ],
+          "tags": [
+            "lab",
+            "networking"
+          ],
+          "commands": [
+            "docker network",
+            "docker exec"
+          ],
+          "sources": [
+            {
+              "title": "Networking tutorial",
+              "url": "https://docs.docker.com/network/network-tutorial-standalone/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "network-troubleshooting",
+          "title": "Troubleshooting connectivity",
+          "duration": "12 min",
+          "summary": "A repeatable checklist for \"the container cannot reach the database\".",
+          "objectives": [
+            "Debug DNS, routing and port binding separately",
+            "Read inspect output effectively",
+            "Use temporary debug containers safely"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Separate the layers",
+              "body": "Debug in order: (1) are the containers on the same network? (2) does the name resolve? (3) is the target process listening on the expected interface? (4) is the port published? (5) is a host firewall or proxy interfering? Most incidents are a mismatch in one of these layers, not a Docker bug."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "# 1. Network membership\ndocker inspect api --format '{{json .NetworkSettings.Networks}}'\ndocker network inspect app-net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{\"\\n\"}}{{end}}'\n\n# 2. DNS from inside the client\ndocker exec api getent hosts db\n\n# 3. Is the listener bound correctly?\ndocker exec db sh -c 'netstat -lntp 2>/dev/null || ss -lntp'\n# A process bound to 127.0.0.1 inside the container is NOT reachable by other containers.\n\n# 4. Published port\ndocker port api\ncurl -v http://127.0.0.1:8080/health\n\n# 5. Ephemeral debug container on the same network\ndocker run --rm --network app-net nicolaka/netshoot \\\n  sh -c 'dig db +short; nc -zv db 5432'",
+              "title": null,
+              "output": null,
+              "note": "netshoot is a popular debug image; in restricted environments use alpine with busybox tools instead."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Do not \"fix\" networking with host mode",
+              "body": "Switching to host networking hides the real problem and destroys isolation. Fix DNS, bind addresses, or network membership instead."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Layer checklist",
+              "prompt": "A web container cannot reach db:5432. List the first four checks in order.",
+              "command": null,
+              "expected": "Same network → DNS resolves → listener on 0.0.0.0 → published/port correct.",
+              "hint": null,
+              "solution": null
+            },
+            {
+              "title": "Find the bind address",
+              "prompt": "Inspect a Postgres container and explain why it might listen only on localhost.",
+              "command": null,
+              "expected": "The postgres config listen_addresses may be localhost; set it to * or the container interface.",
+              "hint": null,
+              "solution": null
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "A service listens on 127.0.0.1:5432 inside its container. Can another container reach it?",
+                "options": [
+                  "Yes, via the container IP",
+                  "No, it is bound to loopback",
+                  "Only with host networking",
+                  "Only via published ports"
+                ],
+                "answer": 1,
+                "explain": "Loopback inside the container is not reachable from other namespaces."
+              },
+              {
+                "question": "Which command shows which networks a container is attached to?",
+                "options": [
+                  "docker ps",
+                  "docker inspect",
+                  "docker top",
+                  "docker diff"
+                ],
+                "answer": 1,
+                "explain": "NetworkSettings.Networks lists attachments and IPs."
+              },
+              {
+                "question": "What is the first thing to check for name resolution failures?",
+                "options": [
+                  "The image tag",
+                  "Whether both containers share a user-defined network",
+                  "The Docker version",
+                  "The restart policy"
+                ],
+                "answer": 1,
+                "explain": "Embedded DNS only works on user-defined networks."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "bridge-dns",
+            "ports-and-publishing",
+            "container-exits"
+          ],
+          "tags": [
+            "networking",
+            "troubleshooting"
+          ],
+          "commands": [
+            "docker inspect",
+            "docker exec",
+            "docker port"
+          ],
+          "sources": [
+            {
+              "title": "Network troubleshooting",
+              "url": "https://docs.docker.com/engine/network/"
+            },
+            {
+              "title": "netshoot",
+              "url": "https://docs.docker.com/https://github.com/nicolaka/netshoot"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "docker-containers"
+  ]
+}
