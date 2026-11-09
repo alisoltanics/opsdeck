@@ -258,7 +258,12 @@
             ? U.iconButton({ icon: 'pause', label: 'Pause', attrs: `data-caction="pause" data-cid="${esc(x.id)}"` })
             : U.iconButton({ icon: 'play', label: 'Start', attrs: `data-caction="start" data-cid="${esc(x.id)}"` })}
           ${x.state === 'running' ? U.iconButton({ icon: 'rotate-cw', label: 'Restart', attrs: `data-caction="restart" data-cid="${esc(x.id)}"` }) : ''}
-          ${U.iconButton({ icon: 'terminal', label: 'Logs', attrs: `data-caction="logs" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
+          ${U.iconButton({
+            icon: 'terminal',
+            label: x.state === 'running' ? 'Open shell' : 'Start the container to open a shell',
+            attrs: `data-caction="exec" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"${x.state === 'running' ? '' : ' disabled'}`,
+          })}
+          ${U.iconButton({ icon: 'file-code', label: 'Logs', attrs: `data-caction="logs" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
           ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-caction="remove" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
         </div></td>
       </tr>`;
@@ -338,6 +343,201 @@
       },
     });
     return drawer;
+  }
+
+  function showExec(item) {
+    if (item.state !== 'running') {
+      U.toast('Container is not running', 'warning', { description: 'Start it first to open an interactive shell.' });
+      return;
+    }
+    const short = shortId(item.id, 12);
+    const MAX_OUTPUT = 250000;
+    U.drawer({
+      title: item.name,
+      subtitle: `${short} · docker exec`,
+      eyebrow: 'Container shell',
+      icon: 'terminal',
+      width: '880px',
+      body: `<div class="terminal-shell terminal-drawer" id="exec-shell">
+        <div class="term-head">
+          <div class="term-lights"><i></i><i></i><i></i></div>
+          <span class="term-title" id="exec-title">${esc(item.name)} · starting shell</span>
+          <span id="exec-state">connecting</span>
+        </div>
+        <div class="term-body" id="exec-output">
+          <div class="term-block" id="exec-starting"><div class="meta">${icon('loader', 11)}<span>Starting a shell inside ${esc(item.name)}…</span></div></div>
+        </div>
+        <form class="term-input-row" id="exec-form" autocomplete="off">
+          <span class="p">$</span>
+          <input id="exec-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type a command and press Enter" disabled />
+          <button class="btn btn-sm btn-primary" type="submit" disabled>Run</button>
+        </form>
+        <div class="term-hint">Enter runs inside the container · ↑/↓ history · Ctrl+L clears · closing this panel ends the session</div>
+      </div>`,
+      footer: `<span class="faint text-xs mono">docker exec -it ${esc(short)} bash</span><div class="row gap-2">${learnLink('run-exec-logs', 'Exec and logs lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker exec -it ${esc(short)} bash"` })}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
+      onMount: ({ root, onClose }) => {
+        const output = root.querySelector('#exec-output');
+        const form = root.querySelector('#exec-form');
+        const input = root.querySelector('#exec-input');
+        const runBtn = form.querySelector('button[type="submit"]');
+        const titleEl = root.querySelector('#exec-title');
+        const stateEl = root.querySelector('#exec-state');
+        const starting = root.querySelector('#exec-starting');
+        let sessionId = null;
+        let closed = false;
+        let ended = false;
+        let stick = true;
+        const history = [];
+        let histIndex = 0;
+        const pending = [];
+
+        output.addEventListener('scroll', () => {
+          stick = output.scrollHeight - output.scrollTop - output.clientHeight < 48;
+        });
+
+        const scroll = (force) => { if (force || stick) output.scrollTop = output.scrollHeight; };
+
+        const appendText = (text) => {
+          if (!text) return;
+          let pre = output.lastElementChild;
+          if (!pre || pre.tagName !== 'PRE') {
+            pre = document.createElement('pre');
+            pre.className = 'term-stream';
+            output.appendChild(pre);
+          }
+          pre.appendChild(document.createTextNode(text));
+          while (output.textContent.length > MAX_OUTPUT && output.firstChild) output.removeChild(output.firstChild);
+          scroll();
+        };
+
+        const appendEcho = (command) => {
+          const line = document.createElement('div');
+          line.className = 'term-line';
+          const prompt = document.createElement('span');
+          prompt.className = 'p';
+          prompt.textContent = '$';
+          const cmd = document.createElement('span');
+          cmd.className = 'cmd';
+          cmd.textContent = command;
+          line.append(prompt, cmd);
+          output.appendChild(line);
+          stick = true;
+          scroll();
+        };
+
+        const appendNotice = (text, tone) => {
+          const block = document.createElement('div');
+          block.className = 'term-block';
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          const code = document.createElement('span');
+          code.className = `code ${tone || ''}`.trim();
+          code.textContent = tone === 'error' ? 'error' : 'opsdeck';
+          const message = document.createElement('span');
+          message.textContent = text;
+          meta.append(code, message);
+          block.appendChild(meta);
+          output.appendChild(block);
+          scroll(true);
+        };
+
+        const setRunning = (running) => {
+          input.disabled = !running;
+          runBtn.disabled = !running;
+          if (running) input.focus();
+        };
+
+        const handleExit = (payload) => {
+          if (ended) return;
+          ended = true;
+          setRunning(false);
+          stateEl.textContent = payload.code === 0 ? 'exited' : 'ended';
+          const detail = payload.signal ? `Session closed (${payload.signal}).` : `Session ended with exit code ${payload.code ?? '?'}.`;
+          appendNotice(detail, payload.code === 0 ? 'ok' : 'error');
+        };
+
+        const unsubscribeData = api.events.execData((payload) => {
+          if (!payload) return;
+          if (!sessionId) { pending.push({ type: 'data', payload }); return; }
+          if (payload.sessionId === sessionId) appendText(payload.data);
+        });
+        const unsubscribeExit = api.events.execExit((payload) => {
+          if (!payload) return;
+          if (!sessionId) { pending.push({ type: 'exit', payload }); return; }
+          if (payload.sessionId === sessionId) handleExit(payload);
+        });
+
+        onClose(() => {
+          closed = true;
+          unsubscribeData();
+          unsubscribeExit();
+          if (sessionId && !ended) api.docker.execStop(sessionId);
+        });
+
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!sessionId || ended) return;
+          const command = input.value;
+          input.value = '';
+          if (!command.trim()) return;
+          appendEcho(command);
+          history.push(command);
+          if (history.length > 120) history.shift();
+          histIndex = history.length;
+          const res = await api.docker.execInput(sessionId, `${command}\n`);
+          if (!res.ok && !ended) {
+            ended = true;
+            setRunning(false);
+            appendNotice(res.error || 'The session has ended.', 'error');
+          }
+        });
+
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (!history.length) return;
+            histIndex = Math.max(0, histIndex - 1);
+            input.value = history[histIndex] || '';
+            input.setSelectionRange(input.value.length, input.value.length);
+          } else if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (!history.length) return;
+            histIndex = Math.min(history.length, histIndex + 1);
+            input.value = histIndex >= history.length ? '' : history[histIndex];
+          } else if (event.key.toLowerCase() === 'l' && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            output.innerHTML = '';
+            stick = true;
+          }
+        });
+
+        (async () => {
+          const res = await api.docker.execStart(item.id);
+          if (closed) {
+            if (res.ok) api.docker.execStop(res.sessionId);
+            return;
+          }
+          if (!res.ok) {
+            starting?.remove();
+            ended = true;
+            stateEl.textContent = 'unavailable';
+            appendNotice(res.error || 'Could not open a shell in this container.', 'error');
+            return;
+          }
+          sessionId = res.sessionId;
+          titleEl.textContent = `${item.name} · ${res.shellLabel || res.shell}`;
+          stateEl.textContent = 'connected';
+          starting?.remove();
+          output.innerHTML = '';
+          appendNotice(`Connected with ${res.shellLabel || res.shell}. Commands run inside the container.`, 'ok');
+          for (const entry of pending.splice(0)) {
+            if (entry.type === 'data') appendText(entry.payload.data);
+            else handleExit(entry.payload);
+          }
+          if (!ended) setRunning(true);
+        })();
+      },
+    });
   }
 
   async function showInspect(item) {
@@ -1190,6 +1390,7 @@
         const name = actionBtn.dataset.cname || id;
         const action = actionBtn.dataset.caction;
         const item = items.find((x) => x.id === id) || { id, name, state: '' };
+        if (action === 'exec') { showExec(item); return; }
         if (action === 'logs') { showLogs(item); return; }
         if (action === 'remove') {
           const ok = await U.confirm({ title: `Remove ${name}?`, message: 'The container and its writable layer are deleted. Named volumes are not removed unless you request it.', detail: `docker rm -f ${id}`, confirmLabel: 'Remove container', tone: 'red' });

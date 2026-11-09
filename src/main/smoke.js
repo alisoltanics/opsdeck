@@ -140,6 +140,29 @@ function rendererScript(routes) {
     document.querySelector('[data-action="toggle-sidebar"]')?.click();
     await waitFor(() => app.dataset.collapsed === collapsedBefore, 2500);
 
+    // Container shell: open a real session when Docker has a running container.
+    location.hash = '#/containers';
+    await waitFor(() => !!document.querySelector('#container-tbody'), 8000);
+    const execButton = [...document.querySelectorAll('[data-caction="exec"]')].find((btn) => !btn.disabled);
+    if (execButton) {
+      execButton.click();
+      const ready = await waitFor(() => {
+        const field = document.querySelector('#exec-input');
+        return field && !field.disabled;
+      }, 20000);
+      if (!ready) {
+        failures.push('shell: session never became ready');
+      } else {
+        const field = document.querySelector('#exec-input');
+        field.value = 'echo $((6*7))';
+        document.querySelector('#exec-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        const answered = await waitFor(() => /(^|\\n)42(\\n|$)/.test(document.getElementById('exec-output')?.innerText || ''), 8000);
+        if (!answered) failures.push('shell: command output missing');
+        document.querySelector('.drawer [data-close]')?.click();
+        await sleep(300);
+      }
+    }
+
     // No error toast survived the walk.
     const toastText = document.getElementById('toast-root')?.innerText || '';
     if (/failed|error|could not/i.test(toastText)) failures.push('toasts: ' + toastText.replace(/\\s+/g, ' ').slice(0, 240));

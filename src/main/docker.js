@@ -790,5 +790,5 @@ module.exports = {
   imagesList, imageAction, volumesList, volumeAction, networksList, networkAction,
   composeList, composeConfig, composeAction, pickComposeFile, builds, registries,
   searchRegistry, stats, events, systemDf, terminalRun, commandIndex, commandHelp,
-  parseHelp, invalidate, validId, validName, validProject, runRaw: run,
+  parseHelp, stripAnsi, invalidate, validId, validName, validProject, runRaw: run,
 };

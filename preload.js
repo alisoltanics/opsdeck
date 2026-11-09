@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('opsdeck', {
     inspectContainer: (id) => invoke('docker:container-inspect', id),
     containerLogs: (id, tail) => invoke('docker:container-logs', { id, tail }),
     containerAction: (id, action, options) => invoke('docker:container-action', { id, action, options }),
+    execStart: (id) => invoke('docker:exec-start', { id }),
+    execInput: (sessionId, data) => invoke('docker:exec-input', { sessionId, data }),
+    execStop: (sessionId) => invoke('docker:exec-stop', { sessionId }),
     images: () => invoke('docker:images'),
     imageAction: (id, action, options) => invoke('docker:image-action', { id, action, options }),
     volumes: () => invoke('docker:volumes'),
@@ -76,5 +79,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
   events: {
     docker: (cb) => on('docker:event', cb),
     lab: (cb) => on('lab:event', cb),
+    execData: (cb) => on('docker:exec-data', cb),
+    execExit: (cb) => on('docker:exec-exit', cb),
   },
 });

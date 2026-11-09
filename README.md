@@ -12,7 +12,8 @@ renderer. Docker commands go through `execFile('docker', ...)` — never a shell
 **Docker workspace**
 
 - Overview with engine health, live samples and reclaimable disk
-- Containers: state, ports, CPU/memory, logs, inspect, start/stop/restart/remove
+- Containers: state, ports, CPU/memory, logs, inspect, start/stop/restart/remove, and an
+  in-app shell that streams a live `docker exec` session (bash with automatic sh fallback)
 - Images, volumes and networks with search, filters and safe destructive actions
 - Compose projects: resolved config, logs and lifecycle controls
 - Builds, registries, monitoring, event stream and a validated Docker terminal

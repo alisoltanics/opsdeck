@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 const docker = require('./docker');
+const exec = require('./exec');
 const { ContentService } = require('./content');
 const { AcademyStore } = require('./store');
 const { LabService } = require('./labs');
@@ -22,9 +23,9 @@ function registerIpc({ getWindow, dialog, app }) {
   });
 
   const handle = (channel, fn) => {
-    ipcMain.handle(channel, async (_event, payload) => {
+    ipcMain.handle(channel, async (event, payload) => {
       try {
-        return await fn(payload);
+        return await fn(payload, event);
       } catch (error) {
         console.error(`IPC ${channel}:`, error);
         return { ok: false, error: error.message || 'Unexpected error' };
@@ -71,6 +72,9 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('docker:container-inspect', (id) => docker.inspectContainer(id));
   handle('docker:container-logs', (p) => docker.containerLogs(p?.id, p?.tail));
   handle('docker:container-action', (p) => docker.containerAction(p?.id, p?.action, p?.options));
+  handle('docker:exec-start', (p, event) => exec.start(p?.id, event.sender));
+  handle('docker:exec-input', (p, event) => exec.input(p?.sessionId, p?.data, event.sender.id));
+  handle('docker:exec-stop', (p, event) => exec.stop(p?.sessionId, event.sender.id));
   handle('docker:images', () => docker.imagesList());
   handle('docker:image-action', (p) => docker.imageAction(p?.id, p?.action, p?.options));
   handle('docker:volumes', () => docker.volumesList());
@@ -163,8 +167,11 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('labs:reset', (labId) => labs.reset(labId));
   handle('labs:consent', () => labs.consent());
 
-  // Persist on quit.
-  app.on('before-quit', () => store.persistNow());
+  // Persist state and close container shells on quit.
+  app.on('before-quit', () => {
+    store.persistNow();
+    exec.stopAll();
+  });
 }
 
 module.exports = { registerIpc };
