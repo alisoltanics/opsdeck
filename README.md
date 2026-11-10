@@ -65,14 +65,18 @@ SQLite (`~/.config/OpsDeck/academy.db` on Linux).
 - Configure any OpenAI-compatible chat-completions endpoint in Settings → AI assistant.
   Presets cover DeepSeek, OpenAI, OpenRouter, Ollama and LM Studio; local providers on
   `localhost`/`127.0.0.1` work without a key
+- Or run a locally installed AI CLI instead: OpenCode and Claude Code are supported as
+  transports, reuse the CLI's existing sign-in and model configuration, and never require
+  OpsDeck to store an API key. Settings shows whether the CLI is installed and signed in
 - Suggested questions, Markdown answers, a context preview with source character counts,
   copy and retry, cancellation, and a persistent provider status card
 - The API key is stored in the main process only (`%APPDATA%`/`~/.config/OpsDeck/ai.json`,
   mode `0600` on POSIX) and is never sent to the renderer. Requests run in the main
   process, so the renderer CSP stays `connect-src 'none'`
-- Context is capped, secret-like values are redacted before it leaves the machine, and
-  live logs/labels/Compose files are treated as untrusted data in the system prompt.
-  Nothing is sent until you press Send
+- Context is capped, sensitive keys are omitted (not masked) before it leaves the machine:
+  environment values, secrets, tokens, passwords, credentials, kubeconfig, auth plugins
+  and Secret data are dropped. Live logs/labels/Compose files are treated as untrusted
+  data in the system prompt. Nothing is sent until you press Send
 
 ## Requirements
 

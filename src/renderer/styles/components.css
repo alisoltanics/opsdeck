@@ -1516,6 +1516,12 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 .ai-settings-result.error { color: var(--red); }
 .ai-privacy-note { display: flex; gap: 7px; padding: 10px 11px; border: 1px solid var(--border); background: var(--surface-2); border-radius: var(--r-sm); font-size: 10.5px; line-height: 1.55; color: var(--muted); }
 .ai-privacy-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--violet); }
+.ai-cli-status { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.ai-cli-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ai-cli-detail { display: inline-flex; align-items: center; gap: 6px; font-size: 10.8px; color: var(--muted); line-height: 1.5; }
+.ai-cli-hint { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+.ai-cli-hint svg { flex: 0 0 auto; color: var(--violet); }
+[data-ai-panel][hidden] { display: none; }
 
 @media (max-width: 900px) {
   .ai-suggestions { grid-template-columns: 1fr; }

@@ -12,10 +12,20 @@ const {
   isLoopbackHost,
   normalizeBaseUrl,
   normalizeModel,
+  normalizeTransport,
   apiEndpointCandidates,
   redactSecrets,
+  sanitizeForAI,
+  sanitizeEnvList,
+  pretty,
   apiResponseText,
   stripThinkTags,
+  cleanCliText,
+  parseOpencodeCliOutput,
+  parseClaudeCliOutput,
+  parseOpencodeAuthList,
+  parseClaudeAuthStatus,
+  cliPrompt,
   publicConfig,
 } = __test;
 
@@ -108,4 +118,141 @@ test('reasoning wrappers are stripped from answers', () => {
   assert.equal(stripThinkTags('before<think hidden>secret</think>after'), 'beforeafter');
   assert.equal(stripThinkTags('<thinking>x</thinking>answer'), 'answer');
   assert.equal(stripThinkTags('plain'), 'plain');
+});
+
+test('transports normalize to supported values', () => {
+  assert.equal(normalizeTransport('opencode'), 'opencode');
+  assert.equal(normalizeTransport('claude-code'), 'claude-code');
+  assert.equal(normalizeTransport('API'), 'api');
+  assert.equal(normalizeTransport('unknown'), 'api');
+  assert.equal(normalizeTransport(null), 'api');
+});
+
+test('CLI transports are configured without a stored API key', () => {
+  const config = publicConfig({ enabled: true, transport: 'opencode', model: 'opencode/model', apiKey: 'sk-secret-value' });
+  assert.equal(config.cli, true);
+  assert.equal(config.configured, true);
+  assert.equal(config.transport, 'opencode');
+  assert.equal(config.model, 'opencode/model');
+  assert.equal(config.hasKey, false);
+  assert.ok(!JSON.stringify(config).includes('sk-secret-value'));
+  assert.ok(config.transports.some((item) => item.id === 'claude-code' && item.cli));
+});
+
+test('OpenCode JSON events become plain answer text', () => {
+  const raw = [
+    '{"type":"step_start","sessionID":"ses_1","part":{"type":"step-start"}}',
+    '{"type":"text","sessionID":"ses_1","part":{"text":"First line."}}',
+    '{"type":"text","sessionID":"ses_1","part":{"text":"\\nSecond line."}}',
+    '{"type":"step_finish","sessionID":"ses_1","part":{"cost":0,"tokens":{"input":10,"output":2}}}',
+  ].join('\n');
+  const parsed = parseOpencodeCliOutput(raw);
+  assert.equal(parsed.text, 'First line.\nSecond line.');
+  assert.equal(parsed.sessionId, 'ses_1');
+  assert.deepEqual(parsed.usage, { input: 10, output: 2 });
+  assert.equal(parsed.cost, 0);
+  assert.deepEqual(parsed.errors, []);
+});
+
+test('Claude Code JSON results and sign-in failures are recognized', () => {
+  const ok = parseClaudeCliOutput(JSON.stringify({
+    type: 'result',
+    is_error: false,
+    result: 'All good.',
+    session_id: 'abc',
+    modelUsage: { 'claude-sonnet-4-5': { inputTokens: 3 } },
+    total_cost_usd: 0.001,
+  }));
+  assert.equal(ok.text, 'All good.');
+  assert.equal(ok.model, 'claude-sonnet-4-5');
+  assert.deepEqual(ok.errors, []);
+
+  const denied = parseClaudeCliOutput(JSON.stringify({
+    type: 'result',
+    is_error: true,
+    result: 'Not logged in · Please run /login',
+  }));
+  assert.equal(denied.isError, true);
+  assert.equal(denied.errors[0], 'Not logged in · Please run /login');
+});
+
+test('CLI prompts keep the system rules, history and current question in order', () => {
+  const prompt = cliPrompt([
+    { role: 'system', content: 'RULES' },
+    { role: 'user', content: 'older question' },
+    { role: 'assistant', content: 'older answer' },
+    { role: 'user', content: 'current question' },
+  ]);
+  assert.ok(prompt.startsWith('RULES'));
+  assert.ok(prompt.includes('User: older question'));
+  assert.ok(prompt.includes('Assistant: older answer'));
+  assert.ok(prompt.endsWith('# Current question\ncurrent question'));
+  assert.equal(prompt.includes('User: current question'), false);
+});
+
+test('CLI sign-in reports are parsed without exposing credentials', () => {
+  const providers = parseOpencodeAuthList('OpenCode Console  Default      stored\nOpenCode Console  github       stored\n');
+  assert.equal(providers.length, 2);
+  assert.equal(providers[0].provider, 'OpenCode Console');
+  assert.deepEqual(parseClaudeAuthStatus('{"loggedIn":false,"authMethod":"none"}'), {
+    authenticated: false,
+    method: 'none',
+    provider: '',
+  });
+  assert.equal(parseClaudeAuthStatus('not json'), null);
+  assert.equal(cleanCliText('\u001b[32mhello\u001b[0m\r\n'), 'hello');
+});
+
+test('sensitive object keys and all environment values are omitted for AI context', () => {
+  const sanitized = sanitizeForAI({
+    name: 'web',
+    env: ['DATABASE_URL=postgres://user:secret@db/app', 'NODE_ENV=production', 'PLAIN=value'],
+    token: 'abc123',
+    nested: {
+      password: 'hunter2',
+      image: 'nginx:latest',
+      kubeconfig: 'apiVersion: v1',
+      exec: { command: 'aws', env: { AWS_SECRET_ACCESS_KEY: 'x' } },
+    },
+    kind: 'Secret',
+    data: { password: 'cGFzcw==' },
+    stringData: { password: 'plain' },
+  });
+  assert.equal(sanitized.name, 'web');
+  assert.deepEqual(sanitized.env, [
+    'DATABASE_URL [value omitted]',
+    'NODE_ENV [value omitted]',
+    'PLAIN [value omitted]',
+  ]);
+  assert.equal(sanitized.token, '[omitted]');
+  assert.equal(sanitized.nested.password, '[omitted]');
+  assert.equal(sanitized.nested.image, 'nginx:latest');
+  assert.equal(sanitized.nested.kubeconfig, '[omitted]');
+  assert.equal(sanitized.nested.exec, '[authentication plugin omitted]');
+  assert.equal(sanitized.data, '[secret data omitted]');
+  assert.equal(sanitized.stringData, '[omitted]');
+  const json = JSON.stringify(sanitized);
+  assert.ok(!json.includes('postgres://user:secret@db/app'));
+  assert.ok(!json.includes('hunter2'));
+  assert.ok(!json.includes('cGFzcw=='));
+});
+
+test('environment lists are omitted per value, never sent wholesale', () => {
+  assert.deepEqual(sanitizeEnvList(['A=1', 'B=two words', 'FLAG']), ['A [value omitted]', 'B [value omitted]', 'FLAG [value omitted]']);
+  assert.equal(sanitizeEnvList(null), '[environment omitted]');
+});
+
+test('JSON context is sanitized before it becomes prompt text', () => {
+  const text = pretty({
+    kind: 'Secret',
+    data: { password: 'cGFzcw==' },
+    env: ['API_KEY=sk-live-1234567890abcdef'],
+    image: 'postgres:16',
+    exec: { command: 'aws' },
+  });
+  assert.ok(!text.includes('cGFzcw=='));
+  assert.ok(!text.includes('sk-live-1234567890abcdef'));
+  assert.ok(!text.includes('"aws"'));
+  assert.ok(text.includes('postgres:16'));
+  assert.ok(text.includes('[value omitted]'));
 });

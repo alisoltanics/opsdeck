@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('opsdeck', {
     saveConfig: (payload) => invoke('ai:save-config', payload),
     clearKey: () => invoke('ai:clear-key'),
     test: (payload) => invoke('ai:test', payload),
+    detect: (payload) => invoke('ai:detect', payload),
+    models: (payload) => invoke('ai:models', payload),
     context: (target) => invoke('ai:context', target),
     ask: (payload) => invoke('ai:ask', payload),
     cancel: () => invoke('ai:cancel'),

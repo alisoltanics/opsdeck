@@ -144,6 +144,8 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('ai:save-config', (p) => ai.saveConfig(p || {}));
   handle('ai:clear-key', () => ai.clearKey());
   handle('ai:test', (p) => ai.test(p || {}));
+  handle('ai:detect', (p) => ai.detectCli(p || {}));
+  handle('ai:models', (p) => ai.listCliModels(p || {}));
   handle('ai:context', (p, event) => ai.context(event.sender.id, p || {}));
   handle('ai:ask', (p, event) => ai.ask(event.sender.id, p || {}));
   handle('ai:cancel', (_p, event) => ai.cancel(event.sender.id));

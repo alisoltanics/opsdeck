@@ -11,12 +11,16 @@
  */
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const docker = require('./docker');
 
-const CONFIG_VERSION = 1;
+const CONFIG_VERSION = 2;
 const AI_TIMEOUT_MS = 120000;
+const CLI_TIMEOUT_MS = 180000;
 const TEST_TIMEOUT_MS = 25000;
+const CLI_DETECT_TTL_MS = 15000;
 const MAX_CONTEXT_CHARS = 60000;
 const MAX_QUESTION_CHARS = 8000;
 const MAX_HISTORY_MESSAGES = 12;
@@ -24,6 +28,34 @@ const MAX_HISTORY_CHARS = 28000;
 const MAX_LOG_LINES = 200;
 const CONTEXT_CACHE_MS = 6000;
 const RETRY_DELAYS = [1200, 3000];
+
+const TRANSPORTS = ['api', 'opencode', 'claude-code'];
+const CLI_LABELS = {
+  opencode: 'OpenCode CLI',
+  'claude-code': 'Claude Code CLI',
+};
+const DEFAULT_OPENCODE_MODEL = 'opencode/deepseek-v4.1-flash-free';
+const DEFAULT_CLAUDE_MODEL = 'sonnet';
+const CLI_SPECS = {
+  opencode: {
+    label: CLI_LABELS.opencode,
+    command: 'opencode',
+    versionArgs: ['--version'],
+    authArgs: ['auth', 'list'],
+  },
+  'claude-code': {
+    label: CLI_LABELS['claude-code'],
+    command: 'claude',
+    versionArgs: ['--version'],
+    authArgs: ['auth', 'status'],
+  },
+};
+const DEFAULT_CLI_MODELS = {
+  opencode: DEFAULT_OPENCODE_MODEL,
+  'claude-code': DEFAULT_CLAUDE_MODEL,
+};
+const CLI_MAX_OUTPUT_CHARS = 8 * 1024 * 1024;
+const CLI_MODEL_RE = /^[A-Za-z0-9._:#/@+-]{1,160}$/;
 
 const DEFAULT_MODELS = {
   deepseek: 'deepseek-chat',
@@ -202,22 +234,86 @@ function apiEndpointCandidates(baseUrl, endpoint) {
 
 function redactSecrets(text) {
   let out = String(text ?? '');
-  // Handle auth headers first: the generic rule below would otherwise consume
-  // the word "Bearer" and leave the credential itself behind.
+  // Auth headers first: the generic rule below would otherwise consume the
+  // word "Bearer" and leave the credential itself behind.
   out = out.replace(/\b(authorization\s*:\s*(?:bearer|basic|token)\s+)([^\s"',;]{5,})/gi, '$1••••••••');
+  out = out.replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gi, '[private key omitted]');
+  out = out.replace(/\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|amqps|mssql|https?):\/\/[^/\s:@]+):([^@\s/]+)@/gi, '$1:••••••••@');
+  out = out.replace(/^(\s*(?:token|password|passwd|passphrase|secret|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|client[_-]?secret|client[_-]?key|client-key-data|client-certificate-data|certificate-authority-data|ca[_-]?data|tls[_-]?key|tls[_-]?crt|stringData|auth[_-]?token|refresh[_-]?token|session[_-]?token)\s*:\s*).+$/gim, '$1••••••••');
+  out = out.replace(/(^|\n)([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|AUTH|COOKIE|SESSION)[A-Z0-9_]*\s*=\s*)[^\n]*/g, '$1$2••••••••');
   out = out.replace(/((?:api[_-]?key|secret|token|password|passwd|auth[_-]?token|access[_-]?key|private[_-]?key|client[_-]?secret)\s*["']?\s*[:=]\s*["']?)([^\s"',;]{5,})/gi, '$1••••••••');
   out = out.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{10,}/gi, 'Bearer ••••••••');
   out = out.replace(/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA••••••••');
+  out = out.replace(/\bASIA[0-9A-Z]{16}\b/g, 'ASIA••••••••');
+  out = out.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, 'gh••••••••');
+  out = out.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_••••••••');
+  out = out.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, 'xox••••••••');
+  out = out.replace(/\bsk-(?:ant-)?[A-Za-z0-9_-]{12,}\b/g, 'sk-••••••••');
+  out = out.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, 'AIza••••••••');
   out = out.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '••••••••JWT');
+  return out;
+}
+
+const SENSITIVE_KEY_RE = /(^|[._-])(secret|secrets|token|tokens|password|passwd|passphrase|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|client[_-]?key|credential|credentials|auth|authorization|cookie|cookies|session[_-]?id|bearer|jwt|signature|kubeconfig|client-key-data|client-certificate-data|certificate-authority-data|ca[_-]?data|tls[_-]?key|tls[_-]?crt|stringData|refresh[_-]?token|id[_-]?token|access[_-]?token)([._-]|$)/i;
+const OMIT_KEY_RE = /(last-applied-configuration|managedFields|exec-auth|auth-provider|dockerconfigjson)/i;
+
+function sanitizeEnvList(list) {
+  if (!Array.isArray(list)) return '[environment omitted]';
+  return list.map((entry) => {
+    const text = String(entry ?? '');
+    const index = text.indexOf('=');
+    if (index <= 0) return text ? `${text} [value omitted]` : entry;
+    return `${text.slice(0, index)} [value omitted]`;
+  });
+}
+
+/**
+ * Recursively remove values the assistant never needs. A masked secret is
+ * still a secret-shaped payload, so sensitive keys are dropped entirely.
+ * Environment values are omitted for every variable, not only ones whose name
+ * looks sensitive: a database URL can hide credentials in an innocuous name.
+ */
+function sanitizeForAI(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 12) return '[depth limit]';
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return redactSecrets(value);
+  if (typeof value !== 'object') return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => sanitizeForAI(entry, depth + 1, seen));
+
+  const isSecretObject = /^secret$/i.test(String(value.kind || '')) || /secret/i.test(String(value.kind || ''));
+  const out = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (SENSITIVE_KEY_RE.test(key) || OMIT_KEY_RE.test(key)) {
+      out[key] = '[omitted]';
+      continue;
+    }
+    if (/^env$/i.test(key) && Array.isArray(entry)) {
+      out[key] = sanitizeEnvList(entry);
+      continue;
+    }
+    if (isSecretObject && (/^(data|stringData)$/i.test(key))) {
+      out[key] = '[secret data omitted]';
+      continue;
+    }
+    if (/^(exec|auth-provider)$/i.test(key)) {
+      out[key] = '[authentication plugin omitted]';
+      continue;
+    }
+    out[key] = sanitizeForAI(entry, depth + 1, seen);
+  }
   return out;
 }
 
 function safeString(value, max = 20000) {
   let text;
   try {
-    text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    text = typeof value === 'string'
+      ? redactSecrets(value)
+      : JSON.stringify(sanitizeForAI(value), null, 2);
   } catch {
-    text = String(value);
+    text = redactSecrets(String(value));
   }
   text = redactSecrets(String(text ?? ''));
   return text.length > max ? `${text.slice(0, max)}\n… [truncated]` : text;
@@ -229,7 +325,7 @@ function rows(label, value) {
 }
 
 function pretty(value) {
-  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+  try { return JSON.stringify(sanitizeForAI(value), null, 2); } catch { return redactSecrets(String(value)); }
 }
 
 function delay(ms, signal) {
@@ -289,7 +385,18 @@ function isTransientError(message) {
   return TRANSIENT_RE.test(String(message || ''));
 }
 
+function normalizeTransport(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return TRANSPORTS.includes(text) ? text : 'api';
+}
+
+function isCliTransport(value) {
+  return normalizeTransport(value) !== 'api';
+}
+
 function providerName(config) {
+  const transport = normalizeTransport(config?.transport);
+  if (CLI_LABELS[transport]) return CLI_LABELS[transport];
   const base = String(config?.baseUrl || '');
   if (!base) return 'AI provider';
   try { return new URL(base).hostname || 'AI provider'; } catch { return 'AI provider'; }
@@ -300,6 +407,32 @@ function modelName(config) {
 }
 
 function publicConfig(config) {
+  const transport = normalizeTransport(config.transport);
+  const transports = TRANSPORTS.map((id) => ({
+    id,
+    label: CLI_LABELS[id] || 'OpenAI-compatible API',
+    cli: Boolean(CLI_LABELS[id]),
+    defaultModel: DEFAULT_CLI_MODELS[id] || '',
+  }));
+  if (CLI_LABELS[transport]) {
+    return {
+      enabled: config.enabled !== false,
+      transport,
+      baseUrl: '',
+      model: config.model || DEFAULT_CLI_MODELS[transport] || '',
+      hasKey: false,
+      keyless: true,
+      cli: true,
+      configured: config.enabled !== false,
+      provider: CLI_LABELS[transport],
+      defaultModel: DEFAULT_CLI_MODELS[transport] || '',
+      updatedAt: config.updatedAt || null,
+      presets: PRESETS,
+      transports,
+      maxContextChars: MAX_CONTEXT_CHARS,
+      timeoutSeconds: Math.round(CLI_TIMEOUT_MS / 1000),
+    };
+  }
   const baseUrl = config.baseUrl || '';
   const keyless = !!baseUrl && (() => {
     try { return isLoopbackHost(new URL(baseUrl).hostname); } catch { return false; }
@@ -307,17 +440,128 @@ function publicConfig(config) {
   const hasKey = !!(config.apiKey && String(config.apiKey).trim());
   return {
     enabled: config.enabled !== false,
+    transport: 'api',
     baseUrl,
     model: config.model || '',
     hasKey,
     keyless,
+    cli: false,
     configured: Boolean(baseUrl && config.model && (hasKey || keyless)),
     provider: providerName(config),
+    defaultModel: '',
     updatedAt: config.updatedAt || null,
     presets: PRESETS,
+    transports,
     maxContextChars: MAX_CONTEXT_CHARS,
     timeoutSeconds: Math.round(AI_TIMEOUT_MS / 1000),
   };
+}
+
+function cleanCliText(text) {
+  return docker.stripAnsi(String(text || ''))
+    .replace(/\r\n/g, '\n')
+    .replace(/^\s*>\s*[^\n]*\n/gm, '')
+    .trim();
+}
+
+function parseOpencodeCliOutput(raw) {
+  const answer = [];
+  const errors = [];
+  let sessionId = null;
+  let usage = null;
+  let cost = null;
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text.startsWith('{')) continue;
+    let event;
+    try { event = JSON.parse(text); } catch { continue; }
+    if (event.type === 'text' && event.part && typeof event.part.text === 'string') {
+      answer.push(event.part.text);
+    } else if (event.type === 'step_finish' && event.part) {
+      sessionId = event.sessionID || sessionId;
+      usage = event.part.tokens || usage;
+      if (typeof event.part.cost === 'number') cost = event.part.cost;
+    } else if (event.type === 'error') {
+      const detail = event.error?.data?.message || event.error?.message || event.message;
+      if (detail) errors.push(String(detail));
+    }
+    if (event.sessionID) sessionId = event.sessionID;
+  }
+  return { text: cleanCliText(answer.join('')), errors, sessionId, usage, cost };
+}
+
+function parseClaudeCliOutput(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return { text: '', errors: ['The CLI returned no output.'] };
+  let data = null;
+  try { data = JSON.parse(text); } catch { /* fall back to plain text */ }
+  if (!data || typeof data !== 'object') return { text: cleanCliText(text), errors: [] };
+  const answer = typeof data.result === 'string' ? data.result : '';
+  const errors = data.is_error && answer ? [answer] : [];
+  const model = data.modelUsage && typeof data.modelUsage === 'object'
+    ? Object.keys(data.modelUsage)[0]
+    : null;
+  return {
+    text: cleanCliText(answer),
+    errors,
+    sessionId: data.session_id || null,
+    usage: data.usage || null,
+    cost: typeof data.total_cost_usd === 'number' ? data.total_cost_usd : null,
+    model,
+    isError: data.is_error === true,
+  };
+}
+
+/**
+ * CLI assistants take one prompt instead of a message array. Keep the system
+ * rules first, replay the conversation, and finish with the current question.
+ */
+function cliPrompt(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const system = list.filter((item) => item.role === 'system').map((item) => String(item.content || '')).join('\n\n').trim();
+  const turns = list.filter((item) => item.role !== 'system');
+  const current = turns.length ? turns[turns.length - 1] : null;
+  const history = turns.slice(0, -1);
+  const lines = [];
+  if (system) lines.push(system, '');
+  if (history.length) {
+    lines.push('# Conversation so far');
+    for (const item of history) {
+      const label = item.role === 'assistant' ? 'Assistant' : 'User';
+      lines.push(`${label}: ${String(item.content || '').trim()}`, '');
+    }
+  }
+  lines.push('# Current question');
+  lines.push(current ? String(current.content || '').trim() : 'Summarize the context.');
+  return lines.join('\n');
+}
+
+function parseOpencodeAuthList(raw) {
+  const providers = [];
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text) continue;
+    const cells = text.split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
+    if (cells.length < 2) continue;
+    providers.push({ provider: cells[0], method: cells[1] || '', status: cells[2] || '' });
+  }
+  return providers;
+}
+
+function parseClaudeAuthStatus(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  try {
+    const data = JSON.parse(text);
+    if (!data || typeof data !== 'object') return null;
+    return {
+      authenticated: data.loggedIn === true,
+      method: String(data.authMethod || 'none'),
+      provider: String(data.apiProvider || ''),
+    };
+  } catch {
+    return null;
+  }
 }
 
 class ContextBuilder {
@@ -553,12 +797,15 @@ class AIService {
     this.config = this.loadConfig();
     this.contextCache = new Map();
     this.controllers = new Map();
+    this.cliCache = null;
+    this.cliModelsCache = new Map();
   }
 
   defaultConfig() {
     return {
       version: CONFIG_VERSION,
       enabled: true,
+      transport: 'api',
       baseUrl: '',
       model: '',
       apiKey: '',
@@ -575,6 +822,7 @@ class AIService {
       const config = { ...this.defaultConfig(), ...parsed };
       config.enabled = parsed.enabled !== false;
       config.version = CONFIG_VERSION;
+      config.transport = normalizeTransport(parsed.transport);
       config.baseUrl = typeof parsed.baseUrl === 'string' ? parsed.baseUrl : '';
       config.model = typeof parsed.model === 'string' ? parsed.model : '';
       config.apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey : '';
@@ -602,6 +850,18 @@ class AIService {
   saveConfig(payload = {}) {
     const next = { ...this.config };
     if (Object.prototype.hasOwnProperty.call(payload, 'enabled')) next.enabled = payload.enabled !== false;
+    if (Object.prototype.hasOwnProperty.call(payload, 'transport')) {
+      const oldTransport = normalizeTransport(next.transport);
+      const newTransport = normalizeTransport(payload.transport);
+      if (newTransport !== oldTransport) {
+        const implicit = !next.model
+          || Object.values(DEFAULT_MODELS).includes(next.model)
+          || Object.values(DEFAULT_CLI_MODELS).includes(next.model);
+        next.transport = newTransport;
+        if (implicit) next.model = DEFAULT_CLI_MODELS[newTransport] || '';
+        if (newTransport !== 'api') next.baseUrl = '';
+      }
+    }
     if (Object.prototype.hasOwnProperty.call(payload, 'baseUrl')) {
       const normalized = normalizeBaseUrl(payload.baseUrl);
       if (!normalized.ok) return { ok: false, error: normalized.error };
@@ -625,6 +885,7 @@ class AIService {
       this.writeConfig(next);
       this.config = next;
       this.contextCache.clear();
+      this.cliCache = null;
       return this.publicConfig();
     } catch (error) {
       return { ok: false, error: error.message || 'Could not save the AI configuration.' };
@@ -644,6 +905,9 @@ class AIService {
 
   resolvedConfig(overrides = {}) {
     const config = { ...this.config };
+    if (Object.prototype.hasOwnProperty.call(overrides, 'transport') && overrides.transport) {
+      config.transport = normalizeTransport(overrides.transport);
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'baseUrl') && overrides.baseUrl !== undefined && overrides.baseUrl !== '') {
       config.baseUrl = String(overrides.baseUrl);
     }
@@ -659,6 +923,14 @@ class AIService {
   checkReady(config) {
     const name = providerName(config);
     if (config.enabled === false) return { ok: false, error: 'OpsDeck AI is disabled. Enable it in Settings → AI assistant.' };
+    const transport = normalizeTransport(config.transport);
+    if (isCliTransport(transport)) {
+      const model = String(config.model || DEFAULT_CLI_MODELS[transport] || '');
+      if (model && !CLI_MODEL_RE.test(model)) {
+        return { ok: false, error: 'The model name contains characters OpsDeck will not pass to a command.' };
+      }
+      return { ok: true, name, cli: true, transport, model };
+    }
     const base = normalizeBaseUrl(config.baseUrl);
     if (!base.ok) return { ok: false, error: base.error };
     if (!base.value) return { ok: false, error: 'Add a provider base URL in Settings → AI assistant.' };
@@ -676,6 +948,9 @@ class AIService {
   }
 
   async callProvider(config, messages, { timeout = AI_TIMEOUT_MS, signal = null, maxTokens = null } = {}) {
+    if (isCliTransport(config.transport)) {
+      return this.callCliProvider(config, messages, { timeout, signal });
+    }
     const ready = this.checkReady(config);
     if (!ready.ok) return { ok: false, error: ready.error };
     const urls = apiEndpointCandidates(ready.base, 'chat/completions');
@@ -726,10 +1001,291 @@ class AIService {
     return { ok: false, error: `${ready.name} answered 404 at ${notFound || urls[0]}. Check the base URL, the /v1 suffix and the model name.` };
   }
 
+  cliWorkdir() {
+    const dir = path.join(this.app.getPath('userData'), 'ai-cli');
+    try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { return os.tmpdir(); }
+    return dir;
+  }
+
+  /**
+   * Run a local AI CLI with an argument array, never a shell string. The
+   * question travels over stdin so large contexts do not hit command-line
+   * length limits, and the child is killed when the caller cancels.
+   */
+  spawnCli(transport, args, { input = '', timeout = CLI_TIMEOUT_MS, signal = null } = {}) {
+    const spec = CLI_SPECS[transport];
+    if (!spec) return Promise.resolve({ ok: false, installed: false, error: 'Unknown AI CLI.' });
+    return new Promise((resolve) => {
+      let child;
+      try {
+        child = spawn(spec.command, args, {
+          cwd: this.cliWorkdir(),
+          env: { ...process.env },
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+          shell: process.platform === 'win32',
+        });
+      } catch (error) {
+        resolve({ ok: false, installed: error.code !== 'ENOENT', error: error.message || String(error) });
+        return;
+      }
+
+      let stdout = '';
+      let stderr = '';
+      let bytes = 0;
+      let timedOut = false;
+      let cancelled = false;
+      let finished = false;
+      let killTimer = null;
+
+      const stop = (reason) => {
+        if (finished) return;
+        if (reason === 'timeout') timedOut = true;
+        if (reason === 'cancel') cancelled = true;
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+        killTimer = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        }, 3000);
+        if (killTimer.unref) killTimer.unref();
+      };
+
+      const onAbort = () => stop('cancel');
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const timer = setTimeout(() => stop('timeout'), timeout);
+      const collect = (chunk, target) => {
+        bytes += chunk.length;
+        if (bytes > CLI_MAX_OUTPUT_CHARS) {
+          stop('overflow');
+          return target;
+        }
+        return target + chunk.toString('utf8');
+      };
+
+      child.stdout.on('data', (chunk) => { stdout = collect(chunk, stdout); });
+      child.stderr.on('data', (chunk) => { stderr = collect(chunk, stderr); });
+      child.on('error', (error) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve({
+          ok: false,
+          installed: error.code !== 'ENOENT',
+          error: error.code === 'ENOENT' ? `${spec.command} was not found on PATH.` : (error.message || String(error)),
+        });
+      });
+      child.on('close', (code, signalName) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve({
+          ok: code === 0 && !timedOut && !cancelled,
+          installed: true,
+          code,
+          signal: signalName,
+          stdout,
+          stderr,
+          timedOut,
+          cancelled,
+          error: timedOut
+            ? `${spec.label} timed out after ${Math.round(timeout / 1000)}s.`
+            : '',
+        });
+      });
+
+      try {
+        child.stdin.end(input);
+      } catch { /* the CLI may exit before reading stdin */ }
+    });
+  }
+
+  async probeCli(transport) {
+    const spec = CLI_SPECS[transport];
+    if (!spec) return { installed: false, authenticated: null };
+    const version = await this.spawnCli(transport, spec.versionArgs, { timeout: 8000 });
+    const installed = version.installed !== false && version.ok;
+    if (!installed) {
+      return {
+        id: transport,
+        label: spec.label,
+        command: spec.command,
+        installed: false,
+        authenticated: null,
+        version: '',
+        detail: cleanCliText(version.error || version.stderr) || `${spec.command} was not found on PATH.`,
+      };
+    }
+    const versionText = cleanCliText(version.stdout || version.stderr).split(/\r?\n/)[0] || '';
+    const authRun = await this.spawnCli(transport, spec.authArgs, { timeout: 10000 });
+    let authenticated = null;
+    let authDetail = '';
+    if (transport === 'opencode') {
+      const providers = parseOpencodeAuthList(authRun.stdout);
+      if (authRun.ok || providers.length) {
+        authenticated = providers.length > 0;
+        authDetail = providers.length
+          ? `${providers.length} stored credential${providers.length === 1 ? '' : 's'}`
+          : 'No stored credentials. Run `opencode auth login`.';
+        return { id: transport, label: spec.label, command: spec.command, installed: true, authenticated, version: versionText, detail: authDetail, providers };
+      }
+    } else {
+      const status = parseClaudeAuthStatus(authRun.stdout) || parseClaudeAuthStatus(authRun.stderr);
+      if (status) {
+        authenticated = status.authenticated;
+        authDetail = authenticated ? `Signed in (${status.method})` : 'Not signed in. Run `claude /login`.';
+      } else {
+        authDetail = authRun.ok ? 'Could not read the sign-in status.' : cleanCliText(authRun.stderr) || 'Sign-in status unavailable.';
+      }
+    }
+    return {
+      id: transport,
+      label: spec.label,
+      command: spec.command,
+      installed: true,
+      authenticated,
+      version: versionText,
+      detail: authDetail,
+    };
+  }
+
+  async detectCli({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && this.cliCache && now - this.cliCache.at < CLI_DETECT_TTL_MS) return this.cliCache.value;
+    const tools = {};
+    await Promise.all(Object.keys(CLI_SPECS).map(async (transport) => {
+      tools[transport] = await this.probeCli(transport);
+    }));
+    const value = { ok: true, tools, checkedAt: new Date().toISOString() };
+    this.cliCache = { at: now, value };
+    return value;
+  }
+
+  async listCliModels({ transport = 'opencode', force = false } = {}) {
+    const id = normalizeTransport(transport);
+    if (!CLI_SPECS[id]) {
+      return { ok: false, error: 'Choose OpenCode or Claude Code to list models.' };
+    }
+    const now = Date.now();
+    const hit = this.cliModelsCache.get(id);
+    if (!force && hit && now - hit.at < 60000) return hit.value;
+    if (id === 'claude-code') {
+      const models = ['sonnet', 'opus', 'haiku'];
+      const value = { ok: true, transport: id, models, detail: 'Claude Code model aliases. Exact model IDs also work.' };
+      this.cliModelsCache.set(id, { at: now, value });
+      return value;
+    }
+    const result = await this.spawnCli(id, ['models'], { timeout: 30000 });
+    if (!result.ok) {
+      return { ok: false, error: cleanCliText(result.error || result.stderr) || 'Could not list OpenCode models.' };
+    }
+    const models = cleanCliText(result.stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !/\s/.test(line) && line.includes('/'));
+    const value = {
+      ok: true,
+      transport: id,
+      models: [...new Set(models)].slice(0, 500),
+      detail: models.length ? `${models.length} model${models.length === 1 ? '' : 's'} available` : 'No models reported.',
+    };
+    this.cliModelsCache.set(id, { at: now, value });
+    return value;
+  }
+
+  async callCliProvider(config, messages, { timeout = CLI_TIMEOUT_MS, signal = null } = {}) {
+    const transport = normalizeTransport(config.transport);
+    const spec = CLI_SPECS[transport];
+    const ready = this.checkReady(config);
+    if (!ready.ok) return { ok: false, error: ready.error };
+    const model = String(config.model || DEFAULT_CLI_MODELS[transport] || '');
+    if (model && !CLI_MODEL_RE.test(model)) {
+      return { ok: false, error: 'The model name contains characters OpsDeck will not pass to a command.' };
+    }
+
+    const probe = this.cliCache?.value?.tools?.[transport] || await this.probeCli(transport);
+    if (!probe.installed) {
+      return {
+        ok: false,
+        missingTool: true,
+        error: `${spec.label} is not installed or not on PATH. Install it, or switch the AI transport in Settings → AI assistant.`,
+      };
+    }
+
+    const args = transport === 'opencode'
+      ? ['run', '--standalone', '--agent', 'plan', '--format', 'json', ...(model ? ['--model', model] : []), '--title', 'OpsDeck AI']
+      : ['-p', '--output-format', 'json', '--permission-mode', 'plan', '--restricted', '--strict-mcp-config', ...(model ? ['--model', model] : [])];
+
+    const result = await this.spawnCli(transport, args, { input: cliPrompt(messages), timeout, signal });
+    if (result.cancelled) return { ok: false, error: 'Cancelled', cancelled: true };
+    if (result.timedOut) return { ok: false, error: `${spec.label} timed out after ${Math.round(timeout / 1000)}s.`, timeout: true };
+
+    const parsed = transport === 'opencode'
+      ? parseOpencodeCliOutput(result.stdout)
+      : parseClaudeCliOutput(result.stdout);
+    if (parsed.isError === true || (!parsed.text && parsed.errors.length)) {
+      const detail = redactSecrets(parsed.errors.join(' ') || parsed.text || '').slice(0, 800);
+      const needsAuth = /not logged in|please run\s*\/login|sign in|unauthor|api key|authentication/i.test(detail);
+      return {
+        ok: false,
+        authRequired: needsAuth,
+        error: needsAuth
+          ? `${spec.label} is not signed in. ${transport === 'claude-code' ? 'Run `claude /login` in a terminal, then test again.' : 'Run `opencode auth login` in a terminal, then test again.'}`
+          : `${spec.label} returned an error: ${detail}`,
+      };
+    }
+    if (!result.ok && !parsed.text) {
+      const detail = redactSecrets(cleanCliText(result.stderr) || result.error || `exit code ${result.code}`);
+      return { ok: false, error: `${spec.label} failed: ${detail.slice(0, 800)}` };
+    }
+    if (!parsed.text) return { ok: false, error: `${spec.label} returned an empty answer.` };
+    return {
+      ok: true,
+      text: parsed.text,
+      model: parsed.model || model || 'default',
+      usage: parsed.usage,
+      cost: parsed.cost,
+      sessionId: parsed.sessionId,
+      transport,
+    };
+  }
+
   async test(payload = {}) {
     const config = this.resolvedConfig(payload);
     const ready = this.checkReady(config);
     if (!ready.ok) return { ok: false, error: ready.error };
+    if (isCliTransport(config.transport)) {
+      const detected = await this.detectCli({ force: true });
+      const tool = detected.tools[normalizeTransport(config.transport)];
+      if (!tool?.installed) {
+        return {
+          ok: false,
+          missingTool: true,
+          error: `${tool?.label || 'The AI CLI'} is not installed or not on PATH. Install it, or choose another transport.`,
+        };
+      }
+      const probe = await this.callCliProvider(config, [
+        { role: 'system', content: 'You are a connection test. Reply with the single word OK.' },
+        { role: 'user', content: 'Reply with OK.' },
+      ], { timeout: Math.max(TEST_TIMEOUT_MS, 60000) });
+      if (!probe.ok) return probe;
+      const bits = [`${tool.label} answered`];
+      if (tool.version) bits.push(tool.version);
+      if (tool.authenticated === false) bits.push('sign-in status was reported missing, but the request succeeded');
+      return {
+        ok: true,
+        detail: bits.join(' · '),
+        model: probe.model || config.model,
+        transport: config.transport,
+        cli: true,
+      };
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     try {
@@ -1376,10 +1932,21 @@ module.exports = {
     isLoopbackHost,
     normalizeBaseUrl,
     normalizeModel,
+    normalizeTransport,
     apiEndpointCandidates,
     redactSecrets,
+    sanitizeForAI,
+    sanitizeEnvList,
+    safeString,
+    pretty,
     apiResponseText,
     stripThinkTags,
+    cleanCliText,
+    parseOpencodeCliOutput,
+    parseClaudeCliOutput,
+    parseOpencodeAuthList,
+    parseClaudeAuthStatus,
+    cliPrompt,
     publicConfig,
     formatEngine,
   },

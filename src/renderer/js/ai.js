@@ -170,6 +170,70 @@
     if (noteEl) noteEl.textContent = option.dataset.note || '';
   }
 
+  function transportInfo(config, id) {
+    const transports = Array.isArray(config?.transports) ? config.transports : [];
+    return transports.find((item) => item.id === id)
+      || { id, label: id === 'api' ? 'OpenAI-compatible API' : id, cli: id !== 'api', defaultModel: '' };
+  }
+
+  function transportOptions(config) {
+    const current = config?.transport || 'api';
+    const transports = Array.isArray(config?.transports) && config.transports.length
+      ? config.transports
+      : [{ id: 'api', label: 'OpenAI-compatible API', cli: false }];
+    return transports.map((item) => `<option value="${esc(item.id)}" ${item.id === current ? 'selected' : ''}>${esc(item.label)}${item.cli ? ' · local CLI' : ''}</option>`).join('');
+  }
+
+  function transportNote(config, id) {
+    return transportInfo(config, id).cli
+      ? 'Runs the CLI already configured on this machine. OpsDeck never stores an API key for this transport.'
+      : 'Any OpenAI-compatible chat completions endpoint works. The key stays in the main process.';
+  }
+
+  async function paintCliStatus(scope, transport) {
+    const el = scope.querySelector('[data-ai-cli-status]');
+    if (!el) return;
+    el.innerHTML = `<span class="spinner">${icon('loader', 12)}</span><span class="ai-cli-detail">Checking the local CLI…</span>`;
+    let res;
+    try {
+      res = await api.ai.detect({});
+    } catch (error) {
+      res = { error: error.message || String(error) };
+    }
+    if (!scope.isConnected) return;
+    const tool = res?.tools?.[transport];
+    if (!tool) {
+      el.innerHTML = `<span class="ai-cli-detail">${esc(res?.error || 'Could not inspect the local CLI.')}</span>`;
+      return;
+    }
+    const chips = [tool.installed ? U.badge('Installed', 'green') : U.badge('Not installed', 'red')];
+    if (tool.installed && tool.authenticated === true) chips.push(U.badge('Signed in', 'green'));
+    else if (tool.installed && tool.authenticated === false) chips.push(U.badge('Sign-in required', 'amber'));
+    const version = tool.version ? `<span class="mono text-xs faint">${esc(tool.version)}</span>` : '';
+    const login = transport === 'claude-code' ? 'claude /login' : 'opencode auth login';
+    el.innerHTML = `<div class="ai-cli-row">${chips.join('')}${version}</div>
+      <div class="ai-cli-detail">${esc(tool.detail || '')}</div>
+      ${tool.installed && tool.authenticated === false ? `<div class="ai-cli-hint">${icon('terminal', 11)} Run <code>${esc(login)}</code> in a terminal, then test again.</div>` : ''}`;
+  }
+
+  function applyTransportForm(form, config) {
+    const select = form.querySelector('[data-ai-transport]');
+    const id = select?.value || config?.transport || 'api';
+    const info = transportInfo(config, id);
+    form.querySelectorAll('[data-ai-panel]').forEach((panel) => {
+      panel.hidden = panel.dataset.aiPanel !== (info.cli ? 'cli' : 'api');
+    });
+    const model = form.querySelector('[data-ai-model]');
+    if (model) {
+      model.placeholder = info.cli ? (info.defaultModel || 'CLI default model') : 'deepseek-chat';
+      if (info.cli && !model.value.trim()) model.value = info.defaultModel || '';
+    }
+    const note = form.querySelector('[data-ai-transport-note]');
+    if (note) note.textContent = transportNote(config, id);
+    if (info.cli) paintCliStatus(form, id);
+    return id;
+  }
+
   // ------------------------------------------------------------------ settings card
 
   function settingsCard(config, opts = {}) {
@@ -177,9 +241,10 @@
     const enabled = c.enabled !== false;
     const status = configBadge(c);
     const hasKey = c.hasKey === true;
+    const cli = c.cli === true;
     const detail = c.configured
-      ? `${esc(c.provider || 'Provider')} · ${esc(c.model || 'model')}${c.keyless ? ' · local, keyless' : ''}`
-      : 'Connect an OpenAI-compatible provider to ask questions about live Docker resources.';
+      ? `${esc(c.provider || 'Provider')} · ${esc(c.model || 'default model')}${c.cli ? ' · local CLI' : (c.keyless ? ' · local, keyless' : '')}`
+      : 'Connect an OpenAI-compatible provider or a local AI CLI to ask questions about live resources.';
     return U.card({
       title: 'AI assistant',
       icon: 'sparkles',
@@ -193,25 +258,30 @@
           </div>
           <button type="button" class="btn btn-ai btn-sm" data-ai-open-chat>${icon('sparkles', 13)}<span>Open assistant</span></button>
         </div>
-        <form class="ai-settings-form" id="ai-settings-form" autocomplete="off">
+        <form class="ai-settings-form" autocomplete="off">
           <div class="ai-settings-grid">
-            <label class="field ai-span-2"><span>Provider preset</span><select class="input" id="ai-set-preset">${presetOptions(c)}</select><small id="ai-set-note">${esc(presetNote(c))}</small></label>
-            <label class="field ai-span-2"><span>Base URL</span><input class="input" id="ai-set-base" type="url" placeholder="https://api.deepseek.com/v1" value="${esc(c.baseUrl || '')}" spellcheck="false" /></label>
-            <label class="field"><span>Model</span><input class="input" id="ai-set-model" type="text" placeholder="deepseek-chat" value="${esc(c.model || '')}" spellcheck="false" /></label>
-            <label class="field"><span>API key ${hasKey ? U.badge('saved', 'green') : ''}</span><input class="input" id="ai-set-key" type="password" placeholder="${hasKey ? 'Saved — leave blank to keep it' : 'sk-…'}" autocomplete="off" spellcheck="false" /></label>
+            <label class="field ai-span-2"><span>Transport</span><select class="input" data-ai-transport>${transportOptions(c)}</select><small data-ai-transport-note>${esc(transportNote(c, c.transport || 'api'))}</small></label>
+            <div class="ai-span-2" data-ai-panel="cli" ${cli ? '' : 'hidden'}>
+              <div class="ai-cli-status" data-ai-cli-status></div>
+            </div>
+            <label class="field ai-span-2" data-ai-panel="api" ${cli ? 'hidden' : ''}><span>Provider preset</span><select class="input" id="ai-set-preset">${presetOptions(c)}</select><small id="ai-set-note">${esc(presetNote(c))}</small></label>
+            <label class="field ai-span-2" data-ai-panel="api" ${cli ? 'hidden' : ''}><span>Base URL</span><input class="input" id="ai-set-base" type="url" placeholder="https://api.deepseek.com/v1" value="${esc(c.baseUrl || '')}" spellcheck="false" /></label>
+            <label class="field"><span>Model</span><input class="input" data-ai-model id="ai-set-model" type="text" list="ai-model-options" placeholder="${esc(cli ? (c.defaultModel || 'CLI default model') : 'deepseek-chat')}" value="${esc(c.model || '')}" spellcheck="false" /><datalist id="ai-model-options"></datalist></label>
+            <label class="field" data-ai-panel="api" ${cli ? 'hidden' : ''}><span>API key ${hasKey ? U.badge('saved', 'green') : ''}</span><input class="input" id="ai-set-key" type="password" placeholder="${hasKey ? 'Saved — leave blank to keep it' : 'sk-…'}" autocomplete="off" spellcheck="false" /></label>
           </div>
           <div class="row gap-3" style="align-items:center;flex-wrap:wrap">
             <label class="row gap-2" style="align-items:center"><input type="checkbox" id="ai-set-enabled" ${enabled ? 'checked' : ''} /> <span class="text-sm">Enable OpsDeck AI</span></label>
-            <span class="text-xs faint">${icon('lock', 11)} The key never leaves the main process and is stored with mode 0600.</span>
+            <span class="text-xs faint">${icon('lock', 11)} API keys never leave the main process and are stored with mode 0600.</span>
           </div>
           <div class="ai-settings-actions">
             ${U.button({ label: 'Save settings', icon: 'check', variant: 'primary', size: 'sm', attrs: 'data-ai-save' })}
             ${U.button({ label: 'Test connection', icon: 'activity', variant: 'secondary', size: 'sm', attrs: 'data-ai-test' })}
+            ${U.button({ label: 'Detect models', icon: 'refresh', variant: 'ghost', size: 'sm', attrs: 'data-ai-models data-ai-panel="cli"' })}
             ${hasKey ? U.button({ label: 'Clear key', icon: 'trash', variant: 'ghost', size: 'sm', attrs: 'data-ai-clear-key' }) : ''}
             <span class="ai-settings-result" id="ai-test-result"></span>
           </div>
         </form>
-        <div class="ai-privacy-note">${icon('shield-check', 12)} When you ask a question, OpsDeck collects the selected live resource context in the main process, redacts secret-like values, and sends it to the provider you configured. Nothing is sent until you press Send.</div>
+        <div class="ai-privacy-note">${icon('shield-check', 12)} When you ask a question, OpsDeck builds the selected live context in the main process, omits sensitive keys and environment values instead of masking them, and sends it to the transport you configured. Nothing is sent until you press Send.</div>
       </div>`,
     });
   }
@@ -222,8 +292,8 @@
     const detail = root.querySelector('#ai-card-detail');
     if (detail) {
       detail.textContent = config?.configured
-        ? `${config.provider || 'Provider'} · ${config.model || 'model'}${config.keyless ? ' · local, keyless' : ''}`
-        : 'Connect an OpenAI-compatible provider to ask questions about live Docker resources.';
+        ? `${config.provider || 'Provider'} · ${config.model || 'default model'}${config.cli ? ' · local CLI' : (config.keyless ? ' · local, keyless' : '')}`
+        : 'Connect an OpenAI-compatible provider or a local AI CLI to ask questions about live resources.';
     }
   }
 
@@ -237,21 +307,27 @@
   function mountSettings(root) {
     const card = root.querySelector('[data-ai-settings]');
     if (!card) return;
+    const form = card.querySelector('.ai-settings-form');
+    const transport = card.querySelector('[data-ai-transport]');
     const select = card.querySelector('#ai-set-preset');
     const base = card.querySelector('#ai-set-base');
-    const model = card.querySelector('#ai-set-model');
+    const model = card.querySelector('[data-ai-model]');
     const key = card.querySelector('#ai-set-key');
     const enabled = card.querySelector('#ai-set-enabled');
     const note = card.querySelector('#ai-set-note');
+    const datalist = card.querySelector('#ai-model-options');
 
     select?.addEventListener('change', () => applyPreset(select, base, model, note));
+    transport?.addEventListener('change', () => applyTransportForm(form, state.config));
     root.querySelector('[data-ai-open-chat]')?.addEventListener('click', () => openForCurrent());
+    applyTransportForm(form, state.config);
 
     root.querySelector('[data-ai-save]')?.addEventListener('click', async (event) => {
       event.preventDefault();
       settingsResult(root, '', 'Saving…');
       const res = await api.ai.saveConfig({
         enabled: enabled?.checked !== false,
+        transport: transport?.value || 'api',
         baseUrl: base?.value.trim() || '',
         model: model?.value.trim() || '',
         apiKey: key?.value || '',
@@ -263,6 +339,7 @@
       state.config = res.config;
       if (key) key.value = '';
       settingsStatus(root, res.config);
+      applyTransportForm(form, res.config);
       settingsResult(root, res.config.configured ? 'success' : 'warning', res.config.configured ? 'Saved. The assistant is ready.' : 'Saved. Add a model or API key to finish setup.');
       U.toast('AI settings saved', 'success');
     });
@@ -274,12 +351,35 @@
       settingsResult(root, '', 'Testing the connection…');
       try {
         const res = await api.ai.test({
+          transport: transport?.value || 'api',
           baseUrl: base?.value.trim() || undefined,
           model: model?.value.trim() || undefined,
           apiKey: key?.value || undefined,
         });
-        if (res?.ok) settingsResult(root, 'success', res.detail || 'Connected.');
-        else settingsResult(root, 'error', res?.error || 'The provider did not answer.');
+        if (res?.ok) {
+          settingsResult(root, 'success', res.detail || 'Connected.');
+          if (transport?.value === 'opencode' || transport?.value === 'claude-code') paintCliStatus(form, transport.value);
+        } else {
+          settingsResult(root, 'error', res?.error || 'The provider did not answer.');
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    root.querySelector('[data-ai-models]')?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      const btn = event.currentTarget;
+      btn.disabled = true;
+      settingsResult(root, '', 'Reading models from the CLI…');
+      try {
+        const res = await api.ai.models({ transport: transport?.value || 'opencode', force: true });
+        if (!res?.ok) {
+          settingsResult(root, 'error', res?.error || 'Could not list models.');
+          return;
+        }
+        if (datalist) datalist.innerHTML = (res.models || []).map((item) => `<option value="${esc(item)}"></option>`).join('');
+        settingsResult(root, res.models?.length ? 'success' : 'warning', res.detail || `${res.models?.length || 0} models`);
       } finally {
         btn.disabled = false;
       }
@@ -460,20 +560,25 @@
   function configPromptHtml() {
     const c = state.config || {};
     const hasKey = c.hasKey === true;
+    const cli = c.cli === true;
     return `<div class="ai-config">
-      <div class="ai-config-head"><span class="ai-welcome-icon small">${icon('key', 18)}</span><div><h3>Connect an AI provider</h3><p>Use your own OpenAI-compatible provider. The key stays in the main process; the renderer never receives it.</p></div></div>
+      <div class="ai-config-head"><span class="ai-welcome-icon small">${icon('key', 18)}</span><div><h3>Connect an AI provider</h3><p>Use an OpenAI-compatible API or a local AI CLI. Keys stay in the main process; the renderer never receives them.</p></div></div>
       <form id="ai-drawer-config" class="ai-config-form" autocomplete="off">
-        <label class="field"><span>Provider preset</span><select class="input" id="ai-config-preset">${presetOptions(c)}</select><small id="ai-config-note">${esc(presetNote(c))}</small></label>
-        <label class="field"><span>Base URL</span><input class="input" id="ai-config-base" type="url" placeholder="https://api.deepseek.com/v1" value="${esc(c.baseUrl || '')}" spellcheck="false" /></label>
-        <label class="field"><span>Model</span><input class="input" id="ai-config-model" type="text" placeholder="deepseek-chat" value="${esc(c.model || '')}" spellcheck="false" /></label>
-        <label class="field"><span>API key ${hasKey ? U.badge('saved', 'green') : ''}</span><input class="input" id="ai-config-key" type="password" placeholder="${hasKey ? 'Saved — leave blank to keep it' : 'sk-…'}" autocomplete="off" spellcheck="false" /></label>
+        <label class="field"><span>Transport</span><select class="input" data-ai-transport>${transportOptions(c)}</select><small data-ai-transport-note>${esc(transportNote(c, c.transport || 'api'))}</small></label>
+        <div data-ai-panel="cli" ${cli ? '' : 'hidden'}>
+          <div class="ai-cli-status" data-ai-cli-status></div>
+        </div>
+        <label class="field" data-ai-panel="api" ${cli ? 'hidden' : ''}><span>Provider preset</span><select class="input" id="ai-config-preset">${presetOptions(c)}</select><small id="ai-config-note">${esc(presetNote(c))}</small></label>
+        <label class="field" data-ai-panel="api" ${cli ? 'hidden' : ''}><span>Base URL</span><input class="input" id="ai-config-base" type="url" placeholder="https://api.deepseek.com/v1" value="${esc(c.baseUrl || '')}" spellcheck="false" /></label>
+        <label class="field"><span>Model</span><input class="input" data-ai-model id="ai-config-model" type="text" placeholder="${esc(cli ? (c.defaultModel || 'CLI default model') : 'deepseek-chat')}" value="${esc(c.model || '')}" spellcheck="false" /></label>
+        <label class="field" data-ai-panel="api" ${cli ? 'hidden' : ''}><span>API key ${hasKey ? U.badge('saved', 'green') : ''}</span><input class="input" id="ai-config-key" type="password" placeholder="${hasKey ? 'Saved — leave blank to keep it' : 'sk-…'}" autocomplete="off" spellcheck="false" /></label>
         <label class="row gap-2" style="align-items:center"><input type="checkbox" id="ai-config-enabled" ${c.enabled !== false ? 'checked' : ''} /> <span class="text-sm">Enable OpsDeck AI</span></label>
         <div class="ai-config-error" id="ai-config-error" hidden></div>
         <div class="row gap-2">
           <button type="submit" class="btn btn-primary btn-sm">${icon('check', 13)}<span>Save and test</span></button>
           <button type="button" class="btn btn-ghost btn-sm" data-ai-close>${icon('x', 12)}<span>Not now</span></button>
         </div>
-        <div class="ai-config-foot">${icon('info', 11)} Local providers such as Ollama and LM Studio work without an API key at <span class="mono">localhost</span>.</div>
+        <div class="ai-config-foot">${icon('info', 11)} Local CLIs use their own saved sign-in. Local API providers such as Ollama work without a key at <span class="mono">localhost</span>.</div>
       </form>
     </div>`;
   }
@@ -516,6 +621,8 @@
     if (!chat) return;
     const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
     chat.innerHTML = chatHtml(ctx);
+    const configForm = chat.querySelector('#ai-drawer-config');
+    if (configForm) applyTransportForm(configForm, state.config);
     if (atBottom || ctx.forceScroll) {
       chat.scrollTop = chat.scrollHeight;
       ctx.forceScroll = false;
@@ -756,6 +863,10 @@
       if (event.target.id === 'ai-config-preset') {
         applyPreset(event.target, root.querySelector('#ai-config-base'), root.querySelector('#ai-config-model'), root.querySelector('#ai-config-note'));
       }
+      if (event.target.matches('[data-ai-transport]')) {
+        const form = event.target.closest('form');
+        if (form?.id === 'ai-drawer-config') applyTransportForm(form, state.config);
+      }
     });
 
     root.addEventListener('submit', async (event) => {
@@ -768,11 +879,13 @@
       const model = configForm.querySelector('#ai-config-model');
       const key = configForm.querySelector('#ai-config-key');
       const enabled = configForm.querySelector('#ai-config-enabled');
+      const transport = configForm.querySelector('[data-ai-transport]');
       if (errorEl) { errorEl.hidden = true; errorEl.textContent = ''; }
       if (buttonEl) { buttonEl.disabled = true; buttonEl.innerHTML = `<span class="spinner">${icon('loader', 13)}</span><span>Testing…</span>`; }
       try {
         const saved = await api.ai.saveConfig({
           enabled: enabled?.checked !== false,
+          transport: transport?.value || 'api',
           baseUrl: base?.value.trim() || '',
           model: model?.value.trim() || '',
           apiKey: key?.value || '',
