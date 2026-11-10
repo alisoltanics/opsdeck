@@ -409,7 +409,6 @@
   }
 
   async function showLogs(item) {
-    const tail = { value: 300 };
     const drawer = U.drawer({
       title: item.name,
       subtitle: item.id,
@@ -417,29 +416,59 @@
       icon: 'terminal',
       width: '760px',
       body: `<div class="row gap-2 mb-2"><label class="field" style="width:130px"><span>Tail</span><select class="input" id="log-tail">${[100, 300, 600, 1200].map((n) => `<option value="${n}" ${n === 300 ? 'selected' : ''}>${n} lines</option>`).join('')}</select></label><div class="toolbar-spacer"></div>${U.button({ label: 'Refresh', icon: 'refresh', size: 'sm', attrs: 'data-action="reload-logs"' })}</div>
-        <div class="log-view" id="log-view">${U.loader('Reading logs…')}</div>`,
+        <div class="log-view-wrap">
+          <div class="log-view" id="log-view">${U.loader('Reading logs…')}</div>
+          <button type="button" class="log-latest" data-log-latest>${icon('chevron-down', 12)}<span>Latest</span></button>
+        </div>`,
       footer: `<span class="faint text-xs mono">docker logs --tail 300 --timestamps ${esc(item.id)}</span><div class="row gap-2">${OD.store.lessonById('logs-and-debugging') ? `<a class="btn btn-sm btn-ghost" href="#/academy/lesson/logs-and-debugging">${icon('graduation-cap', 13)}<span>Debugging lesson</span></a>` : ''}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker logs --tail 300 --timestamps ${esc(item.id)}"` })}</div>`,
       onMount: ({ root, close, onClose }) => {
         const view = root.querySelector('#log-view');
         const select = root.querySelector('#log-tail');
+        const latest = root.querySelector('[data-log-latest]');
         let stopped = false;
+        let first = true;
+        let stick = true;
+
+        const atBottom = () => view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+        const syncLatest = () => {
+          stick = atBottom();
+          latest?.classList.toggle('show', !stick);
+        };
+        const jumpToLatest = () => {
+          view.scrollTop = view.scrollHeight;
+          stick = true;
+          latest?.classList.remove('show');
+        };
+
+        view.addEventListener('scroll', syncLatest, { passive: true });
+        latest?.addEventListener('click', jumpToLatest);
         onClose(() => { stopped = true; });
-        const load = async () => {
+
+        const load = async (opts = {}) => {
           if (stopped) return;
-          view.innerHTML = U.loader('Reading logs…');
+          if (first) view.innerHTML = U.loader('Reading logs…');
           const res = await api.docker.containerLogs(item.id, Number(select.value) || 300);
           if (stopped) return;
-          async function refreshLogs() { await load(); }
-          root.querySelector('[data-action="reload-logs"]')?.addEventListener('click', refreshLogs, { once: true });
+          const pinned = opts.forceBottom === true || first || stick;
           const text = [res.stdout, res.stderr].filter(Boolean).join('\n');
           view.innerHTML = text
             ? `<pre>${esc(text)}</pre>`
             : U.empty({ compact: true, icon: 'terminal', title: 'No log output', body: 'The container has not written to stdout or stderr.' });
+          first = false;
+          if (pinned) {
+            jumpToLatest();
+            requestAnimationFrame(jumpToLatest);
+            setTimeout(() => { if (!stopped && stick) jumpToLatest(); }, 90);
+          } else {
+            requestAnimationFrame(syncLatest);
+          }
         };
-        load();
-        select.addEventListener('change', load);
-        const interval = setInterval(load, 6000);
+
+        root.querySelector('[data-action="reload-logs"]')?.addEventListener('click', () => load());
+        select.addEventListener('change', () => load({ forceBottom: true }));
+        const interval = setInterval(() => load(), 6000);
         onClose(() => clearInterval(interval));
+        load();
       },
     });
     return drawer;
@@ -1571,19 +1600,23 @@
     }).join('') + (t.busy ? `<div class="term-block"><div class="meta">${icon('loader', 11)}<span>Running…</span></div></div>` : '');
   }
 
+  function terminalConsentGranted() {
+    return state.terminal.consent === true || OD.store.state.settings?.terminalConsent === true;
+  }
+
   function renderTerminal() {
-    const t = state.terminal;
+    const consent = terminalConsentGranted();
     return `<div class="page">
       ${pageHead({
         eyebrow: 'Docker workspace', iconName: 'terminal', title: 'Terminal',
         sub: 'A constrained Docker console. It is not a host shell: shell operators, pipes and host paths are rejected before execution.',
-        actions: `${U.button({ label: 'Clear', icon: 'trash', variant: 'secondary', attrs: 'data-action="clear-terminal"' })}<span class="badge tone-${t.consent ? 'green' : 'amber'}">${t.consent ? 'Consent granted' : 'Consent required'}</span>`,
+        actions: `${U.button({ label: 'Clear', icon: 'trash', variant: 'secondary', attrs: 'data-action="clear-terminal"' })}<span class="badge tone-${consent ? 'green' : 'amber'}">${consent ? 'Consent granted' : 'Consent required'}</span>`,
       })}
-      ${!t.consent ? `<div id="term-consent">${U.infoBanner('Explicit consent is required', 'Running commands affects your local Docker engine. OpsDeck validates every command, rejects privileged and host-level options, and never uses a shell. Review the command before you run it.', 'warning', U.button({ label: 'Review consent', icon: 'shield-check', size: 'sm', variant: 'primary', attrs: 'data-action="terminal-consent"' }))}</div>` : ''}
+      ${!consent ? `<div id="term-consent">${U.infoBanner('Explicit consent is required', 'Running commands affects your local Docker engine. OpsDeck validates every command, rejects privileged and host-level options, and never uses a shell. Review the command before you run it.', 'warning', U.button({ label: 'Review consent', icon: 'shield-check', size: 'sm', variant: 'primary', attrs: 'data-action="terminal-consent"' }))}</div>` : ''}
       <div class="terminal-shell">
         <div class="term-head"><div class="term-lights"><i></i><i></i><i></i></div><span class="term-title">opsdeck — docker</span><span>${esc(OD.store.state.status?.context || 'default')}</span></div>
         <div class="term-body" id="term-body">${terminalBody()}</div>
-        <form class="term-input-row" id="term-form"><span class="p">$</span><input id="term-input" type="text" autocomplete="off" spellcheck="false" placeholder="docker ps -a" value="${esc(t.pending || '')}" /><button class="btn btn-sm btn-primary" type="submit">Run</button></form>
+        <form class="term-input-row" id="term-form"><span class="p">$</span><input id="term-input" type="text" autocomplete="off" spellcheck="false" placeholder="docker ps -a" value="${esc(state.terminal.pending || '')}" /><button class="btn btn-sm btn-primary" type="submit">Run</button></form>
         <div class="term-hint">↑/↓ history · commands are validated · Docker CLI only</div>
       </div>
       <div class="section-head"><div><div class="section-eyebrow">${icon('zap', 12)}Starters</div><h2 class="section-title">Safe commands</h2></div></div>
@@ -1598,27 +1631,34 @@
       body.innerHTML = terminalBody();
       body.scrollTop = body.scrollHeight;
     }
-    const consent = root.querySelector('#term-consent');
-    if (consent) consent.hidden = state.terminal.consent;
+    const consent = terminalConsentGranted();
+    const consentEl = root.querySelector('#term-consent');
+    if (consentEl) consentEl.hidden = consent;
     const badge = root.querySelector('.page-actions .badge');
     if (badge) {
-      badge.className = `badge tone-${state.terminal.consent ? 'green' : 'amber'}`;
-      badge.textContent = state.terminal.consent ? 'Consent granted' : 'Consent required';
+      badge.className = `badge tone-${consent ? 'green' : 'amber'}`;
+      badge.textContent = consent ? 'Consent granted' : 'Consent required';
     }
     const input = root.querySelector('#term-input');
     if (input && state.terminal.pending) { input.value = state.terminal.pending; state.terminal.pending = null; }
   }
 
   async function ensureTerminalConsent() {
-    if (state.terminal.consent) return true;
+    if (terminalConsentGranted()) {
+      state.terminal.consent = true;
+      return true;
+    }
     const ok = await U.confirm({
       title: 'Run Docker commands',
       message: 'OpsDeck will execute validated Docker CLI commands against your local engine. Commands can create, stop and remove containers and images. You are responsible for what you run.',
-      detail: 'Safety: no shell, no privileged mode, no host networking, no Docker socket mounts, no capability additions.',
+      detail: 'Safety: no shell, no privileged mode, no host networking, no Docker socket mounts, no capability additions. This consent is remembered and not asked again.',
       confirmLabel: 'I understand, continue',
       tone: 'warning',
     });
-    if (ok) state.terminal.consent = true;
+    if (ok) {
+      state.terminal.consent = true;
+      await OD.store.setSetting('terminalConsent', true).catch(() => {});
+    }
     return ok;
   }
 
@@ -2008,7 +2048,7 @@
   function mountBuilds(root) {
     root.addEventListener('click', (event) => {
       if (event.target.closest('[data-action="build-image"]')) {
-        if (!state.terminal.consent) {
+        if (!terminalConsentGranted()) {
           ensureTerminalConsent().then((ok) => { if (ok) openBuildImage(); });
         } else openBuildImage();
       }

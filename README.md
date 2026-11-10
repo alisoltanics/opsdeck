@@ -24,6 +24,8 @@ renderer. Docker commands go through `execFile('docker', ...)` — never a shell
 - Images, volumes and networks with search, filters and safe destructive actions
 - Compose projects: resolved config, logs and lifecycle controls
 - Builds, registries, monitoring, event stream and a validated Docker terminal
+  (safety consent is asked once and remembered across launches)
+- Container logs open pinned to the newest line, with a Latest pill whenever you scroll back
 - Settings for theme, interface scale, motion, transparency, daily goal and progress reset
 - App-wide zoom from 50% to 250%: `Ctrl/Cmd +`, `Ctrl/Cmd −`, `Ctrl/Cmd 0`, `Ctrl/Cmd` + scroll,
   the topbar control, Settings or the command palette; the factor persists between launches

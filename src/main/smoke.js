@@ -225,6 +225,69 @@ function rendererScript(routes) {
       }
     }
 
+    // Container logs open pinned to the newest line, with a jump control.
+    location.hash = '#/containers';
+    await waitFor(() => !!document.querySelector('#container-tbody'), 8000);
+    const logsButton = [...document.querySelectorAll('[data-caction="logs"]')].find((btn) => !btn.disabled);
+    if (logsButton) {
+      logsButton.click();
+      const loaded = await waitFor(() => {
+        const view = document.querySelector('#log-view');
+        return view && (view.querySelector('pre') || view.querySelector('.empty-state'));
+      }, 15000);
+      if (!loaded) {
+        failures.push('logs: log content never loaded');
+      } else {
+        await sleep(150);
+        const view = document.querySelector('#log-view');
+        if (Math.abs(view.scrollHeight - view.scrollTop - view.clientHeight) > 4) {
+          failures.push('logs: view did not open at the newest line');
+        }
+        if (view.scrollHeight > view.clientHeight + 20) {
+          view.scrollTop = 0;
+          view.dispatchEvent(new Event('scroll'));
+          await sleep(120);
+          const latest = document.querySelector('[data-log-latest]');
+          if (!latest?.classList.contains('show')) failures.push('logs: jump-to-latest control did not appear');
+          latest?.click();
+          await sleep(150);
+          if (Math.abs(view.scrollHeight - view.scrollTop - view.clientHeight) > 4) {
+            failures.push('logs: jump-to-latest did not scroll to the newest line');
+          }
+        }
+        document.querySelector('.drawer [data-close]')?.click();
+        await sleep(250);
+      }
+    }
+
+    // Terminal consent is persisted, so it is asked once and then remembered.
+    location.hash = '#/terminal';
+    await waitFor(() => !!document.querySelector('#term-input'), 8000);
+    await window.OD.store.setSetting('terminalConsent', false);
+    location.hash = '#/overview';
+    await waitFor(() => window.OD.store.state.route?.raw === 'overview', 8000);
+    location.hash = '#/terminal';
+    await waitFor(() => !!document.querySelector('#term-consent'), 8000);
+    document.querySelector('[data-action="terminal-consent"]')?.click();
+    const consentModal = await waitFor(() => !!document.querySelector('.modal-overlay [data-action="confirm"]'), 4000);
+    if (!consentModal) {
+      failures.push('consent: review dialog did not open');
+    } else {
+      document.querySelector('.modal-overlay [data-action="confirm"]')?.click();
+      const granted = await waitFor(() => {
+        const banner = document.querySelector('#term-consent');
+        return !banner || banner.hidden;
+      }, 4000);
+      if (!granted) failures.push('consent: banner did not clear after granting');
+      const boot = await window.opsdeck.academy.bootstrap();
+      if (boot?.progress?.settings?.terminalConsent !== true) failures.push('consent: setting was not persisted');
+      location.hash = '#/overview';
+      await waitFor(() => window.OD.store.state.route?.raw === 'overview', 8000);
+      location.hash = '#/terminal';
+      await waitFor(() => window.OD.store.state.route?.raw === 'terminal' && !!document.querySelector('#term-input'), 8000);
+      if (document.querySelector('#term-consent')) failures.push('consent: prompt returned after it was granted');
+    }
+
     // No error toast survived the walk.
     const toastText = document.getElementById('toast-root')?.innerText || '';
     if (/failed|error|could not/i.test(toastText)) failures.push('toasts: ' + toastText.replace(/\\s+/g, ' ').slice(0, 240));
