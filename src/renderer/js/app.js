@@ -58,12 +58,6 @@
         { id: 'kubernetes', section: 'nodes', label: 'Nodes', icon: 'server', href: '#/kubernetes/nodes' },
       ],
     },
-    {
-      label: 'Learn',
-      items: [
-        { id: 'academy', label: 'Academy', icon: 'graduation-cap', href: '#/academy', badge: 'academy' },
-      ],
-    },
   ];
 
   const PAGE_LABELS = {
