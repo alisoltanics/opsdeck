@@ -15,6 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const docker = require('./docker');
+const { RESOURCES } = require('./kubernetes/resources');
 
 const CONFIG_VERSION = 2;
 const AI_TIMEOUT_MS = 120000;
@@ -167,6 +168,18 @@ const SUGGESTIONS = {
     'Summarize the current state and the top three risks.',
     'What read-only command should I run next?',
   ],
+  kubernetes: [
+    'What stands out in this cluster, and what should I investigate first?',
+    'Summarize workload health, warning events and the top three risks.',
+    'Which read-only kubectl command should I run next?',
+    'Explain the difference between the desired and ready replicas I can see.',
+  ],
+  'k8s-resource': [
+    'Is this object healthy? Cite the status, conditions and events.',
+    'What would break if I restarted or deleted this object?',
+    'Review its resource requests, limits and scheduling risk.',
+    'Which kubectl command should I run next to verify this object?',
+  ],
   default: [
     'What stands out in this context?',
     'What should I check next?',
@@ -262,6 +275,10 @@ const OMIT_KEY_RE = /(last-applied-configuration|managedFields|exec-auth|auth-pr
 function sanitizeEnvList(list) {
   if (!Array.isArray(list)) return '[environment omitted]';
   return list.map((entry) => {
+    if (entry && typeof entry === 'object') {
+      const name = String(entry.name ?? entry.key ?? 'env');
+      return `${name} [value omitted]`;
+    }
     const text = String(entry ?? '');
     const index = text.indexOf('=');
     if (index <= 0) return text ? `${text} [value omitted]` : entry;
@@ -306,6 +323,20 @@ function sanitizeForAI(value, depth = 0, seen = new WeakSet()) {
     out[key] = sanitizeForAI(entry, depth + 1, seen);
   }
   return out;
+}
+
+/**
+ * Kubernetes objects can hide credentials in ConfigMap data as well as in
+ * Secret data. Omit both value bags, then run the normal AI sanitizer so env
+ * values and sensitive keys never reach the model.
+ */
+function k8sManifestForAI(value) {
+  const clean = sanitizeForAI(value);
+  if (clean && typeof clean === 'object' && !Array.isArray(clean) && /^(secret|configmap)$/i.test(String(clean.kind || ''))) {
+    if (clean.data !== undefined) clean.data = '[data omitted]';
+    if (clean.stringData !== undefined) clean.stringData = '[data omitted]';
+  }
+  return clean;
 }
 
 function safeString(value, max = 20000) {
@@ -872,9 +903,10 @@ function lessonText(lesson) {
 // ------------------------------------------------------------------ service
 
 class AIService {
-  constructor({ app, content }) {
+  constructor({ app, content, kubernetes = null }) {
     this.app = app;
     this.content = content;
+    this.kubernetes = kubernetes;
     this.configPath = process.env.OPSDECK_AI_CONFIG_PATH || path.join(app.getPath('userData'), 'ai.json');
     this.config = this.loadConfig();
     this.contextCache = new Map();
@@ -1771,14 +1803,28 @@ class AIService {
     let title = String(target.name || target.id || 'OpsDeck');
     let subtitle = '';
     let suggestions = SUGGESTIONS[kind] || SUGGESTIONS.default;
+    const kubernetesContext = kind === 'kubernetes' || kind === 'k8s-resource';
+    let engine = null;
 
-    const engine = await docker.status().catch((error) => ({ available: false, reason: error.message || String(error) }));
-    if (kind !== 'lesson' && kind !== 'course' && kind !== 'academy') {
-      builder.add('Docker engine', formatEngine(engine));
+    if (!kubernetesContext) {
+      engine = await docker.status().catch((error) => ({ available: false, reason: error.message || String(error) }));
+      if (kind !== 'lesson' && kind !== 'course' && kind !== 'academy') {
+        builder.add('Docker engine', formatEngine(engine));
+      }
     }
 
     try {
-      if (kind === 'container') {
+      if (kind === 'kubernetes') {
+        const out = await this.kubernetesContext(target, builder);
+        title = out.title || title;
+        subtitle = out.subtitle || subtitle;
+        suggestions = out.suggestions || SUGGESTIONS.kubernetes;
+      } else if (kind === 'k8s-resource') {
+        const out = await this.kubernetesResourceContext(target, builder);
+        title = out.title || title;
+        subtitle = out.subtitle || subtitle;
+        suggestions = out.suggestions || SUGGESTIONS['k8s-resource'];
+      } else if (kind === 'container') {
         const out = await this.containerContext(target, builder);
         title = out.title || title;
         subtitle = out.subtitle || subtitle;
@@ -1841,7 +1887,7 @@ class AIService {
         chars: text.length,
         truncated: builder.truncated,
         sources: builder.sources,
-        engineAvailable: engine.available !== false,
+        engineAvailable: engine ? engine.available !== false : null,
       },
       suggestions,
     };
@@ -2120,6 +2166,119 @@ class AIService {
     return { title: 'Docker Academy', subtitle: `${lessons.length} lessons · ${(academy.courses || []).length} courses` };
   }
 
+  async kubernetesContext(target, builder) {
+    const page = String(target.page || 'overview');
+    if (!this.kubernetes) {
+      builder.add('Kubernetes', 'The Kubernetes bridge is not available in this build.');
+      return { title: 'Kubernetes', subtitle: 'Bridge unavailable', suggestions: SUGGESTIONS.kubernetes };
+    }
+
+    const data = await this.kubernetes.dashboard();
+    if (!data?.ok) {
+      builder.add('Kubernetes', data?.error || 'Could not read the Kubernetes workspace.');
+      return { title: 'Kubernetes', subtitle: 'Unavailable', suggestions: SUGGESTIONS.kubernetes };
+    }
+
+    const connection = data.connection || {};
+    builder.add('Kubernetes workspace', [
+      rows('Page', page),
+      rows('Context', connection.context || data.selected || 'none'),
+      rows('Namespace', data.namespace || 'default'),
+      rows('Cluster', connection.cluster || 'unknown'),
+      rows('Server', connection.server || 'not connected'),
+      rows('Server version', connection.serverVersion || 'unknown'),
+      rows('Platform', connection.platform || 'unknown'),
+    ].join('\n'));
+
+    if (!connection.connected) {
+      builder.add('Connection state', connection.reason || 'The selected context is not connected.');
+      return { title: 'Kubernetes', subtitle: 'No live cluster connection', suggestions: SUGGESTIONS.kubernetes };
+    }
+
+    const dashboard = data.dashboard || {};
+    builder.add('Cluster summary', [
+      rows('Namespaces', dashboard.namespaceCount ?? 0),
+      rows('Nodes', `${dashboard.nodeSummary?.ready ?? 0} ready / ${dashboard.nodeSummary?.total ?? 0} total`),
+      rows('Pods', `${dashboard.pods?.total ?? 0} total · ${dashboard.pods?.running ?? 0} running · ${dashboard.pods?.pending ?? 0} pending · ${dashboard.pods?.failed ?? 0} failed`),
+      rows('Workloads', `${dashboard.workloads?.deployments ?? 0} deployments · ${dashboard.workloads?.statefulsets ?? 0} statefulsets · ${dashboard.workloads?.daemonsets ?? 0} daemonsets`),
+      rows('Services', dashboard.services ?? 0),
+    ].join('\n'));
+
+    builder.add('Nodes', (dashboard.nodes || []).slice(0, 60).map((node) =>
+      `${node.name} · ready ${node.ready ? 'yes' : 'no'} · roles ${(node.roles || []).join(',') || 'worker'} · version ${node.version || '—'} · CPU ${node.cpu || '—'} · memory ${node.memory || '—'} · pods ${node.pods || '—'}`,
+    ).join('\n') || 'No nodes returned.');
+
+    builder.add('Warning events', (dashboard.warnings || []).slice(-30).map((warning) =>
+      `${warning.namespace || '—'} · ${warning.reason || 'Warning'} · ${warning.kind || 'Object'}/${warning.object || '—'} · ${warning.count || 1}× · ${warning.message || ''}`,
+    ).join('\n') || 'No warning events.');
+
+    if (page === 'contexts') {
+      builder.add('Kubeconfig contexts', (data.contexts || []).map((context) =>
+        `${context.name} · cluster ${context.cluster || '—'} · user ${context.user || '—'} · namespace ${context.namespace || 'default'} · server ${context.server || '—'}`,
+      ).join('\n') || 'No contexts.');
+      builder.add('Selection rule', 'OpsDeck never sends kubeconfig file contents, user credentials, tokens or auth plugin data to the assistant.');
+    } else if (page === 'namespaces') {
+      builder.add('Namespaces', (dashboard.namespaces || []).map((ns) => `${ns.name} · ${ns.status}`).join('\n') || 'No namespaces.');
+    } else if (page === 'helm') {
+      const helm = await this.kubernetes.helmReleases({ allNamespaces: true }).catch((error) => ({ ok: false, error: error.message }));
+      builder.add('Helm releases', helm.ok
+        ? ((helm.rows || []).slice(0, 80).map((row) => row.cells.map((cell) => cell.text).join(' | ')).join('\n') || 'No releases.')
+        : (helm.error || 'Helm is unavailable.'));
+    } else if (RESOURCES[page]) {
+      const list = await this.kubernetes.resources(page, { allNamespaces: true }).catch((error) => ({ ok: false, error: error.message }));
+      if (list.ok) {
+        builder.add(`${list.title} (sanitized)`, (list.rows || []).slice(0, 80).map((row) => row.cells.map((cell) => cell.text).join(' | ')).join('\n') || 'No objects.');
+        if (page === 'secrets') builder.add('Secret policy', 'Only secret names, types and key counts are included. Values and data keys are omitted.');
+      } else {
+        builder.add(`${page} error`, list.error || 'Could not list objects.');
+      }
+    }
+
+    return {
+      title: `Kubernetes · ${RESOURCES[page]?.label || page}`,
+      subtitle: `${connection.context || 'selected context'} · ${data.namespace || 'default'}`,
+      suggestions: SUGGESTIONS.kubernetes,
+    };
+  }
+
+  async kubernetesResourceContext(target, builder) {
+    const section = String(target.section || target.id || '');
+    const name = String(target.name || '');
+    const namespace = String(target.namespace || target.page || '');
+    if (!this.kubernetes) {
+      builder.add('Kubernetes', 'The Kubernetes bridge is not available in this build.');
+      return { title: name || 'Kubernetes object', subtitle: 'Bridge unavailable', suggestions: SUGGESTIONS['k8s-resource'] };
+    }
+    if (!RESOURCES[section] || !name) {
+      builder.add('Kubernetes object', 'The requested object is not part of the supported resource catalog.');
+      return { title: name || 'Kubernetes object', subtitle: 'Unsupported object', suggestions: SUGGESTIONS['k8s-resource'] };
+    }
+
+    const detail = await this.kubernetes.resourceDetail(section, { name, namespace });
+    if (!detail?.ok) {
+      builder.add('Kubernetes object', detail?.error || 'Could not read this object.');
+      return { title: name, subtitle: RESOURCES[section].label, suggestions: SUGGESTIONS['k8s-resource'] };
+    }
+
+    builder.add('Object', [
+      rows('Kind', detail.kind || RESOURCES[section].label),
+      rows('Name', detail.name),
+      rows('Namespace', detail.namespace || 'cluster-scoped'),
+      rows('Context', detail.context || 'selected context'),
+      rows('Created', detail.created || 'unknown'),
+      rows('Available actions', (detail.actions || []).join(', ') || 'read-only'),
+    ].join('\n'));
+    builder.add('Labels', pretty(detail.labels || {}));
+    builder.add('Annotations', pretty(detail.annotations || {}));
+    builder.add('Manifest (sanitized)', pretty(k8sManifestForAI(detail.manifest)));
+    builder.add('Safety', 'Environment values, Secret and ConfigMap data, kubeconfig credentials and auth plugin data are omitted before this context leaves the main process.');
+    return {
+      title: detail.name,
+      subtitle: `${detail.kind || RESOURCES[section].label} · ${detail.namespace || 'cluster-scoped'} · ${detail.context || 'selected context'}`,
+      suggestions: SUGGESTIONS['k8s-resource'],
+    };
+  }
+
   async pageContext(page, builder, engine) {
     const safePage = String(page || 'overview');
     builder.add('Page', `OpsDeck page: ${safePage}`);
@@ -2256,6 +2415,7 @@ module.exports = {
     redactSecrets,
     sanitizeForAI,
     sanitizeEnvList,
+    k8sManifestForAI,
     safeString,
     pretty,
     apiResponseText,

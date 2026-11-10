@@ -15,8 +15,8 @@ const { KubernetesService } = require('./kubernetes');
 
 function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
-  const ai = new AIService({ app, content });
   const kubernetes = new KubernetesService({ app, dialog, getWindow });
+  const ai = new AIService({ app, content, kubernetes });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
     console.error('Academy store failed to initialise:', error);

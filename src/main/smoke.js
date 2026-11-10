@@ -171,6 +171,10 @@ function rendererScript(routes) {
     if (document.querySelector('#sidebar a[href="#/academy"]')) failures.push('workspace: Docker Academy leaked into the Kubernetes sidebar');
     if (!document.querySelector('[data-k8s-install-panel]')) failures.push('kubernetes: tools installer panel is missing');
     if (!document.querySelector('[data-k8s-install-status]')) failures.push('kubernetes: tools installer status area is missing');
+    if (!document.querySelector('#view [data-ai-ask="kubernetes"]')) failures.push('kubernetes: Ask AI button is missing');
+    const k8sAiContext = await window.opsdeck.ai.context({ kind: 'kubernetes', page: 'overview' });
+    if (!k8sAiContext?.ok || !k8sAiContext.context?.text) failures.push('kubernetes: AI context was empty');
+    else if (/## Docker engine/.test(k8sAiContext.context.text)) failures.push('kubernetes: AI context leaked Docker engine data');
     const installStatus = await window.opsdeck.kubernetes.installStatus();
     if (!installStatus?.ok || !installStatus.binDir) failures.push('kubernetes: install status bridge failed');
     const k8sTools = await window.opsdeck.kubernetes.tools();
@@ -203,6 +207,9 @@ function rendererScript(routes) {
           else {
             const drawer = document.querySelector('.drawer-overlay');
             if (!drawer.querySelector('.detail-section') || !drawer.querySelector('.tab')) failures.push('kubernetes: detail drawer is incomplete');
+            if (!drawer.querySelector('[data-ai-ask="k8s-resource"]')) failures.push('kubernetes: object Ask AI button is missing');
+            const objectAi = await window.opsdeck.ai.context({ kind: 'k8s-resource', section: 'pods', name: first.name, namespace: first.namespace });
+            if (!objectAi?.ok || !objectAi.context?.text?.includes(first.name)) failures.push('kubernetes: object AI context is incomplete');
             const manifestTab = drawer.querySelector('[data-tabs="k8s-detail"] [data-tab="manifest"]');
             manifestTab?.click();
             if (!(await waitFor(() => !!drawer.querySelector('.code-block'), 2000))) failures.push('kubernetes: manifest tab did not render');

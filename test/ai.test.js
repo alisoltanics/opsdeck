@@ -20,6 +20,7 @@ const {
   redactSecrets,
   sanitizeForAI,
   sanitizeEnvList,
+  k8sManifestForAI,
   pretty,
   apiResponseText,
   stripThinkTags,
@@ -324,4 +325,187 @@ test('JSON context is sanitized before it becomes prompt text', () => {
   assert.ok(!text.includes('"aws"'));
   assert.ok(text.includes('postgres:16'));
   assert.ok(text.includes('[value omitted]'));
+});
+
+test('kubernetes manifests omit ConfigMap and Secret value bags and env values', () => {
+  const secret = k8sManifestForAI({
+    kind: 'Secret',
+    data: { password: 'c2VjcmV0' },
+    stringData: { token: 'plain-text-secret' },
+  });
+  assert.equal(secret.data, '[data omitted]');
+  assert.equal(secret.stringData, '[data omitted]');
+  assert.ok(!JSON.stringify(secret).includes('c2VjcmV0'));
+  assert.ok(!JSON.stringify(secret).includes('plain-text-secret'));
+
+  const config = k8sManifestForAI({
+    kind: 'ConfigMap',
+    data: { DATABASE_URL: 'postgres://user:secret@db/app' },
+  });
+  assert.equal(config.data, '[data omitted]');
+  assert.ok(!JSON.stringify(config).includes('postgres://user:secret@db/app'));
+
+  const deployment = k8sManifestForAI({
+    kind: 'Deployment',
+    spec: {
+      template: {
+        spec: {
+          containers: [{
+            name: 'web',
+            env: [
+              { name: 'DATABASE_URL', value: 'postgres://user:secret@db/app' },
+              { name: 'API_KEY', value: 'sk-live-1234567890abcdef' },
+              { name: 'FROM_SECRET', valueFrom: { secretKeyRef: { name: 'db', key: 'password' } } },
+            ],
+          }],
+        },
+      },
+    },
+  });
+  const json = JSON.stringify(deployment);
+  assert.ok(!json.includes('postgres://user:secret@db/app'));
+  assert.ok(!json.includes('sk-live-1234567890abcdef'));
+  assert.ok(json.includes('DATABASE_URL [value omitted]'));
+  assert.ok(json.includes('FROM_SECRET [value omitted]'));
+});
+
+test('kubernetes AI context is live, sanitized and excludes Docker and kubeconfig data', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opsdeck-ai-k8s-'));
+  const kubeconfigValue = 'apiVersion: v1\nusers:\n- name: ops\n  user:\n    client-key-data: c2VjcmV0LWtleQ==';
+  const fakeKubernetes = {
+    async dashboard() {
+      return {
+        ok: true,
+        namespace: 'default',
+        selected: 'kind-test',
+        connection: {
+          connected: true,
+          context: 'kind-test',
+          cluster: 'kind-test',
+          server: 'https://127.0.0.1:6443',
+          serverVersion: 'v1.37.0',
+          platform: 'linux/amd64',
+          kubeconfig: kubeconfigValue,
+          token: 'should-never-be-sent',
+        },
+        dashboard: {
+          namespaceCount: 2,
+          nodeSummary: { ready: 1, total: 1 },
+          pods: { total: 2, running: 1, pending: 1, failed: 0 },
+          workloads: { deployments: 1, statefulsets: 0, daemonsets: 0 },
+          services: 1,
+          nodes: [{ name: 'kind-control-plane', ready: true, roles: ['control-plane'], version: 'v1.37.0', cpu: '8', memory: '16Gi', pods: '110' }],
+          warnings: [{ namespace: 'default', reason: 'FailedScheduling', kind: 'Pod', object: 'web-1', count: 3, message: '0/1 nodes are available' }],
+          namespaces: [{ name: 'default', status: 'Active' }],
+        },
+        contexts: [{
+          name: 'kind-test',
+          cluster: 'kind-test',
+          user: 'kind-test',
+          namespace: 'default',
+          server: 'https://127.0.0.1:6443',
+          kubeconfig: kubeconfigValue,
+        }],
+      };
+    },
+    async resources() {
+      return {
+        ok: true,
+        title: 'Secrets',
+        rows: [{ name: 'web-secret', namespace: 'default', cells: [{ text: 'web-secret' }, { text: 'Opaque' }, { text: '2' }] }],
+      };
+    },
+    async resourceDetail(section, { name, namespace }) {
+      return {
+        ok: true,
+        section,
+        title: 'Secrets',
+        name,
+        namespace,
+        kind: 'Secret',
+        context: 'kind-test',
+        created: '2026-01-01T00:00:00Z',
+        labels: { app: 'web' },
+        annotations: {
+          'kubectl.kubernetes.io/last-applied-configuration': '{"data":{"password":"c2VjcmV0"}}',
+          'example.com/owner': 'team-a',
+        },
+        manifest: {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          metadata: {
+            name,
+            namespace,
+            labels: { app: 'web' },
+            annotations: {
+              'kubectl.kubernetes.io/last-applied-configuration': '{"data":{"password":"c2VjcmV0"}}',
+              'example.com/owner': 'team-a',
+            },
+          },
+          data: { password: 'c2VjcmV0', token: 'YWJjZA==' },
+          stringData: { extra: 'plain-text-secret' },
+          spec: {
+            containers: [{
+              name: 'web',
+              env: [{ name: 'DATABASE_URL', value: 'postgres://user:secret@db/app' }],
+            }],
+          },
+        },
+        actions: ['delete'],
+        describe: '',
+        describeError: '',
+      };
+    },
+    async helmReleases() {
+      return { ok: true, rows: [] };
+    },
+  };
+
+  const svc = new AIService({ app: { getPath: () => dir }, content: { load: () => null }, kubernetes: fakeKubernetes });
+  try {
+    const page = await svc.buildContext({ kind: 'kubernetes', page: 'secrets' });
+    assert.equal(page.kind, 'kubernetes');
+    assert.ok(page.text.includes('kind-test'));
+    assert.ok(page.text.includes('web-secret'));
+    assert.ok(!/## Docker engine/i.test(page.text));
+    assert.ok(!page.text.includes(kubeconfigValue));
+    assert.ok(!page.text.includes('should-never-be-sent'));
+    assert.ok(!page.text.includes('c2VjcmV0'));
+
+    const object = await svc.buildContext({
+      kind: 'k8s-resource',
+      section: 'secrets',
+      name: 'web-secret',
+      namespace: 'default',
+    });
+    assert.equal(object.title, 'web-secret');
+    assert.ok(object.subtitle.includes('Secret'));
+    assert.ok(object.text.includes('example.com/owner'));
+    assert.match(object.text, /\[(?:secret )?data omitted\]/);
+    assert.ok(!object.text.includes('c2VjcmV0'));
+    assert.ok(!object.text.includes('YWJjZA=='));
+    assert.ok(!object.text.includes('plain-text-secret'));
+    assert.ok(!object.text.includes('postgres://user:secret@db/app'));
+    assert.ok(!object.text.includes('last-applied-configuration": "{'));
+    assert.ok(!/## Docker engine/i.test(object.text));
+    assert.ok(!object.text.includes(kubeconfigValue));
+  } finally {
+    svc.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('kubernetes AI context degrades safely without a cluster or bridge', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opsdeck-ai-k8s-empty-'));
+  const svc = new AIService({ app: { getPath: () => dir }, content: { load: () => null } });
+  try {
+    const out = await svc.buildContext({ kind: 'kubernetes', page: 'overview' });
+    assert.equal(out.kind, 'kubernetes');
+    assert.equal(out.meta.engineAvailable, null);
+    assert.ok(/bridge is not available/i.test(out.text));
+    assert.ok(!/## Docker engine/i.test(out.text));
+  } finally {
+    svc.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

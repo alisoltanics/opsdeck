@@ -16,7 +16,7 @@
 
   const MAX_SESSIONS = 12;
   const MAX_MESSAGES = 40;
-  const KINDS = new Set(['container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy']);
+  const KINDS = new Set(['container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource']);
 
   const state = {
     config: null,
@@ -35,6 +35,9 @@
       if (section === 'course' && route.parts?.[1]) return { kind: 'course', id: route.parts[1] };
       return { kind: 'academy' };
     }
+    if (route.name === 'kubernetes') {
+      return { kind: 'kubernetes', page: route.parts?.[0] || 'overview' };
+    }
     return { kind: 'page', page: route.name || 'overview' };
   }
 
@@ -43,11 +46,13 @@
   }
 
   function targetKey(target) {
-    return [target.kind || 'page', target.id || '', target.name || '', target.page || ''].join('|');
+    return [target.kind || 'page', target.id || '', target.name || '', target.page || '', target.section || '', target.namespace || ''].join('|');
   }
 
   function targetTitle(target) {
     if (!target) return 'OpsDeck AI';
+    if (target.kind === 'kubernetes') return `Kubernetes · ${titleCase(target.page || 'overview')}`;
+    if (target.kind === 'k8s-resource') return target.name || 'Kubernetes object';
     if (target.name) return target.name;
     if (target.kind === 'container') return `Container ${shortId(target.id || '', 12)}`;
     if (target.kind === 'image') return `Image ${shortId(target.id || '', 12)}`;
@@ -71,6 +76,8 @@
       lesson: 'Academy lesson · live content',
       course: 'Academy course · live content',
       academy: 'Curriculum and progress',
+      kubernetes: 'Kubernetes workspace · live cluster context',
+      'k8s-resource': 'Kubernetes object · sanitized live context',
       page: 'Docker workspace · live page context',
     };
     return labels[target?.kind] || 'Live workspace context';
@@ -82,6 +89,8 @@
     if (target?.id) parts.push(`data-ai-id="${esc(target.id)}"`);
     if (target?.name) parts.push(`data-ai-name="${esc(target.name)}"`);
     if (target?.page) parts.push(`data-ai-page="${esc(target.page)}"`);
+    if (target?.section) parts.push(`data-ai-section="${esc(target.section)}"`);
+    if (target?.namespace) parts.push(`data-ai-namespace="${esc(target.namespace)}"`);
     return parts.join(' ');
   }
 
@@ -95,6 +104,8 @@
       id: el.dataset.aiId || '',
       name: el.dataset.aiName || '',
       page: el.dataset.aiPage || '',
+      section: el.dataset.aiSection || '',
+      namespace: el.dataset.aiNamespace || '',
     };
   }
 

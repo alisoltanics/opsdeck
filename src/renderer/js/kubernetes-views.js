@@ -146,6 +146,16 @@
     return U.button({ label: 'Refresh', icon: 'refresh', size: 'sm', attrs: 'data-k8s-refresh' });
   }
 
+  function askAiButton(section) {
+    return OD.ai
+      ? OD.ai.button({ kind: 'kubernetes', page: section || 'overview' }, { label: 'Ask AI', title: 'Ask AI about this Kubernetes view with live cluster context' })
+      : '';
+  }
+
+  function pageActions(section, extra = '') {
+    return `${extra}${askAiButton(section)}${refreshButton()}`;
+  }
+
   function importButton(label = 'Import kubeconfig') {
     return U.button({ label, icon: 'plus', variant: 'primary', size: 'sm', attrs: 'data-k8s-import' });
   }
@@ -201,7 +211,7 @@
       ${pageHead({
         title: 'Kubernetes',
         sub: 'Connect a cluster with the real kubectl binary already installed on this machine.',
-        actions: `${importButton()}${refreshButton()}`,
+        actions: pageActions('overview', importButton()),
       })}
       ${U.errorBanner('kubectl is not installed', tool.detail || 'kubectl is not on PATH, so OpsDeck cannot read a cluster.', `<a class="btn btn-secondary btn-sm" data-external href="https://kubernetes.io/docs/tasks/tools/">${icon('external-link', 13)}<span>Install kubectl</span></a>`)}
       ${U.card({ title: 'Why this is required', icon: 'shield-check', body: `<div class="muted text-sm">OpsDeck does not bundle a fake cluster or a metrics placeholder. Every cluster view is produced by running kubectl with a validated argument list. Install kubectl, kind, Minikube or use a managed-cluster kubeconfig, then refresh.</div>` })}
@@ -214,7 +224,7 @@
       ${pageHead({
         title: 'Kubernetes',
         sub: 'Import a kubeconfig or create a local cluster to start.',
-        actions: `${importButton()}${refreshButton()}`,
+        actions: pageActions('overview', importButton()),
       })}
       ${U.card({
         title: 'Connect a cluster',
@@ -418,7 +428,7 @@
         sub: data.connection?.connected
           ? `${data.connection.context} · ${data.connection.serverVersion || data.connection.cluster || 'connected'}`
           : 'Selected context is not answering. OpsDeck still shows the local configuration.',
-        actions: `${importButton()}${refreshButton()}`,
+        actions: pageActions('overview', importButton()),
       })}
       ${selectorBar(data)}
       ${overviewBody(data)}
@@ -453,7 +463,7 @@
       ${pageHead({
         title: PAGES.contexts,
         sub: 'OpsDeck never edits ~/.kube/config. Imported files are copied into app storage and passed with KUBECONFIG.',
-        actions: `${importButton()}${refreshButton()}`,
+        actions: pageActions('contexts', importButton()),
       })}
       ${data.sources?.length
         ? `<div class="split-2">${data.sources.map((source) => sourceCard(source, data)).join('')}</div>`
@@ -468,7 +478,7 @@
     if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
     if (!data.contexts?.length) return noContexts(data);
     return `<div class="page">
-      ${pageHead({ title: PAGES.namespaces, sub: 'Live namespace objects and pod counts for the selected context.', actions: refreshButton() })}
+      ${pageHead({ title: PAGES.namespaces, sub: 'Live namespace objects and pod counts for the selected context.', actions: pageActions('namespaces') })}
       ${selectorBar(data)}
       ${data.dashboard
         ? U.card({ title: 'Namespaces', icon: 'layers', sub: `${data.dashboard.namespaceCount || 0} namespaces`, body: data.dashboard.namespaceError ? U.errorBanner('Namespaces unavailable', data.dashboard.namespaceError) : namespacesTable(data.dashboard.namespaces, data.dashboard.podsByNamespace) })
@@ -482,7 +492,7 @@
     if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
     if (!data.contexts?.length) return noContexts(data);
     return `<div class="page">
-      ${pageHead({ title: PAGES.nodes, sub: 'Node readiness, allocatable capacity and kubelet versions from the cluster.', actions: refreshButton() })}
+      ${pageHead({ title: PAGES.nodes, sub: 'Node readiness, allocatable capacity and kubelet versions from the cluster.', actions: pageActions('nodes') })}
       ${selectorBar(data)}
       ${data.dashboard
         ? U.card({ title: 'Nodes', icon: 'server', sub: `${data.dashboard.nodeSummary?.ready || 0} of ${data.dashboard.nodeSummary?.total || 0} ready`, body: data.dashboard.nodesError ? U.errorBanner('Nodes unavailable', data.dashboard.nodesError) : nodesTable(data.dashboard.nodes) })
@@ -518,9 +528,21 @@
       </div>`;
   }
 
+  function detailAskAi(detail) {
+    if (!OD.ai) return '';
+    return OD.ai.button(
+      { kind: 'k8s-resource', section: detail.section, name: detail.name, namespace: detail.namespace || '' },
+      { label: 'Ask AI', title: 'Ask AI about this object with sanitized live context' },
+    );
+  }
+
   function detailActions(detail) {
     if (!detail.actions?.length) {
-      return `<span class="faint text-xs">${icon('lock', 11)} This object is read-only in OpsDeck.</span>`;
+      return `<div class="row gap-2" style="width:100%">
+        <span class="faint text-xs">${icon('lock', 11)} This object is read-only in OpsDeck.</span>
+        <span class="toolbar-spacer"></span>
+        ${detailAskAi(detail)}
+      </div>`;
     }
     const buttons = detail.actions.map((action) => {
       if (action === 'scale') return U.button({ label: 'Scale', icon: 'maximize', size: 'sm', attrs: 'data-k8s-action="scale"' });
@@ -528,7 +550,7 @@
       if (action === 'delete') return U.button({ label: 'Delete', icon: 'trash', size: 'sm', variant: 'danger', attrs: 'data-k8s-action="delete"' });
       return '';
     }).join('');
-    return `<div class="row gap-2" style="width:100%">${buttons}<span class="toolbar-spacer"></span><span class="faint text-xs">${icon('shield-check', 11)} Runs kubectl with the selected context.</span></div>`;
+    return `<div class="row gap-2" style="width:100%">${buttons}<span class="toolbar-spacer"></span>${detailAskAi(detail)}</div>`;
   }
 
   async function runResourceAction(button, detail, close) {
@@ -659,7 +681,7 @@
         ? 'All namespaces in the selected context.'
         : `Namespace ${data.namespace || 'default'} in the selected context.`;
     return `<div class="page">
-      ${pageHead({ title, sub, actions: refreshButton() })}
+      ${pageHead({ title, sub, actions: pageActions(section) })}
       ${selectorBar(data, { namespaced: data.namespaced !== false, allNamespaces, toggleAll: data.namespaced !== false })}
       ${U.card({
         title,
@@ -686,7 +708,7 @@
     if (!data.contexts?.length) return noContexts(await loadBootstrap());
     const count = data.rows?.length || 0;
     return `<div class="page">
-      ${pageHead({ title: PAGES.helm, sub: data.error || 'Releases reported by the real Helm binary.', actions: refreshButton() })}
+      ${pageHead({ title: PAGES.helm, sub: data.error || 'Releases reported by the real Helm binary.', actions: pageActions('helm') })}
       ${selectorBar(data, { allNamespaces, toggleAll: true })}
       ${data.error
         ? U.infoBanner('Helm is not ready', data.error, 'warning', `<a class="btn btn-primary btn-sm" href="#/kubernetes/tools">${icon('terminal', 12)}<span>Open tools</span></a>`)
@@ -713,7 +735,7 @@
       <span class="badge tone-green">managed</span>
     </div>`).join('');
     return `<div class="page">
-      ${pageHead({ title: PAGES.tools, sub: 'Real binaries from PATH and OpsDeck storage. No sudo and no system-wide changes.', actions: refreshButton() })}
+      ${pageHead({ title: PAGES.tools, sub: 'Real binaries from PATH and OpsDeck storage. No sudo and no system-wide changes.', actions: pageActions('tools') })}
       ${toolsCard(data?.tools || {})}
       ${U.card({
         title: 'Managed installs',
