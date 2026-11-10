@@ -11,10 +11,12 @@ const { ContentService } = require('./content');
 const { AcademyStore } = require('./store');
 const { LabService } = require('./labs');
 const { AIService } = require('./ai');
+const { KubernetesService } = require('./kubernetes');
 
 function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
   const ai = new AIService({ app, content });
+  const kubernetes = new KubernetesService({ app, dialog, getWindow });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
     console.error('Academy store failed to initialise:', error);
@@ -138,6 +140,16 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('docker:command-help', (command) => docker.commandHelp(command));
   handle('docker:terminal-run', (p) => docker.terminalRun(p?.command, p?.consent === true));
   handle('docker:pick-compose', () => docker.pickComposeFile(dialog, getWindow()));
+
+  // ---------------- Kubernetes ----------------
+  handle('k8s:bootstrap', () => kubernetes.bootstrap());
+  handle('k8s:tools', () => kubernetes.tools(true));
+  handle('k8s:contexts', () => kubernetes.contextState());
+  handle('k8s:select-context', (p) => kubernetes.selectContext(p?.context));
+  handle('k8s:namespace', (p) => kubernetes.setNamespace(p?.namespace));
+  handle('k8s:import-kubeconfig', () => kubernetes.importKubeconfig());
+  handle('k8s:remove-kubeconfig', (p) => kubernetes.removeKubeconfig(p?.id));
+  handle('k8s:dashboard', () => kubernetes.dashboard());
 
   // ---------------- AI assistant ----------------
   handle('ai:config', () => ai.publicConfig());

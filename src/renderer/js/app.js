@@ -12,8 +12,8 @@
   const api = window.opsdeck;
 
   const WORKSPACES = [
-    { id: 'docker', label: 'Docker', icon: 'box', tone: 'accent', active: true },
-    { id: 'kubernetes', label: 'Kubernetes', icon: 'cloud', tone: 'violet', soon: true },
+    { id: 'docker', label: 'Docker', icon: 'box', tone: 'accent' },
+    { id: 'kubernetes', label: 'Kubernetes', icon: 'cloud', tone: 'violet' },
     { id: 'databases', label: 'Databases', icon: 'database', tone: 'orange', soon: true },
     { id: 'observability', label: 'Observability', icon: 'activity', tone: 'cyan', soon: true },
   ];
@@ -48,11 +48,29 @@
     },
   ];
 
+  const KUBERNETES_NAV = [
+    {
+      label: 'Clusters',
+      items: [
+        { id: 'kubernetes', section: 'overview', label: 'Cluster overview', icon: 'layout-dashboard', href: '#/kubernetes/overview' },
+        { id: 'kubernetes', section: 'contexts', label: 'Contexts', icon: 'cloud', href: '#/kubernetes/contexts' },
+        { id: 'kubernetes', section: 'namespaces', label: 'Namespaces', icon: 'layers', href: '#/kubernetes/namespaces' },
+        { id: 'kubernetes', section: 'nodes', label: 'Nodes', icon: 'server', href: '#/kubernetes/nodes' },
+      ],
+    },
+    {
+      label: 'Learn',
+      items: [
+        { id: 'academy', label: 'Academy', icon: 'graduation-cap', href: '#/academy', badge: 'academy' },
+      ],
+    },
+  ];
+
   const PAGE_LABELS = {
     overview: 'Overview', containers: 'Containers', images: 'Images', compose: 'Compose',
     volumes: 'Volumes', networks: 'Networks', builds: 'Builds', registries: 'Registries',
     monitoring: 'Monitoring', events: 'Events', terminal: 'Terminal', settings: 'Settings',
-    academy: 'Academy', notfound: 'Not found',
+    academy: 'Academy', kubernetes: 'Kubernetes', notfound: 'Not found',
   };
 
   let currentView = null;
@@ -76,7 +94,14 @@
     return ['overview', 'containers', 'images', 'compose', 'volumes', 'networks', 'builds', 'registries', 'monitoring', 'events', 'terminal', 'settings'].includes(name);
   }
 
+  function workspaceIdForRoute(route) {
+    return route?.name === 'kubernetes' ? 'kubernetes' : 'docker';
+  }
+
   function routeLabel(route) {
+    if (route.name === 'kubernetes') {
+      return OD.views?.kubernetes?.label?.(route.parts[0] || 'overview') || titleCase(route.parts[0] || 'overview');
+    }
     if (route.name !== 'academy') return PAGE_LABELS[route.name] || titleCase(route.name);
     const section = route.parts[0];
     if (!section) return 'Academy';
@@ -91,6 +116,10 @@
   }
 
   function breadcrumbs(route) {
+    if (route.name === 'kubernetes') {
+      const section = route.parts[0] || 'overview';
+      return `<a class="crumb" href="#/kubernetes/overview">Kubernetes</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || titleCase(section))}</span>`;
+    }
     if (route.name !== 'academy') {
       return `<span class="crumb">Docker</span>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route))}</span>`;
     }
@@ -163,7 +192,7 @@
     }
     currentView = null;
 
-    if (typeof route.name === 'string' && route.name !== 'academy' && !isDockerRoute(route.name)) {
+    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && !isDockerRoute(route.name)) {
       host.innerHTML = `<div class="page">${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no view for “${route.raw}”. Use the sidebar or the command palette to continue.`, action: `<a class="btn btn-primary btn-sm" href="#/overview">Open overview</a>` })}</div>`;
       applyChrome();
       return;
@@ -171,7 +200,9 @@
 
     host.innerHTML = `<div class="page" style="padding:30px 0">${U.loader('Loading workspace…')}</div>`;
 
-    currentView = route.name === 'academy' ? OD.views.academy : OD.views.docker;
+    currentView = route.name === 'academy'
+      ? OD.views.academy
+      : route.name === 'kubernetes' ? OD.views.kubernetes : OD.views.docker;
     if (!currentView) {
       host.innerHTML = renderError(new Error('The view module did not load. Check the script order in index.html.'), route);
       applyChrome();
@@ -223,6 +254,20 @@
     </div>`;
   }
 
+  function kubernetesMini() {
+    const status = store.state.kubernetes;
+    const tool = status?.tools?.kubectl;
+    const connected = status?.connection?.connected === true;
+    const missing = tool && tool.installed === false;
+    const label = missing ? 'kubectl missing' : connected ? (status?.selected || 'Cluster connected') : (status ? 'Cluster offline' : 'Kubernetes');
+    const detail = missing ? (tool.detail || 'kubectl is not on PATH') : connected ? (status?.namespace || 'default') : (status?.connection?.reason || 'Open the Kubernetes workspace');
+    return `<div class="engine-mini" role="status" title="${esc(detail)}">
+      <span class="dot ${connected ? 'ok' : 'bad'}"></span>
+      <span class="sidebar-footer-text">${esc(label)}</span>
+      <button type="button" class="icon-btn" data-action="k8s-refresh" title="Refresh cluster" aria-label="Refresh cluster">${icon('refresh', 12)}</button>
+    </div>`;
+  }
+
   function renderSidebar() {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
@@ -230,11 +275,16 @@
     const stats = store.overallStats();
     const collapsed = store.state.sidebarCollapsed;
     document.getElementById('app').dataset.collapsed = collapsed ? 'true' : 'false';
+    const workspaceId = workspaceIdForRoute(route);
+    const workspace = WORKSPACES.find((w) => w.id === workspaceId) || WORKSPACES[0];
+    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : NAV;
 
     const navGroup = (group) => `<div class="sidebar-section">
       <div class="sidebar-section-label">${esc(group.label)}</div>
       <div class="nav-list">${group.items.map((item) => {
-        const active = (item.id === 'academy' && route.name === 'academy') || item.id === route.name;
+        const section = route.parts?.[0] || 'overview';
+        const active = (item.id === 'academy' && route.name === 'academy')
+          || (item.id === route.name && (!item.section || item.section === section));
         const badge = item.badge === 'academy' ? `${stats.percent}%` : '';
         return `<a class="nav-item ${active ? 'active' : ''}" href="${item.href}" title="${esc(item.label)}" aria-current="${active ? 'page' : 'false'}">
           ${icon(item.icon, 16)}<span class="nav-label">${esc(item.label)}</span>${badge ? `<span class="nav-badge accent">${badge}</span>` : ''}
@@ -242,7 +292,6 @@
       }).join('')}</div>
     </div>`;
 
-    const workspace = WORKSPACES.find((w) => w.active) || WORKSPACES[0];
     sidebar.innerHTML = `
       <div class="sidebar-head">
         <span class="brand-mark">${icon('deck', 16)}</span>
@@ -257,19 +306,19 @@
           </button>
           ${workspaceMenuOpen ? `<div class="workspace-menu" role="menu">
             <div class="workspace-menu-label">Workspaces</div>
-            ${WORKSPACES.map((w) => `<button type="button" class="workspace-menu-item ${w.active ? 'active' : ''}" data-workspace="${w.id}" role="menuitem">
+            ${WORKSPACES.map((w) => `<button type="button" class="workspace-menu-item ${w.id === workspaceId ? 'active' : ''}" data-workspace="${w.id}" role="menuitem">
               <span class="icon-chip tone-${w.tone}" style="--chip-size:24px">${icon(w.icon, 12)}</span>
               <span class="workspace-menu-name">${esc(w.label)}</span>
-              ${w.active ? U.badge('active', 'green') : w.soon ? U.badge('planned', 'slate') : ''}
+              ${w.id === workspaceId ? U.badge('active', 'green') : w.soon ? U.badge('planned', 'slate') : ''}
             </button>`).join('')}
-            <div class="workspace-menu-note">Docker is the first workspace. The same shell, search and learning system will host Kubernetes, databases and observability.</div>
+            <div class="workspace-menu-note">Docker and Kubernetes are live. The same shell, search and learning system will host databases and observability.</div>
           </div>` : ''}
         </div>
       </div>
       <nav class="sidebar-scroll" aria-label="Primary">
-        ${NAV.map(navGroup).join('')}
+        ${nav.map(navGroup).join('')}
       </nav>
-      ${engineMini()}
+      ${workspaceId === 'kubernetes' ? kubernetesMini() : engineMini()}
       <div class="sidebar-footer">
         <a class="nav-item ${route.name === 'settings' ? 'active' : ''}" href="#/settings" title="Settings">
           ${icon('settings', 16)}<span class="nav-label">Settings</span>
@@ -360,6 +409,10 @@
       { title: 'Events', sub: 'Engine event stream', type: 'Navigate', icon: 'list', href: '#/events' },
       { title: 'Terminal', sub: 'Validated Docker console', type: 'Navigate', icon: 'terminal', href: '#/terminal' },
       { title: 'Academy', sub: 'Courses, lessons and progress', type: 'Navigate', icon: 'graduation-cap', href: '#/academy' },
+      { title: 'Kubernetes overview', sub: 'Cluster health and contexts', type: 'Navigate', icon: 'cloud', href: '#/kubernetes/overview' },
+      { title: 'Kubernetes contexts', sub: 'Kubeconfig sources and selected context', type: 'Navigate', icon: 'cloud', href: '#/kubernetes/contexts' },
+      { title: 'Kubernetes namespaces', sub: 'Live namespaces and pod counts', type: 'Navigate', icon: 'layers', href: '#/kubernetes/namespaces' },
+      { title: 'Kubernetes nodes', sub: 'Node readiness and capacity', type: 'Navigate', icon: 'server', href: '#/kubernetes/nodes' },
       { title: 'Academy search', sub: 'Search every lesson, command and guide', type: 'Navigate', icon: 'search', href: '#/academy/search' },
       { title: 'Settings', sub: 'Appearance, goals and security', type: 'Navigate', icon: 'settings', href: '#/settings' },
       { title: 'Ask AI about this page', sub: 'Open the assistant with live context  (Ctrl+Shift+A)', type: 'Action', icon: 'sparkles', action: 'ai-ask' },
@@ -499,8 +552,10 @@
       U.toast(store.state.status?.available ? 'Docker engine reachable' : 'Docker engine offline', store.state.status?.available ? 'success' : 'warning', { description: store.state.status?.reason || store.state.status?.serverVersion || '' });
     } else if (action === 'retry-route') {
       renderRoute();
+    } else if (action === 'k8s-refresh') {
+      renderRoute({ scroll: false });
     } else if (action === 'open-workspace') {
-      U.toast('That workspace is planned', 'info', { description: 'OpsDeck currently ships the Docker workspace and Academy. The shell is ready for Kubernetes, databases and observability.' });
+      U.toast('That workspace is planned', 'info', { description: 'OpsDeck currently ships the Docker and Kubernetes workspaces plus the Academy. The shell is ready for databases and observability.' });
     } else if (action === 'ai-ask') {
       if (OD.ai) OD.ai.openForCurrent();
       else U.toast('AI is unavailable in this build', 'warning');
@@ -548,7 +603,7 @@
       return;
     }
     const globalAction = event.target.closest('[data-action]');
-    if (globalAction && ['toggle-theme', 'toggle-sidebar', 'zoom-in', 'zoom-out', 'zoom-reset', 'retry-status', 'retry-route', 'open-workspace'].includes(globalAction.dataset.action)) {
+    if (globalAction && ['toggle-theme', 'toggle-sidebar', 'zoom-in', 'zoom-out', 'zoom-reset', 'retry-status', 'retry-route', 'open-workspace', 'k8s-refresh'].includes(globalAction.dataset.action)) {
       event.preventDefault();
       runGlobalAction(globalAction.dataset.action);
       return;
@@ -559,7 +614,9 @@
       workspaceMenuOpen = false;
       applyChrome();
       const target = WORKSPACES.find((w) => w.id === workspace.dataset.workspace);
-      if (target && !target.active) runGlobalAction('open-workspace');
+      if (target?.id === 'docker') goto('#/overview');
+      else if (target?.id === 'kubernetes') goto('#/kubernetes/overview');
+      else if (target) runGlobalAction('open-workspace');
       return;
     }
     if (event.target.closest('#workspace-btn')) {

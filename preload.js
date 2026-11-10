@@ -57,6 +57,16 @@ contextBridge.exposeInMainWorld('opsdeck', {
     runTerminal: (command, consent) => invoke('docker:terminal-run', { command, consent }),
     pickComposeFile: () => invoke('docker:pick-compose'),
   },
+  kubernetes: {
+    bootstrap: () => invoke('k8s:bootstrap'),
+    tools: () => invoke('k8s:tools'),
+    contexts: () => invoke('k8s:contexts'),
+    selectContext: (payload) => invoke('k8s:select-context', payload),
+    setNamespace: (payload) => invoke('k8s:namespace', payload),
+    importKubeconfig: () => invoke('k8s:import-kubeconfig'),
+    removeKubeconfig: (payload) => invoke('k8s:remove-kubeconfig', payload),
+    dashboard: () => invoke('k8s:dashboard'),
+  },
   ai: {
     config: () => invoke('ai:config'),
     saveConfig: (payload) => invoke('ai:save-config', payload),

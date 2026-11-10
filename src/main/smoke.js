@@ -32,6 +32,10 @@ const ROUTES = [
   ['events', '#/events'],
   ['terminal', '#/terminal'],
   ['settings', '#/settings'],
+  ['kubernetes overview', '#/kubernetes/overview'],
+  ['kubernetes contexts', '#/kubernetes/contexts'],
+  ['kubernetes namespaces', '#/kubernetes/namespaces'],
+  ['kubernetes nodes', '#/kubernetes/nodes'],
   ['academy', '#/academy'],
   ['courses', '#/academy/courses'],
   ['course', '#/academy/course/docker-fundamentals'],
@@ -130,6 +134,22 @@ function rendererScript(routes) {
     if (!paletteOpen) failures.push('palette: no items rendered');
     window.OD.app.closePalette();
     if (document.getElementById('palette-root').children.length) failures.push('palette: did not close');
+
+    // The workspace switcher must reach the live Kubernetes workspace and back.
+    document.querySelector('#workspace-btn')?.click();
+    const menuOpen = await waitFor(() => !!document.querySelector('[data-workspace="kubernetes"]'), 2500);
+    if (!menuOpen) failures.push('workspace: menu did not open');
+    else document.querySelector('[data-workspace="kubernetes"]')?.click();
+    const kubernetesOpen = await waitFor(() => location.hash === '#/kubernetes/overview'
+      && !!document.querySelector('a[href="#/kubernetes/overview"].active')
+      && document.querySelector('#view .page'), 8000);
+    if (!kubernetesOpen) failures.push('workspace: Kubernetes did not open');
+    document.querySelector('#workspace-btn')?.click();
+    const menuReopened = await waitFor(() => !!document.querySelector('[data-workspace="docker"]'), 2500);
+    if (!menuReopened) failures.push('workspace: menu did not reopen');
+    else document.querySelector('[data-workspace="docker"]')?.click();
+    const dockerOpen = await waitFor(() => location.hash === '#/overview' && !!document.querySelector('#view .page'), 8000);
+    if (!dockerOpen) failures.push('workspace: Docker did not return');
 
     // Theme and sidebar toggles must round-trip.
     const root = document.documentElement;
