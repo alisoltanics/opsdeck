@@ -14,6 +14,64 @@
   const api = window.opsdeck;
   const rerender = () => (OD.app && OD.app.rerender ? OD.app.rerender() : location.reload());
 
+  const installState = { running: false, order: [], events: {}, done: null };
+  let installInFlight = false;
+  let installBound = false;
+
+  const TOOL_LABELS = { kubectl: 'kubectl', kind: 'kind', minikube: 'Minikube', helm: 'Helm' };
+
+  function toolLabel(name) {
+    return TOOL_LABELS[name] || name;
+  }
+
+  function installStatusHtml() {
+    if (!installState.running && !installState.order.length) return '';
+    const rows = installState.order.map((name) => {
+      const event = installState.events[name] || {};
+      const failed = event.phase === 'error';
+      const percent = typeof event.percent === 'number' ? Math.max(0, Math.min(100, event.percent)) : null;
+      return `<div class="install-row">
+        <div class="install-row-head">
+          <span class="mono text-xs">${esc(toolLabel(name))}</span>
+          <span class="faint text-xs${failed ? ' tone-text-red' : ''}">${esc(event.message || 'Waiting…')}</span>
+        </div>
+        ${percent != null ? U.progressBar(percent, failed ? 'red' : 'accent', { size: 'sm' }) : ''}
+      </div>`;
+    }).join('');
+    if (!rows) {
+      return `<div class="install-row"><div class="install-row-head"><span class="mono text-xs">Preparing</span><span class="faint text-xs">Checking which tools are missing…</span></div></div>`;
+    }
+    return `<div class="install-status-list">${rows}</div>`;
+  }
+
+  function paintInstallStatus() {
+    for (const node of document.querySelectorAll('[data-k8s-install-status]')) {
+      node.innerHTML = installStatusHtml();
+      node.hidden = !node.innerHTML;
+    }
+  }
+
+  function recordInstallEvent(event) {
+    if (!event) return;
+    if (event.phase === 'done') {
+      installState.running = false;
+      installState.done = event;
+      return;
+    }
+    if (!event.tool) return;
+    if (!installState.events[event.tool]) installState.order.push(event.tool);
+    installState.events[event.tool] = event;
+  }
+
+  function bindInstallEvents() {
+    if (installBound || !api?.events?.k8sInstall) return;
+    installBound = true;
+    api.events.k8sInstall((event) => {
+      recordInstallEvent(event);
+      paintInstallStatus();
+    });
+  }
+
   const PAGES = {
     overview: 'Cluster overview',
     contexts: 'Contexts',
@@ -65,18 +123,40 @@
 
   function toolsCard(tools = {}) {
     const names = [['kubectl', 'kubectl', true], ['kind', 'kind', false], ['minikube', 'minikube', false], ['helm', 'Helm', false]];
+    const missing = names.filter(([id]) => !tools[id]?.installed);
+    const installing = installState.running || installInFlight;
+    const installButton = missing.length
+      ? U.button({
+        label: installing ? 'Installing…' : 'Install missing tools',
+        icon: installing ? 'loader' : 'download',
+        variant: 'primary',
+        size: 'sm',
+        attrs: installing ? 'data-k8s-install-tools disabled' : 'data-k8s-install-tools',
+      })
+      : '';
     return U.card({
       title: 'Local tools',
       icon: 'terminal',
-      sub: 'Detected on PATH · versions are read from the binaries',
+      sub: 'Detected from PATH and OpsDeck storage · versions are read from the binaries',
       body: `<div class="stack-2" style="display:flex;flex-direction:column;gap:8px">${names.map(([id, label, required]) => {
         const tool = tools[id] || {};
         return `<div class="row gap-2" style="justify-content:space-between">
           <div class="row gap-2"><span class="mono text-xs">${esc(label)}</span>${required ? U.badge('required', 'amber') : ''}</div>
           ${toolBadge(tool)}
-        </div>${tool.installed ? '' : `<div class="faint text-xs">${esc(tool.detail || `${label} is not on PATH.`)}</div>`}`;
-      }).join('')}</div>`,
-      footer: `<span class="faint text-xs">${icon('info', 11)} OpsDeck shells out to these binaries. It does not install them or edit their configuration.</span>`,
+        </div>${tool.installed ? '' : `<div class="faint text-xs">${esc(tool.detail || `${label} is not installed.`)}</div>`}`;
+      }).join('')}</div>
+      <div class="install-panel" data-k8s-install-panel>
+        <div class="install-panel-head">
+          <div>
+            <div class="text-sm"><strong>${missing.length ? `${missing.length} tool${missing.length === 1 ? '' : 's'} missing` : 'All tools installed'}</strong></div>
+            <div class="faint text-xs">${missing.length
+              ? 'OpsDeck installs official releases into its own storage. No sudo and no system-wide changes.'
+              : 'The required binaries are ready for this workspace.'}</div>
+          </div>
+          ${installButton}
+        </div>
+        <div class="install-status" data-k8s-install-status ${installState.order.length || installState.running ? '' : 'hidden'}>${installStatusHtml()}</div>
+      </div>`,
     });
   }
 
@@ -346,20 +426,63 @@
     return renderer(route);
   }
 
-  function busy(button, on) {
+  function busy(button, on, label = 'Working…') {
     if (!button) return;
     if (on) {
       button.dataset.label = button.innerHTML;
       button.disabled = true;
-      button.innerHTML = `<span class="spinner">${icon('loader', 12)}</span><span>Working…</span>`;
+      button.innerHTML = `<span class="spinner">${icon('loader', 12)}</span><span>${esc(label)}</span>`;
     } else {
       button.disabled = false;
       if (button.dataset.label) button.innerHTML = button.dataset.label;
     }
   }
 
+  function installSummary(result) {
+    const installed = (result?.installed || []).map((tool) => `${tool.label || tool.name}${tool.version ? ` ${tool.version}` : ''}`);
+    return installed.length ? `Installed ${installed.join(', ')}.` : 'Everything was already installed.';
+  }
+
+  function installFailure(result) {
+    const failures = (result?.failed || []).map((tool) => `${tool.label || tool.name}: ${tool.error}`);
+    return (failures.join(' · ') || result?.error || 'Check your connection and retry.').slice(0, 600);
+  }
+
+  async function startInstall(button) {
+    if (installInFlight || !api?.kubernetes?.installTools) return;
+    installInFlight = true;
+    installState.running = true;
+    installState.order = [];
+    installState.events = {};
+    installState.done = null;
+    paintInstallStatus();
+    busy(button, true, 'Installing…');
+    let result = null;
+    try {
+      result = await api.kubernetes.installTools();
+      if (result?.ok) {
+        U.toast('Kubernetes tools installed', 'success', { description: installSummary(result) });
+      } else {
+        U.toast('Some tools could not be installed', 'error', { description: installFailure(result) });
+      }
+    } catch (error) {
+      U.toast('Could not install the Kubernetes tools', 'error', { description: error.message || 'Try again.' });
+    } finally {
+      installInFlight = false;
+      installState.running = false;
+      paintInstallStatus();
+      busy(button, false);
+    }
+    if (result?.ok) rerender();
+  }
+
   function mount(root) {
     root.addEventListener('click', async (event) => {
+      const installBtn = event.target.closest('[data-k8s-install-tools]');
+      if (installBtn) {
+        await startInstall(installBtn);
+        return;
+      }
       const importBtn = event.target.closest('[data-k8s-import]');
       if (importBtn) {
         busy(importBtn, true);
@@ -465,6 +588,8 @@
       }
     });
   }
+
+  bindInstallEvents();
 
   OD.views = OD.views || {};
   OD.views.kubernetes = {

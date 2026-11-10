@@ -150,6 +150,11 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('k8s:import-kubeconfig', () => kubernetes.importKubeconfig());
   handle('k8s:remove-kubeconfig', (p) => kubernetes.removeKubeconfig(p?.id));
   handle('k8s:dashboard', () => kubernetes.dashboard());
+  handle('k8s:install-status', () => kubernetes.installStatus());
+  handle('k8s:install-tools', () => kubernetes.installTools((event) => {
+    const win = getWindow();
+    if (win && !win.isDestroyed()) win.webContents.send('k8s:install-progress', event);
+  }));
 
   // ---------------- AI assistant ----------------
   handle('ai:config', () => ai.publicConfig());

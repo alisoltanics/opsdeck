@@ -10,11 +10,71 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
+const crypto = require('node:crypto');
 const { __test } = require('../src/main/kubernetes');
 const { KubeRegistry } = require('../src/main/kubernetes/registry');
 const { scrub } = require('../src/main/kubernetes/exec');
+const {
+  FALLBACK_VERSIONS,
+  installTool,
+  parseChecksum,
+  resolveVersion,
+  safeArchivePath,
+  sha256,
+  targetArch,
+  targetPlatform,
+  tarFiles,
+  extractTarEntry,
+  toolPlan,
+  toolsPathEnv,
+  readInstalled,
+} = require('../src/main/kubernetes/install');
 
 const { trimNode, trimNamespace, validContext, validNamespace, countLines } = __test;
+
+function fakeExecutable(size = 4096) {
+  const buffer = Buffer.alloc(size, 0x41);
+  buffer.set([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]);
+  return buffer;
+}
+
+function tarEntry(name, data) {
+  const header = Buffer.alloc(512);
+  header.write(name, 0, 100, 'utf8');
+  header.write('0000755\u0000', 100, 8, 'utf8');
+  header.write(`${data.length.toString(8).padStart(11, '0')}\u0000`, 124, 12, 'utf8');
+  header.write('0', 156, 1, 'utf8');
+  header.fill(' ', 148, 156);
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, '0')}\u0000 `, 148, 8, 'utf8');
+  const padding = Buffer.alloc((512 - (data.length % 512)) % 512);
+  return Buffer.concat([header, data, padding]);
+}
+
+function fakeTarGz(entries) {
+  return zlib.gzipSync(Buffer.concat([...entries.map(([name, data]) => tarEntry(name, data)), Buffer.alloc(1024)]));
+}
+
+function bufferResponse(buffer) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => (String(name).toLowerCase() === 'content-length' ? String(buffer.length) : null) },
+    body: (async function* stream() { yield buffer; })(),
+  };
+}
+
+function fakeFetch(routes) {
+  return async (url) => {
+    if (Object.prototype.hasOwnProperty.call(routes, url)) {
+      const value = routes[url];
+      return bufferResponse(Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8'));
+    }
+    throw new Error(`unexpected download: ${url}`);
+  };
+}
 
 test('context and namespace names are validated before they become argv values', () => {
   for (const name of ['minikube', 'kind-dev', 'gke_project_zone_cluster', 'arn:aws:eks:eu-west-1:1:cluster/x', 'team@cluster']) {
@@ -99,4 +159,120 @@ test('the kubeconfig registry copies imports into app storage and never edits th
     else process.env.KUBECONFIG = previous;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('installer maps platform and architecture names to release asset names', () => {
+  assert.equal(targetPlatform('linux'), 'linux');
+  assert.equal(targetPlatform('darwin'), 'darwin');
+  assert.equal(targetPlatform('win32'), 'windows');
+  assert.throws(() => targetPlatform('freebsd'));
+  assert.equal(targetArch('x64'), 'amd64');
+  assert.equal(targetArch('arm64'), 'arm64');
+  assert.equal(targetArch('ia32'), '386');
+  assert.equal(targetArch('ppc64'), 'ppc64le');
+  assert.throws(() => targetArch('mips'));
+});
+
+test('checksums are parsed from raw and sha256sum formats', () => {
+  const digest = 'a'.repeat(64);
+  assert.equal(parseChecksum(`${digest}\n`), digest);
+  assert.equal(parseChecksum(`${digest}  kubectl\n`), digest);
+  assert.throws(() => parseChecksum('not a checksum'));
+});
+
+test('release plans use official endpoints and the right archive member', () => {
+  const kubectl = toolPlan('kubectl', { version: 'v1.37.2', platform: 'linux', arch: 'x64' });
+  assert.equal(kubectl.url, 'https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl');
+  assert.equal(kubectl.checksumUrl, `${kubectl.url}.sha256`);
+  assert.equal(kubectl.checksumTarget, 'download');
+
+  const kind = toolPlan('kind', { version: 'v0.33.0', platform: 'linux', arch: 'x64' });
+  assert.equal(kind.url, 'https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64');
+  assert.equal(kind.checksumUrl, `${kind.url}.sha256sum`);
+
+  const minikube = toolPlan('minikube', { version: 'v1.39.0', platform: 'linux', arch: 'x64' });
+  assert.equal(minikube.url, 'https://github.com/kubernetes/minikube/releases/download/v1.39.0/minikube-linux-amd64.tar.gz');
+  assert.equal(minikube.checksumUrl, 'https://github.com/kubernetes/minikube/releases/download/v1.39.0/minikube-linux-amd64.sha256');
+  assert.equal(minikube.checksumTarget, 'extracted');
+  assert.equal(minikube.entry, 'out/minikube-linux-amd64');
+
+  const helm = toolPlan('helm', { version: 'v4.3.1', platform: 'linux', arch: 'x64' });
+  assert.equal(helm.url, 'https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz');
+  assert.equal(helm.entry, 'linux-amd64/helm');
+  assert.throws(() => toolPlan('helm', { version: 'v4.3.1', platform: 'win32', arch: 'x64' }));
+  assert.throws(() => toolPlan('kubectl', { version: 'latest', platform: 'linux', arch: 'x64' }));
+});
+
+test('archive paths cannot escape the extraction root', () => {
+  assert.equal(safeArchivePath('out/minikube-linux-amd64'), 'out/minikube-linux-amd64');
+  assert.equal(safeArchivePath('./out/minikube-linux-amd64'), 'out/minikube-linux-amd64');
+  assert.equal(safeArchivePath('out//minikube-linux-amd64'), 'out/minikube-linux-amd64');
+  assert.equal(safeArchivePath('../evil'), null);
+  assert.equal(safeArchivePath('out/../../evil'), null);
+  assert.equal(safeArchivePath('/etc/passwd'), null);
+  assert.equal(safeArchivePath('C:/Windows/system32/evil.exe'), null);
+  assert.equal(safeArchivePath('out\\..\\evil'), null);
+
+  const binary = fakeExecutable(1024);
+  const archive = fakeTarGz([
+    ['../evil', fakeExecutable(128)],
+    ['out/minikube-linux-amd64', binary],
+  ]);
+  const files = tarFiles(archive);
+  assert.deepEqual(files.map((file) => file.path), ['out/minikube-linux-amd64']);
+  const extracted = extractTarEntry(archive, 'out/minikube-linux-amd64');
+  assert.equal(extracted.path, 'out/minikube-linux-amd64');
+  assert.deepEqual(extracted.data, binary);
+  assert.throws(() => extractTarEntry(archive, 'out/missing'), /did not contain/);
+});
+
+test('a full fake install verifies the checksum and writes an executable atomically', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opsdeck-k8s-install-'));
+  const app = { getPath: () => dir };
+  const binary = fakeExecutable(8192);
+  const url = 'https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl';
+  const fetchImpl = fakeFetch({
+    'https://dl.k8s.io/release/stable.txt': 'v1.37.2\n',
+    [url]: binary,
+    [`${url}.sha256`]: sha256(binary),
+  });
+  try {
+    const result = await installTool('kubectl', { app, platform: 'linux', arch: 'x64', fetchImpl });
+    assert.equal(result.version, 'v1.37.2');
+    assert.equal(result.bytes, binary.length);
+    const target = path.join(dir, 'k8s', 'tools', 'bin', 'kubectl');
+    assert.equal(fs.existsSync(target), true);
+    assert.equal(fs.statSync(target).mode & 0o777, 0o755);
+    assert.deepEqual(fs.readFileSync(target), binary);
+    assert.equal(readInstalled(app).kubectl.version, 'v1.37.2');
+    assert.ok(toolsPathEnv(app).startsWith(path.join(dir, 'k8s', 'tools', 'bin') + path.delimiter));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a checksum mismatch installs nothing', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opsdeck-k8s-install-'));
+  const app = { getPath: () => dir };
+  const binary = fakeExecutable(2048);
+  const url = 'https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl';
+  const fetchImpl = fakeFetch({
+    'https://dl.k8s.io/release/stable.txt': 'v1.37.2\n',
+    [url]: binary,
+    [`${url}.sha256`]: 'b'.repeat(64),
+  });
+  try {
+    await assert.rejects(() => installTool('kubectl', { app, platform: 'linux', arch: 'x64', fetchImpl }), /checksum verification/);
+    assert.equal(fs.existsSync(path.join(dir, 'k8s', 'tools', 'bin', 'kubectl')), false);
+    assert.deepEqual(readInstalled(app), {});
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('release lookup falls back to a known version when the network is unavailable', async () => {
+  const version = await resolveVersion('kind', {
+    fetchImpl: async () => { throw new Error('offline'); },
+  });
+  assert.equal(version, FALLBACK_VERSIONS.kind);
 });

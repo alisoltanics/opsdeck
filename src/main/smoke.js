@@ -144,6 +144,11 @@ function rendererScript(routes) {
       && !!document.querySelector('a[href="#/kubernetes/overview"].active')
       && document.querySelector('#view .page'), 8000);
     if (!kubernetesOpen) failures.push('workspace: Kubernetes did not open');
+    if (document.querySelector('#sidebar a[href="#/academy"]')) failures.push('workspace: Docker Academy leaked into the Kubernetes sidebar');
+    if (!document.querySelector('[data-k8s-install-panel]')) failures.push('kubernetes: tools installer panel is missing');
+    if (!document.querySelector('[data-k8s-install-status]')) failures.push('kubernetes: tools installer status area is missing');
+    const installStatus = await window.opsdeck.kubernetes.installStatus();
+    if (!installStatus?.ok || !installStatus.binDir) failures.push('kubernetes: install status bridge failed');
     document.querySelector('#workspace-btn')?.click();
     const menuReopened = await waitFor(() => !!document.querySelector('[data-workspace="docker"]'), 2500);
     if (!menuReopened) failures.push('workspace: menu did not reopen');

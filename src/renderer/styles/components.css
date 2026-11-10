@@ -1024,6 +1024,18 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 .tone-text-amber { color: var(--amber); }
 .tone-text-muted { color: var(--muted); }
 
+/* ---------- Kubernetes tool installer ---------- */
+.install-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.install-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.install-panel-head .btn { flex: none; }
+.install-status { margin-top: 10px; }
+.install-status[hidden] { display: none; }
+.install-status-list { display: flex; flex-direction: column; gap: 9px; }
+.install-row { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--surface-2); }
+.install-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.install-row-head > :last-child { text-align: right; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .install-panel-head { flex-direction: column; } }
+
 .boot-screen {
   min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 12px; text-align: center;

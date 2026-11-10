@@ -13,6 +13,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { run, runJson, scrub } = require('./exec');
 const { KubeRegistry } = require('./registry');
+const { TOOL_NAMES, labelFor, installTool, binDir, toolsPathEnv, readInstalled } = require('./install');
 
 const CONTEXT_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@/+=,-]{0,252}$/;
 const NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
@@ -88,6 +89,7 @@ class KubernetesService {
     this.registry = new KubeRegistry(app);
     this.contextCache = null;
     this.toolsCache = null;
+    this.installPromise = null;
   }
 
   invalidate() {
@@ -95,21 +97,28 @@ class KubernetesService {
   }
 
   env() {
-    return this.registry.env();
+    return { ...this.registry.env(), PATH: toolsPathEnv(this.app) };
+  }
+
+  async installStatus() {
+    return { ok: true, binDir: binDir(this.app), installed: readInstalled(this.app) };
   }
 
   async tools(force = false) {
     if (!force && this.toolsCache && Date.now() - this.toolsCache.at < TOOLS_CACHE_MS) return this.toolsCache.value;
+    const env = this.env();
     const probe = async (command, args) => {
-      const res = await run(command, args, { timeout: 6000 });
-      if (res.missing) return { installed: false, version: '', detail: `${command} is not on PATH.` };
+      const res = await run(command, args, { timeout: 6000, env });
+      if (res.missing) return { installed: false, version: '', detail: `${command} is not installed.` };
       const text = String(res.stdout || res.stderr || '').trim();
       const first = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] || '';
-      return {
+      const value = {
         installed: res.ok,
         version: res.ok ? first.slice(0, 120) : '',
         detail: res.ok ? '' : scrub(res.stderr || `exit code ${res.code}`, 400),
       };
+      Object.defineProperty(value, 'raw', { value: text, enumerable: false, configurable: true });
+      return value;
     };
     const [kubectl, kind, minikube, helm] = await Promise.all([
       probe('kubectl', ['version', '--client', '-o', 'json']),
@@ -117,19 +126,78 @@ class KubernetesService {
       probe('minikube', ['version']),
       probe('helm', ['version', '--short']),
     ]);
-    if (kubectl.installed && /^\{/.test(kubectl.version)) {
+    if (kubectl.installed) {
       try {
-        const data = JSON.parse(String(kubectl.version));
+        const data = JSON.parse(String(kubectl.raw || ''));
         kubectl.version = data.clientVersion?.gitVersion || data.clientVersion?.version || 'installed';
       } catch { kubectl.version = 'installed'; }
+      delete kubectl.raw;
     }
+    delete kind.raw;
+    delete minikube.raw;
+    delete helm.raw;
     const value = { ok: true, tools: { kubectl, kind, minikube, helm }, checkedAt: new Date().toISOString() };
     this.toolsCache = { at: Date.now(), value };
     return value;
   }
 
+  async installTools(onProgress = null) {
+    if (this.installPromise) return this.installPromise;
+    this.installPromise = (async () => {
+      const before = await this.tools(true);
+      const missing = TOOL_NAMES.filter((name) => !before.tools[name]?.installed);
+      if (!missing.length) {
+        return {
+          ok: true,
+          tools: before.tools,
+          installed: [],
+          failed: [],
+          alreadyInstalled: true,
+          binDir: binDir(this.app),
+          checkedAt: before.checkedAt,
+        };
+      }
+
+      const installed = [];
+      const failed = [];
+      for (const name of missing) {
+        try {
+          const result = await installTool(name, {
+            app: this.app,
+            onProgress: (event) => onProgress?.({ ...event, tool: name, label: labelFor(name) }),
+          });
+          installed.push({ name: result.name, label: result.label, version: result.version, bytes: result.bytes });
+        } catch (error) {
+          const message = scrub(error?.message || `Could not install ${labelFor(name)}.`, 500);
+          failed.push({ name, label: labelFor(name), error: message });
+          onProgress?.({ tool: name, label: labelFor(name), phase: 'error', message, percent: null });
+        }
+      }
+
+      this.toolsCache = null;
+      const after = await this.tools(true);
+      onProgress?.({
+        phase: 'done',
+        message: failed.length ? 'Finished with errors.' : 'All requested tools are installed.',
+        percent: 100,
+        installed: installed.length,
+        failed: failed.length,
+      });
+      return {
+        ok: failed.length === 0,
+        tools: after.tools,
+        installed,
+        failed,
+        alreadyInstalled: false,
+        binDir: binDir(this.app),
+        checkedAt: after.checkedAt,
+      };
+    })().finally(() => { this.installPromise = null; });
+    return this.installPromise;
+  }
+
   async readSource(source) {
-    const res = await runJson('kubectl', ['config', 'view', '--kubeconfig', source.file, '-o', 'json'], { timeout: 9000 });
+    const res = await runJson('kubectl', ['config', 'view', '--kubeconfig', source.file, '-o', 'json'], { timeout: 9000, env: this.env() });
     if (!res.ok) {
       return {
         source: { id: source.id, label: source.label, imported: source.imported, contexts: 0, error: scrub(res.stderr || 'Could not read this kubeconfig.', 400) },
@@ -333,7 +401,7 @@ class KubernetesService {
       return { ok: true, alreadyImported: true, imported: { id: existing.id, label: existing.label }, state: await this.bootstrap() };
     }
 
-    const validation = await runJson('kubectl', ['config', 'view', '--kubeconfig', sourcePath, '-o', 'json'], { timeout: 12000 });
+    const validation = await runJson('kubectl', ['config', 'view', '--kubeconfig', sourcePath, '-o', 'json'], { timeout: 12000, env: this.env() });
     if (!validation.ok) {
       return {
         ok: false,

@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('opsdeck', {
     importKubeconfig: () => invoke('k8s:import-kubeconfig'),
     removeKubeconfig: (payload) => invoke('k8s:remove-kubeconfig', payload),
     dashboard: () => invoke('k8s:dashboard'),
+    installStatus: () => invoke('k8s:install-status'),
+    installTools: () => invoke('k8s:install-tools'),
   },
   ai: {
     config: () => invoke('ai:config'),
@@ -107,6 +109,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     lab: (cb) => on('lab:event', cb),
     execData: (cb) => on('docker:exec-data', cb),
     execExit: (cb) => on('docker:exec-exit', cb),
+    k8sInstall: (cb) => on('k8s:install-progress', cb),
     zoom: (cb) => on('window:zoom-changed', cb),
   },
 });
