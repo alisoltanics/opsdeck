@@ -281,6 +281,7 @@ async function imagesList() {
       containers: i.Containers,
       dangling: i.Repository === '<none>' || i.Tag === '<none>',
       registry: registryOf(i.Repository),
+      protected: isProtectedImageRepository(i.Repository),
     }));
     return { ok: true, items };
   });
@@ -300,12 +301,79 @@ const IMAGE_ACTIONS = {
   prune: () => ['image', 'prune', '--force'],
 };
 
+/**
+ * Base OS and language runtime images are never removed by "Free space".
+ * The name must be an official-style reference: either no namespace, the
+ * implicit `library/` namespace, or a registry prefix followed by the bare
+ * image name. A user image such as `mycorp/node` is not protected.
+ */
+const PROTECTED_IMAGE_REPOS = new Set([
+  'ubuntu', 'debian', 'alpine', 'busybox', 'fedora', 'centos', 'rockylinux',
+  'almalinux', 'amazonlinux', 'oraclelinux', 'archlinux', 'kali', 'opensuse',
+  'node', 'python', 'golang', 'rust', 'php', 'ruby', 'openjdk',
+  'eclipse-temurin', 'maven', 'gradle', 'postgres', 'mysql', 'mariadb',
+  'mongo', 'redis', 'rabbitmq', 'memcached', 'nginx', 'httpd', 'caddy',
+  'traefik', 'haproxy',
+]);
+
+function isProtectedImageRepository(repository) {
+  if (!repository || repository === '<none>') return false;
+  const parts = String(repository).split('/');
+  const last = parts[parts.length - 1];
+  if (!PROTECTED_IMAGE_REPOS.has(last)) return false;
+  const first = parts[0];
+  const hasRegistry = parts.length > 1 && (first === 'localhost' || first.includes('.') || first.includes(':'));
+  const rest = hasRegistry ? parts.slice(1) : parts;
+  return rest.length === 1 || rest[0] === 'library';
+}
+
+/**
+ * Remove explicitly reviewed images. Safety is enforced here as well as in the
+ * UI: every reference must still exist, must not be referenced by a container
+ * and must not be a protected base image. Removal uses argument arrays, never
+ * a shell and never --force, so Docker refuses anything still in use.
+ */
+async function removeUnusedImages(refs) {
+  if (!Array.isArray(refs) || refs.length === 0) throw new Error('No images were selected');
+  const wanted = [...new Set(refs)];
+  if (wanted.length > 100) throw new Error('Too many images in one request');
+  if (wanted.some((ref) => !validId(ref))) throw new Error('Invalid image reference');
+  invalidate('images');
+  const list = await imagesList();
+  if (!list.ok) return { ok: false, error: list.error || 'Could not list images' };
+  const byRef = new Map();
+  for (const img of list.items) {
+    byRef.set(img.id, img);
+    byRef.set(img.name, img);
+  }
+  const checked = new Set();
+  for (const ref of wanted) {
+    const img = byRef.get(ref) || list.items.find((i) => i.id.startsWith(ref));
+    if (!img) return { ok: false, error: `Image ${ref} no longer exists. Refresh the list.` };
+    const used = Number(img.containers);
+    if (!Number.isFinite(used)) return { ok: false, error: `${img.name} has an unknown usage state.` };
+    if (used > 0) return { ok: false, error: `${img.name} is used by ${used} container(s).` };
+    if (isProtectedImageRepository(img.repository)) return { ok: false, error: `${img.name} is a protected base image.` };
+    checked.add(img.id);
+  }
+  const timeout = Math.min(240000, 30000 + wanted.length * 4000);
+  const res = await run(['image', 'rm', ...wanted], { timeout });
+  invalidate('images'); invalidate('overview');
+  return {
+    ok: res.ok,
+    stdout: res.stdout.trim(),
+    error: res.ok ? null : res.stderr,
+    removed: checked.size,
+  };
+}
+
 async function imageAction(id, action, options = {}) {
   if (action === 'prune') {
     const res = await run(['image', 'prune', '--force'], { timeout: 120000 });
     invalidate('images'); invalidate('overview');
     return { ok: res.ok, stdout: res.stdout.trim(), error: res.ok ? null : res.stderr };
   }
+  if (action === 'remove-unused') return removeUnusedImages(options.refs);
   if (!validId(id)) throw new Error('Invalid image reference');
   if (action === 'tag' && (!options.target || !validId(options.target))) throw new Error('Invalid tag target');
   const build = IMAGE_ACTIONS[action];
@@ -787,7 +855,8 @@ async function commandHelp(command) {
 
 module.exports = {
   status, overview, containersList, inspectContainer, containerLogs, containerAction,
-  imagesList, imageAction, volumesList, volumeAction, networksList, networkAction,
+  imagesList, imageAction, removeUnusedImages, isProtectedImageRepository,
+  volumesList, volumeAction, networksList, networkAction,
   composeList, composeConfig, composeAction, pickComposeFile, builds, registries,
   searchRegistry, stats, events, systemDf, terminalRun, commandIndex, commandHelp,
   parseHelp, stripAnsi, invalidate, validId, validName, validProject, runRaw: run,

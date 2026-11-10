@@ -22,6 +22,14 @@ renderer. Docker commands go through `execFile('docker', ...)` — never a shell
   with running/service counts on every group
 - Open a container's published TCP address in Firefox straight from its row or inspect drawer
 - Images, volumes and networks with search, filters and safe destructive actions
+- Create and start a container from any image row, with the run dialog prefilled
+- Jump from an image to the container list filtered by that image, with a removable filter
+  chip and a back/forward-safe URL
+- Free space review for non-system images older than 1 month, 3 months, 6 months or a year:
+  candidates are listed with their size, and deletion is opt-in, per-image and irreversible.
+  Official base OS/runtime images (ubuntu, alpine, node, python, postgres, nginx and similar) and
+  any image referenced by a running or stopped container are always excluded, and
+  `docker image rm` runs without `--force` as a final guard
 - Compose projects: resolved config, logs and lifecycle controls
 - Builds, registries, monitoring, event stream and a validated Docker terminal
   (safety consent is asked once and remembered across launches)

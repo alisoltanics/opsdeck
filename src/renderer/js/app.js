@@ -67,8 +67,9 @@
 
   function parseHash() {
     const raw = String(location.hash || '').replace(/^#\/?/, '');
-    const parts = raw.split('/').filter(Boolean);
-    return { name: parts[0] || 'overview', parts: parts.slice(1), raw };
+    const [path, query = ''] = raw.split('?');
+    const parts = path.split('/').filter(Boolean);
+    return { name: parts[0] || 'overview', parts: parts.slice(1), raw, query: new URLSearchParams(query) };
   }
 
   function isDockerRoute(name) {

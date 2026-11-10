@@ -225,6 +225,80 @@ function rendererScript(routes) {
       }
     }
 
+    // Images: run-from-image is prefilled, and free-space review never deletes during smoke.
+    location.hash = '#/images';
+    await waitFor(() => !!document.querySelector('#image-tbody'), 8000);
+    const runFromImage = document.querySelector('#image-tbody [data-iact="run"]');
+    if (!runFromImage) {
+      failures.push('images: create-and-start button is missing');
+    } else {
+      const expectedRef = runFromImage.dataset.iref || '';
+      runFromImage.click();
+      const runDialog = await waitFor(() => !!document.querySelector('.modal-overlay #run-image'), 3000);
+      if (!runDialog) {
+        failures.push('images: run dialog did not open');
+      } else {
+        const value = document.querySelector('#run-image').value;
+        if (!value || value !== expectedRef) failures.push('images: run dialog was not prefilled with the image reference');
+        document.querySelector('.modal-overlay [data-action="cancel"]')?.click();
+        await waitFor(() => !document.querySelector('.modal-overlay #run-image'), 2500);
+      }
+    }
+
+    const cleanupButton = document.querySelector('[data-action="cleanup-images"]');
+    if (!cleanupButton) {
+      failures.push('images: free space button is missing');
+    } else {
+      cleanupButton.click();
+      const opened = await waitFor(() => !!document.querySelector('#cleanup-list'), 4000);
+      if (!opened) {
+        failures.push('images: free space dialog did not open');
+      } else {
+        const text = document.querySelector('.modal-overlay')?.innerText || '';
+        if (!/System images are protected/i.test(text)) failures.push('cleanup: system-image safety notice is missing');
+        if (!document.querySelector('#cleanup-age')) failures.push('cleanup: age selector is missing');
+        const rows = [...document.querySelectorAll('[data-cleanup-id]')];
+        const removeButton = document.querySelector('#cleanup-delete');
+        if (rows.length && removeButton?.disabled) failures.push('cleanup: delete is disabled despite candidates');
+        if (!rows.length && removeButton && !removeButton.disabled) failures.push('cleanup: delete is enabled without candidates');
+        const age = document.querySelector('#cleanup-age');
+        if (age) {
+          age.value = '365';
+          age.dispatchEvent(new Event('change', { bubbles: true }));
+          await sleep(120);
+          if (!document.querySelector('#cleanup-list')) failures.push('cleanup: age change broke the review list');
+        }
+        document.querySelector('[data-cleanup-cancel]')?.click();
+        await waitFor(() => !document.querySelector('#cleanup-list'), 2500);
+      }
+    }
+
+    // Image row -> containers filtered by that exact image, with a removable chip.
+    const containersForImage = document.querySelector('#image-tbody [data-iact="containers"]');
+    if (!containersForImage) {
+      failures.push('images: show-containers button is missing');
+    } else {
+      const imageName = containersForImage.dataset.iname || '';
+      const row = containersForImage.closest('tr');
+      const usedCount = row ? (row.children[3]?.textContent || '').trim() : '';
+      containersForImage.click();
+      const filteredRoute = await waitFor(() => window.OD.store.state.route?.name === 'containers' && !!document.querySelector('[data-clear-image-filter]'), 6000);
+      if (!filteredRoute) {
+        failures.push('images: container image filter did not open');
+      } else {
+        if (!location.hash.startsWith('#/containers?image=')) failures.push('images: image filter URL is missing its query');
+        const chip = document.querySelector('[data-clear-image-filter]');
+        if (!chip || !chip.textContent.includes(imageName)) failures.push('images: image filter chip does not name the image');
+        if (usedCount && usedCount !== '0' && usedCount !== '—') {
+          const filteredRows = document.querySelectorAll('#container-tbody tr[data-open-container]');
+          if (!filteredRows.length) failures.push('images: image filter returned no rows for a used image');
+        }
+        chip?.click();
+        const cleared = await waitFor(() => window.OD.store.state.route?.raw === 'containers' && !document.querySelector('[data-clear-image-filter]'), 6000);
+        if (!cleared) failures.push('images: clearing the image filter did not restore all containers');
+      }
+    }
+
     // Container logs open pinned to the newest line, with a jump control.
     location.hash = '#/containers';
     await waitFor(() => !!document.querySelector('#container-tbody'), 8000);

@@ -12,8 +12,9 @@
   const rerender = () => (OD.app && OD.app.rerender ? OD.app.rerender() : location.reload());
 
   const state = {
-    containerFilter: { q: '', status: 'all', project: 'all', grouped: null },
+    containerFilter: { q: '', status: 'all', project: 'all', grouped: null, imageId: null, imageLabel: '', imageAliases: [] },
     imageFilter: { q: '', kind: 'all' },
+    imageCleanupDays: 90,
     eventFilter: { since: 3600, type: 'all' },
     terminal: { history: [], consent: false, pending: null, busy: false },
     registry: { query: '', items: null, error: null, loading: false },
@@ -51,6 +52,162 @@
     if (!m) return Number(label) || 0;
     const mult = { b: 1, byte: 1, bytes: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1024 ** 2, gib: 1024 ** 3, tib: 1024 ** 4 }[m[2].toLowerCase()] || 1;
     return Number(m[1]) * mult;
+  }
+
+  // ------------------------------------------------------------------ cleanup
+
+  const CLEANUP_AGES = [30, 90, 180, 365];
+
+  function imageAgeDays(image) {
+    const ms = Date.parse(image.createdAt);
+    return Number.isFinite(ms) ? (Date.now() - ms) / 86400000 : null;
+  }
+
+  function imageUsage(image) {
+    if (image.containers === undefined || image.containers === null || image.containers === '' || image.containers === 'N/A') return null;
+    const n = Number(image.containers);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function imageRef(image) {
+    const named = image.repository && image.repository !== '<none>' && image.tag && image.tag !== '<none>';
+    return named ? `${image.repository}:${image.tag}` : image.id;
+  }
+
+  /**
+   * Reviewable "free space" candidates. An image only qualifies when every
+   * condition is true, and any doubt excludes it:
+   *  - not an official base OS/runtime image (protected server-side too)
+   *  - referenced by zero containers, including stopped ones
+   *  - created more than `days` days ago
+   *  - has a parseable creation date and usage count
+   * Tags of the same image are grouped so size is counted once.
+   */
+  function cleanupCandidates(images, days) {
+    const groups = new Map();
+    for (const image of images) {
+      if (image.protected) continue;
+      if (imageUsage(image) !== 0) continue;
+      const age = imageAgeDays(image);
+      if (age === null || age < days) continue;
+      let group = groups.get(image.id);
+      if (!group) {
+        group = { id: image.id, refs: [], tags: [], size: 0, sizeLabel: image.size, createdAt: image.createdAt, age };
+        groups.set(image.id, group);
+      }
+      group.refs.push(imageRef(image));
+      group.tags.push(image.repository === '<none>' ? `<none>:${image.tag}` : `${image.repository}:${image.tag}`);
+      group.size = Math.max(group.size, parseSize(image.size));
+      group.age = Math.max(group.age, age);
+    }
+    return [...groups.values()].sort((a, b) => b.size - a.size);
+  }
+
+  function openImageCleanup() {
+    const images = state.last.images || [];
+    let days = CLEANUP_AGES.includes(state.imageCleanupDays) ? state.imageCleanupDays : 90;
+    let candidates = cleanupCandidates(images, days);
+    let selected = new Set(candidates.map((c) => c.id));
+    let closeModal = () => {};
+
+    const listHtml = () => {
+      if (!candidates.length) {
+        return U.empty({ compact: true, icon: 'shield-check', title: 'Nothing to clean up', body: `No non-system images older than ${days} days have zero containers.` });
+      }
+      return candidates.map((c) => {
+        const checked = selected.has(c.id);
+        const tags = c.tags.length > 1 ? `${c.tags.length} tags` : c.tags[0];
+        return `<label class="cleanup-row ${checked ? 'selected' : ''}" data-cleanup-row="${esc(c.id)}">
+          <input type="checkbox" data-cleanup-id="${esc(c.id)}" ${checked ? 'checked' : ''} />
+          <div class="cleanup-row-main">
+            <span class="cleanup-row-title mono">${esc(tags)}</span>
+            <span class="cleanup-row-sub mono">${esc(shortId(c.id, 19))} · created ${Math.floor(c.age)} days ago · 0 containers</span>
+          </div>
+          <span class="cleanup-row-size mono">${esc(c.sizeLabel)}</span>
+        </label>`;
+      }).join('');
+    };
+
+    U.modal({
+      title: 'Free up disk space',
+      subtitle: 'Review old, unreferenced images before anything is deleted. Nothing is removed automatically.',
+      eyebrow: 'Image cleanup',
+      icon: 'hard-drive',
+      width: '720px',
+      body: `<div class="stack-3">
+        ${U.infoBanner('System images are protected', 'Official base and runtime images such as ubuntu, alpine, node, python, postgres and nginx are never listed here. OpsDeck also refuses to remove any image referenced by a running or stopped container, and Docker enforces the same guard.', 'success')}
+        <div class="cleanup-controls">
+          <label class="field"><span>Older than</span><select class="input" id="cleanup-age">${CLEANUP_AGES.map((n) => `<option value="${n}" ${n === days ? 'selected' : ''}>${n === 30 ? '1 month' : n === 90 ? '3 months' : n === 180 ? '6 months' : '1 year'}</option>`).join('')}</select></label>
+          <div class="cleanup-summary">
+            <span class="cleanup-summary-label">Selected</span>
+            <strong class="cleanup-summary-value" id="cleanup-total">—</strong>
+            <span class="cleanup-summary-sub" id="cleanup-count">—</span>
+          </div>
+        </div>
+        <div class="cleanup-list" id="cleanup-list">${listHtml()}</div>
+        <div class="muted text-xs">${icon('shield-check', 12)} Deletion uses <span class="mono">docker image rm</span> without <span class="mono">--force</span>. An image becomes unavailable only after you confirm.</div>
+      </div>`,
+      footer: `<div class="row gap-2 right" style="width:100%">
+        ${U.button({ label: 'Cancel', variant: 'ghost', attrs: 'data-cleanup-cancel' })}
+        <button type="button" class="btn btn-danger" id="cleanup-delete" data-cleanup-delete disabled>${icon('trash', 13)}<span>Delete selected</span></button>
+      </div>`,
+      onMount: ({ root, close }) => {
+        closeModal = close;
+        const list = root.querySelector('#cleanup-list');
+        const total = root.querySelector('#cleanup-total');
+        const count = root.querySelector('#cleanup-count');
+        const del = root.querySelector('#cleanup-delete');
+        const paint = () => {
+          list.innerHTML = listHtml();
+          const chosen = candidates.filter((c) => selected.has(c.id));
+          const bytes = chosen.reduce((sum, c) => sum + c.size, 0);
+          total.textContent = bytes ? fmtBytes(bytes) : '0 B';
+          count.textContent = chosen.length ? `${chosen.length} image${chosen.length === 1 ? '' : 's'} selected` : 'Nothing selected';
+          del.disabled = chosen.length === 0;
+        };
+        root.querySelector('#cleanup-age').addEventListener('change', (event) => {
+          days = Number(event.target.value);
+          state.imageCleanupDays = days;
+          candidates = cleanupCandidates(images, days);
+          selected = new Set(candidates.map((c) => c.id));
+          paint();
+        });
+        list.addEventListener('change', (event) => {
+          const box = event.target.closest('[data-cleanup-id]');
+          if (!box) return;
+          if (box.checked) selected.add(box.dataset.cleanupId);
+          else selected.delete(box.dataset.cleanupId);
+          box.closest('[data-cleanup-row]')?.classList.toggle('selected', box.checked);
+          paint();
+        });
+        root.querySelector('[data-cleanup-cancel]').addEventListener('click', () => close('cancel'));
+        del.addEventListener('click', async () => {
+          const chosen = candidates.filter((c) => selected.has(c.id));
+          if (!chosen.length) return;
+          const refs = chosen.flatMap((c) => c.refs);
+          const bytes = chosen.reduce((sum, c) => sum + c.size, 0);
+          const ok = await U.confirm({
+            title: 'Delete old images?',
+            message: `${chosen.length} old image${chosen.length === 1 ? '' : 's'} with no container references will be permanently removed, freeing about ${fmtBytes(bytes)}. Official base images are not included.`,
+            detail: `docker image rm ${refs.slice(0, 8).join(' ')}${refs.length > 8 ? ' …' : ''}`,
+            confirmLabel: 'Delete images',
+            tone: 'red',
+          });
+          if (!ok) return;
+          del.disabled = true;
+          const res = await api.docker.imageAction(null, 'remove-unused', { refs });
+          if (res.ok) {
+            U.toast('Space freed', 'success', { description: `${chosen.length} image${chosen.length === 1 ? '' : 's'} removed · about ${fmtBytes(bytes)}` });
+            closeModal('done');
+            rerender();
+          } else {
+            U.toast('Could not remove images', 'error', { description: res.error });
+            paint();
+          }
+        });
+        paint();
+      },
+    });
   }
 
   function engineDown(reason, extra) {
@@ -258,8 +415,36 @@
     return `${protocol}://localhost:${port}`;
   }
 
+  function imageAliasesFor(id, label = '') {
+    const aliases = new Set([id, `sha256:${id}`]);
+    if (label) {
+      aliases.add(label);
+      if (label.endsWith(':latest')) aliases.add(label.slice(0, -7));
+    }
+    for (const image of state.last.images || []) {
+      if (image.id !== id) continue;
+      aliases.add(image.name);
+      aliases.add(`${image.repository}:${image.tag}`);
+      if (image.tag === 'latest') aliases.add(image.repository);
+      if (image.digest && image.digest !== '<none>') aliases.add(`${image.repository}@${image.digest}`);
+    }
+    return [...aliases].filter((value) => value && value !== '<none>:<none>');
+  }
+
+  function containerUsesImage(x) {
+    const f = state.containerFilter;
+    if (!f.imageId) return true;
+    const ref = String(x.image || '').trim();
+    if (!ref) return false;
+    if ((f.imageAliases || []).includes(ref)) return true;
+    if (/^[a-f0-9]{12,64}$/i.test(ref) && (ref.startsWith(f.imageId) || f.imageId.startsWith(ref))) return true;
+    const composeImage = String(x.labels?.['com.docker.compose.image'] || '').replace(/^sha256:/i, '');
+    return Boolean(composeImage) && (composeImage.startsWith(f.imageId) || f.imageId.startsWith(composeImage));
+  }
+
   function containerMatches(x) {
     const f = state.containerFilter;
+    if (!containerUsesImage(x)) return false;
     if (f.status !== 'all' && x.state !== f.status) return false;
     if (f.project && f.project !== 'all' && projectKey(x) !== f.project) return false;
     const q = f.q.trim().toLowerCase();
@@ -282,6 +467,17 @@
       if (b.key === '__standalone') return -1;
       return a.key.localeCompare(b.key);
     });
+  }
+
+  function showContainersForImage(image) {
+    state.containerFilter.imageId = image.id;
+    state.containerFilter.imageLabel = image.name;
+    state.containerFilter.imageAliases = imageAliasesFor(image.id, image.name);
+    state.containerFilter.q = '';
+    state.containerFilter.status = 'all';
+    state.containerFilter.project = 'all';
+    const query = new URLSearchParams({ image: image.id, label: image.name });
+    OD.app.goto(`#/containers?${query.toString()}`);
   }
 
   function containerRow(x) {
@@ -319,7 +515,10 @@
   function containerRows(items) {
     const filtered = items.filter(containerMatches);
     if (!filtered.length) {
-      return `<tr><td colspan="7">${U.empty({ compact: true, icon: 'search', title: 'No matching containers', body: 'Adjust the search, project or state filter.' })}</td></tr>`;
+      const body = state.containerFilter.imageId
+        ? `No containers are using ${state.containerFilter.imageLabel || state.containerFilter.imageId}. Clear the image filter to see every container.`
+        : 'Adjust the search, project or state filter.';
+      return `<tr><td colspan="7">${U.empty({ compact: true, icon: 'search', title: 'No matching containers', body })}</td></tr>`;
     }
     if (!state.containerFilter.grouped) return filtered.map(containerRow).join('');
 
@@ -355,9 +554,34 @@
     }).join('');
   }
 
-  async function renderContainers() {
+  async function renderContainers(route) {
     if (engineOfflineStatus()) return engineDown(OD.store.state.status?.reason);
-    const [res, stats] = await Promise.all([api.docker.containers(), api.docker.stats().catch(() => ({ items: [] }))]);
+    const queryImage = route?.query?.get('image') || '';
+    const queryLabel = route?.query?.get('label') || '';
+    if (queryImage) {
+      if (state.containerFilter.imageId !== queryImage) {
+        state.containerFilter.imageId = queryImage;
+        state.containerFilter.imageLabel = queryLabel || queryImage;
+        state.containerFilter.q = '';
+        state.containerFilter.status = 'all';
+        state.containerFilter.project = 'all';
+      } else if (queryLabel) {
+        state.containerFilter.imageLabel = queryLabel;
+      }
+      state.containerFilter.imageAliases = imageAliasesFor(queryImage, state.containerFilter.imageLabel);
+    } else if (state.containerFilter.imageId) {
+      state.containerFilter.imageId = null;
+      state.containerFilter.imageLabel = '';
+      state.containerFilter.imageAliases = [];
+    }
+    const needImages = Boolean(queryImage) && !(state.last.images || []).some((i) => i.id === queryImage);
+    const [res, stats, imageRes] = await Promise.all([
+      api.docker.containers(),
+      api.docker.stats().catch(() => ({ items: [] })),
+      needImages ? api.docker.images().catch(() => null) : Promise.resolve(null),
+    ]);
+    if (imageRes?.ok) state.last.images = imageRes.items;
+    if (queryImage) state.containerFilter.imageAliases = imageAliasesFor(queryImage, state.containerFilter.imageLabel);
     if (!res.ok) return engineDown(res.error);
     const statMap = new Map((stats.items || []).map((s) => [s.name, s]));
     const items = (res.items || []).map((x) => {
@@ -376,7 +600,12 @@
     for (const x of items) counts[x.state] = (counts[x.state] || 0) + 1;
     const projects = containerProjects(items);
     const grouped = state.containerFilter.grouped === true;
+    const shownCount = items.filter(containerMatches).length;
+    const countLabel = state.containerFilter.imageId ? `${shownCount} of ${items.length} containers` : `${items.length} containers`;
     const projectName = state.containerFilter.project === 'all' ? '' : projectLabel(state.containerFilter.project);
+    const imageFilterChip = state.containerFilter.imageId
+      ? `<button type="button" class="chip active image-filter-chip" data-clear-image-filter title="Clear image filter">${icon('layers', 12)}<span>${esc(state.containerFilter.imageLabel || state.containerFilter.imageId)}</span>${icon('x', 11)}</button>`
+      : '';
     return `<div class="page">
       ${pageHead({
         eyebrow: 'Docker workspace', iconName: 'box', title: 'Containers',
@@ -388,13 +617,14 @@
         <div class="filter-row">
           ${['all', 'running', 'exited', 'paused', 'created'].map((s) => `<button type="button" class="chip ${state.containerFilter.status === s ? 'active' : ''}" data-cstate="${s}">${esc(titleCase(s))}<span class="chip-count">${counts[s] || 0}</span></button>`).join('')}
         </div>
+        ${imageFilterChip}
         <div class="toolbar-spacer"></div>
         ${projects.length > 1 ? `<label class="field toolbar-field"><span>Project</span><select class="input" id="container-project">
           <option value="all" ${state.containerFilter.project === 'all' ? 'selected' : ''}>All projects (${items.length})</option>
           ${projects.map((p) => `<option value="${esc(p.key)}" ${state.containerFilter.project === p.key ? 'selected' : ''}>${esc(projectLabel(p.key))} (${p.total})</option>`).join('')}
         </select></label>` : ''}
         ${projects.length > 1 ? `<button type="button" class="btn ${grouped ? 'btn-primary' : 'btn-secondary'} btn-sm" data-container-group-toggle>${icon('boxes', 14)}<span>${grouped ? 'Grouped' : 'Group by project'}</span></button>` : ''}
-        <span class="muted text-xs">${projectName ? `${projectName} · ` : ''}${items.length} containers</span>
+        <span class="muted text-xs">${projectName ? `${projectName} · ` : ''}${countLabel}</span>
       </div>
       <div class="card flush">
         <div class="table-wrap">
@@ -1004,21 +1234,22 @@
     });
   }
 
-  function openRunContainer() {
+  function openRunContainer(presetImage) {
+    const initialImage = typeof presetImage === 'string' && presetImage.trim() ? presetImage.trim() : 'alpine:3.20';
     U.modal({
       title: 'Run a container',
       subtitle: 'The command is executed through the main process with an argument array, never a shell.',
       icon: 'play',
       width: '560px',
       body: `<div class="stack-3">
-        <label class="field"><span>Image</span><input class="input" id="run-image" value="alpine:3.20" placeholder="nginx:1.27-alpine" autofocus /></label>
+        <label class="field"><span>Image</span><input class="input" id="run-image" value="${esc(initialImage)}" placeholder="nginx:1.27-alpine" autofocus /></label>
         <div class="split-2">
           <label class="field"><span>Name (optional)</span><input class="input" id="run-name" placeholder="my-container" /></label>
           <label class="field"><span>Port mapping</span><input class="input" id="run-ports" placeholder="127.0.0.1:8080:80" /></label>
         </div>
         <label class="field"><span>Environment</span><input class="input" id="run-env" placeholder="LOG_LEVEL=info, TZ=UTC" /></label>
         <label class="field"><span>Command (optional)</span><input class="input" id="run-cmd" placeholder="sh -c 'echo hello'" /></label>
-        <div class="command-line"><span class="prompt">$</span><code id="run-preview">docker run -d alpine:3.20</code></div>
+        <div class="command-line"><span class="prompt">$</span><code id="run-preview">${esc(`docker run -d ${initialImage}`)}</code></div>
         <div class="muted text-xs">${icon('shield-check', 12)} Ports default to loopback if you provide a host address. Do not publish databases to 0.0.0.0.</div>
       </div>`,
       actions: [
@@ -1076,24 +1307,15 @@
     const dangling = items.filter((x) => x.dangling).length;
     const used = items.filter((x) => !x.dangling && String(x.containers || '') !== '0' && x.containers !== 'N/A').length;
     const filtered = items.filter(imageMatches);
-    const rows = filtered.map((x) => `<tr>
-      <td><div class="cell-main"><span class="icon-chip tone-${x.dangling ? 'slate' : 'violet'}" style="--chip-size:28px">${icon('layers', 14)}</span><div><div class="cell-title mono">${esc(x.repository)}:${esc(x.tag)}</div><div class="cell-sub mono">${esc(shortId(x.id, 19))}</div></div></div></td>
-      <td class="cell-mono">${esc(x.size)}</td>
-      <td class="cell-nowrap">${esc(x.createdSince || timeAgo(x.createdAt))}</td>
-      <td class="cell-mono">${esc(x.containers ?? '—')}</td>
-      <td>${x.dangling ? U.badge('dangling', 'slate') : `<span class="badge tone-cyan">${esc(x.registry)}</span>`}</td>
-      <td><div class="row-actions">
-        ${U.iconButton({ icon: 'history', label: 'History', attrs: `data-iact="history" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
-        ${U.iconButton({ icon: 'tag', label: 'Tag', attrs: `data-iact="tag" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
-        ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-iact="remove" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
-      </div></td>
-    </tr>`).join('');
+    const cleanable = cleanupCandidates(items, state.imageCleanupDays || 90);
+    const cleanableBytes = cleanable.reduce((sum, c) => sum + c.size, 0);
+    const rows = filtered.map(imageRow).join('');
 
     return `<div class="page">
       ${pageHead({
         eyebrow: 'Docker workspace', iconName: 'layers', title: 'Images',
         sub: 'Understand layer composition, tags and registry provenance before you build or prune.',
-        actions: `${U.button({ label: 'Pull image', icon: 'download', variant: 'primary', attrs: 'data-action="pull-image"' })}${U.button({ label: 'Prune dangling', icon: 'trash', variant: 'secondary', attrs: 'data-action="prune-images"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'ghost', attrs: 'data-action="refresh"' })}`,
+        actions: `${U.button({ label: 'Pull image', icon: 'download', variant: 'primary', attrs: 'data-action="pull-image"' })}${U.button({ label: 'Free space', icon: 'sparkles', variant: 'secondary', attrs: 'data-action="cleanup-images"' })}${U.button({ label: 'Prune dangling', icon: 'trash', variant: 'secondary', attrs: 'data-action="prune-images"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'ghost', attrs: 'data-action="refresh"' })}`,
       })}
       <div class="stat-grid">
         ${U.statCard({ label: 'Local images', value: items.length, sub: `${dangling} dangling`, icon: 'layers', tone: 'violet' })}
@@ -1101,6 +1323,7 @@
         ${U.statCard({ label: 'In use', value: used, sub: 'referenced by containers', icon: 'box', tone: 'green' })}
         ${U.statCard({ label: 'Registries', value: new Set(items.map((x) => x.registry)).size, sub: 'distinct sources', icon: 'cloud', tone: 'accent' })}
       </div>
+      ${cleanable.length ? `<div class="mt-4">${U.infoBanner('Free space available', `${cleanable.length} non-system image${cleanable.length === 1 ? '' : 's'} older than ${state.imageCleanupDays || 90} days with no containers could free about ${fmtBytes(cleanableBytes)}. Base system images and images used by containers are always excluded.`, 'warning', U.button({ label: 'Review cleanup', icon: 'sparkles', size: 'sm', variant: 'primary', attrs: 'data-action="cleanup-images"' }))}</div>` : ''}
       <div class="toolbar mt-4">
         <label class="search-box">${icon('search', 14)}<input id="image-search" type="search" placeholder="Search repository, tag or digest…" value="${esc(state.imageFilter.q)}" /></label>
         <div class="filter-row">${[['all', 'All'], ['used', 'In use'], ['dangling', 'Dangling']].map(([k, label]) => `<button type="button" class="chip ${state.imageFilter.kind === k ? 'active' : ''}" data-ikind="${k}">${label}</button>`).join('')}</div>
@@ -1832,6 +2055,13 @@
     });
 
     root.addEventListener('click', async (event) => {
+      if (event.target.closest('[data-clear-image-filter]')) {
+        state.containerFilter.imageId = null;
+        state.containerFilter.imageLabel = '';
+        state.containerFilter.imageAliases = [];
+        OD.app.goto('#/containers');
+        return;
+      }
       const projectOnly = event.target.closest('[data-project-only]');
       if (projectOnly) {
         event.stopPropagation();
@@ -1892,6 +2122,7 @@
     root.addEventListener('click', async (event) => {
       const actionEl = event.target.closest('[data-action]');
       if (actionEl?.dataset.action === 'pull-image') { pullImage(); return; }
+      if (actionEl?.dataset.action === 'cleanup-images') { openImageCleanup(); return; }
       if (actionEl?.dataset.action === 'prune-images') {
         const ok = await U.confirm({ title: 'Prune dangling images?', message: 'Dangling images are untagged layers with no references. This is usually safe, but the operation is irreversible.', detail: 'docker image prune --force', confirmLabel: 'Prune images', tone: 'warning' });
         if (!ok) return;
@@ -1903,6 +2134,8 @@
       const act = event.target.closest('[data-iact]');
       if (!act) return;
       const item = items.find((x) => x.id === act.dataset.iid) || { id: act.dataset.iid, name: act.dataset.iname };
+      if (act.dataset.iact === 'run') { openRunContainer(act.dataset.iref || item.name); return; }
+      if (act.dataset.iact === 'containers') { showContainersForImage(item); return; }
       if (act.dataset.iact === 'history') { showImageHistory(item); return; }
       if (act.dataset.iact === 'tag') {
         const target = await U.prompt({ title: 'Tag image', label: 'New reference', value: item.name, hint: 'Example: registry.example.com/app:1.4.0', confirmLabel: 'Apply tag' });
@@ -1930,6 +2163,8 @@
       <td class="cell-mono">${esc(x.containers ?? '—')}</td>
       <td>${x.dangling ? U.badge('dangling', 'slate') : `<span class="badge tone-cyan">${esc(x.registry)}</span>`}</td>
       <td><div class="row-actions">
+        ${U.iconButton({ icon: 'play', tone: 'green', label: 'Create and start a container from this image', attrs: `data-iact="run" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}" data-iref="${esc(imageRef(x))}"` })}
+        ${U.iconButton({ icon: 'boxes', label: 'Show containers using this image', attrs: `data-iact="containers" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
         ${U.iconButton({ icon: 'history', label: 'History', attrs: `data-iact="history" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
         ${U.iconButton({ icon: 'tag', label: 'Tag', attrs: `data-iact="tag" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
         ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-iact="remove" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
@@ -2183,7 +2418,7 @@
 
   async function render(route) {
     switch (route.name) {
-      case 'containers': return renderContainers();
+      case 'containers': return renderContainers(route);
       case 'images': return renderImages();
       case 'compose': return renderCompose();
       case 'volumes': return renderVolumes();
