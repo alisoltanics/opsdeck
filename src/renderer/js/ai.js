@@ -996,7 +996,8 @@
       if (event.target.matches('[data-ai-chat-transport]')) {
         const select = event.target;
         select.disabled = true;
-        const saved = await saveChoice(ctx, { transport: select.value });
+        const info = transportInfo(state.config, select.value);
+        const saved = await saveChoice(ctx, { transport: select.value, model: info.defaultModel || '' });
         if (select.isConnected) select.disabled = false;
         if (!saved) paintDrawer(ctx);
         return;

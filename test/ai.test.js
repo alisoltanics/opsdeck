@@ -6,7 +6,10 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { __test } = require('../src/main/ai');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { __test, AIService } = require('../src/main/ai');
 
 const {
   isLoopbackHost,
@@ -242,6 +245,31 @@ test('Inkwell filenames keep answers safe and readable', () => {
   assert.equal(noteFileName('...'), 'OpsDeck AI answer.md');
   assert.ok(noteFileName('x'.repeat(400)).length <= 98);
   assert.ok(noteFileName('x'.repeat(400)).endsWith('.md'));
+});
+
+test('switching transports in chat keeps the API provider settings', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opsdeck-ai-switch-'));
+  try {
+    const svc = new AIService({ app: { getPath: () => dir }, content: { load: () => null } });
+    const api = svc.saveConfig({ transport: 'api', baseUrl: 'https://api.example.com/v1', model: 'deepseek-chat', apiKey: 'sk-test' });
+    assert.equal(api.ok, true);
+    assert.equal(api.config.configured, true);
+
+    const cli = svc.saveConfig({ transport: 'opencode', model: '' });
+    assert.equal(cli.ok, true);
+    assert.equal(cli.config.transport, 'opencode');
+    assert.equal(cli.config.cli, true);
+    assert.ok(cli.config.model);
+
+    const back = svc.saveConfig({ transport: 'api', model: 'deepseek-chat' });
+    assert.equal(back.ok, true);
+    assert.equal(back.config.baseUrl, 'https://api.example.com/v1');
+    assert.equal(back.config.hasKey, true);
+    assert.equal(back.config.configured, true);
+    svc.dispose();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('sensitive object keys and all environment values are omitted for AI context', () => {

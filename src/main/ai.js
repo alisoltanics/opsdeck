@@ -942,7 +942,6 @@ class AIService {
           || Object.values(DEFAULT_CLI_MODELS).includes(next.model);
         next.transport = newTransport;
         if (implicit) next.model = DEFAULT_CLI_MODELS[newTransport] || '';
-        if (newTransport !== 'api') next.baseUrl = '';
       }
     }
     if (Object.prototype.hasOwnProperty.call(payload, 'baseUrl')) {
