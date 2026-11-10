@@ -12,8 +12,12 @@ renderer. Docker commands go through `execFile('docker', ...)` — never a shell
 **Docker workspace**
 
 - Overview with engine health, live samples and reclaimable disk
-- Containers: state, ports, CPU/memory, logs, inspect, start/stop/restart/remove, and an
-  in-app shell that streams a live `docker exec` session (bash with automatic sh fallback)
+- Containers: state, ports, CPU/memory, logs, inspect, start/stop/restart/remove, and a real
+  interactive shell — a host PTY from util-linux `script` attached to `docker exec -it` and
+  rendered with xterm.js, so Tab completion, history, colours and Ctrl+C work from inside the
+  container (bash with automatic sh fallback; a line-mode fallback keeps working without `script`)
+- The shell drawer goes fullscreen with one click (or `Esc` to leave), and supports
+  `Ctrl/Cmd+Shift+C`/`V` copy and paste
 - Project view for containers: filter by Compose project or group the table by project,
   with running/service counts on every group
 - Open a container's published TCP address in Firefox straight from its row or inspect drawer
@@ -113,7 +117,10 @@ afterwards if you want the sandbox back.
 The rest of the security model does not depend on the Chromium sandbox:
 `contextIsolation` is on, `nodeIntegration` is off, the renderer runs under a
 strict CSP, all content is local, and Docker access goes through a validated
-IPC bridge that never invokes a shell.
+IPC bridge. Docker commands are spawned with argument arrays, never a host
+shell; the interactive terminal is the one exception, and its wrapper is a
+fixed `stty …; exec docker exec -it <validated id> <bash|sh>` string passed to
+util-linux `script`.
 
 ## Architecture
 
@@ -121,6 +128,7 @@ IPC bridge that never invokes a shell.
 main.js                 Electron window, splash, single-instance lock, IPC bridge
 preload.js              contextBridge surface: window.opsdeck
 src/main/docker.js      Docker CLI adapter (execFile only, cached reads)
+src/main/exec.js        container shell sessions: PTY via `script`, line-mode fallback
 src/main/security.js    tokenizer + command/compose validation
 src/main/store.js       sql.js SQLite store for learning progress
 src/main/content.js     loads the compiled Academy JSON
@@ -128,6 +136,7 @@ src/main/labs.js        lab sandbox, hardening, file workspace, reset
 src/main/ipc.js         IPC handlers
 src/main/smoke.js       Electron route/interaction smoke test
 src/renderer/           design system, shell, Docker views, Academy views
+src/renderer/vendor/    vendored xterm.js + fit addon (MIT) for the container terminal
 scripts/content/        authored Academy curriculum and reference sources
 scripts/build-content.js validates and compiles sources into content/*.json
 content/                runtime JSON (generated, committed)

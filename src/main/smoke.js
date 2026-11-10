@@ -181,24 +181,45 @@ function rendererScript(routes) {
       await waitFor(() => !!document.querySelector('.container-group-row') === groupedBefore, 2000);
     }
 
-    // Container shell: open a real session when Docker has a running container.
+    // Container shell: open a real interactive session when one is running.
     location.hash = '#/containers';
     await waitFor(() => !!document.querySelector('#container-tbody'), 8000);
     const execButton = [...document.querySelectorAll('[data-caction="exec"]')].find((btn) => !btn.disabled);
     if (execButton) {
       execButton.click();
       const ready = await waitFor(() => {
-        const field = document.querySelector('#exec-input');
-        return field && !field.disabled;
-      }, 20000);
+        const pane = document.querySelector('#exec-shell');
+        return pane && pane.dataset.execSession;
+      }, 25000);
       if (!ready) {
         failures.push('shell: session never became ready');
       } else {
-        const field = document.querySelector('#exec-input');
-        field.value = 'echo $((6*7))';
-        document.querySelector('#exec-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        const answered = await waitFor(() => /(^|\\n)42(\\n|$)/.test(document.getElementById('exec-output')?.innerText || ''), 8000);
-        if (!answered) failures.push('shell: command output missing');
+        const pane = document.querySelector('#exec-shell');
+        if (pane.dataset.execMode !== 'pty') failures.push('shell: expected a PTY session, got ' + pane.dataset.execMode);
+        const type = pane._type;
+        const read = typeof pane._text === 'function' ? pane._text : () => '';
+        if (typeof type !== 'function') {
+          failures.push('shell: terminal input is not wired');
+        } else {
+          type('cd /us\\t');
+          await sleep(700);
+          type('\\n');
+          await sleep(400);
+          type('echo "TAB=$(pwd)"\\n');
+          const completed = await waitFor(() => read().includes('TAB=/usr'), 8000);
+          if (!completed) failures.push('shell: Tab completion did not complete /usr :: ' + JSON.stringify(read().slice(-600)));
+          type('echo $((6*7))\\n');
+          const answered = await waitFor(() => /(^|\\s)42(\\s|$)/.test(read()), 8000);
+          if (!answered) failures.push('shell: command output missing');
+
+          const expand = document.querySelector('[data-exec-expand]');
+          expand?.click();
+          const fullscreen = await waitFor(() => !!document.querySelector('.drawer.drawer-fullscreen'), 2500);
+          if (!fullscreen) failures.push('shell: fullscreen toggle did not apply');
+          expand?.click();
+          const restored = await waitFor(() => !document.querySelector('.drawer.drawer-fullscreen'), 2500);
+          if (!restored) failures.push('shell: fullscreen toggle did not restore');
+        }
         document.querySelector('.drawer [data-close]')?.click();
         await sleep(300);
       }

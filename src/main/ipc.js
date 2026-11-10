@@ -60,6 +60,8 @@ function registerIpc({ getWindow, dialog, app }) {
     return { ok: true };
   });
 
+  handle('app:read-clipboard', () => clipboard.readText());
+
   handle('app:open-firefox', (rawUrl) => {
     if (typeof rawUrl !== 'string' || rawUrl.length > 2048) {
       return { ok: false, error: 'The address is not valid.' };
@@ -107,7 +109,12 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('docker:container-inspect', (id) => docker.inspectContainer(id));
   handle('docker:container-logs', (p) => docker.containerLogs(p?.id, p?.tail));
   handle('docker:container-action', (p) => docker.containerAction(p?.id, p?.action, p?.options));
-  handle('docker:exec-start', (p, event) => exec.start(p?.id, event.sender));
+  handle('docker:exec-capabilities', () => exec.capabilities());
+  handle('docker:exec-start', (p, event) => exec.start(p?.id, event.sender, {
+    pty: p?.pty === true,
+    cols: p?.cols,
+    rows: p?.rows,
+  }));
   handle('docker:exec-input', (p, event) => exec.input(p?.sessionId, p?.data, event.sender.id));
   handle('docker:exec-stop', (p, event) => exec.stop(p?.sessionId, event.sender.id));
   handle('docker:images', () => docker.imagesList());

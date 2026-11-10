@@ -445,11 +445,244 @@
     return drawer;
   }
 
-  function showExec(item) {
+  const TERM_THEME = {
+    background: '#05080e',
+    foreground: '#d7e2f0',
+    cursor: '#63b3ff',
+    cursorAccent: '#05080e',
+    selectionBackground: 'rgba(99,179,255,.30)',
+    black: '#1b2433', red: '#ff7b72', green: '#7ee2a8', yellow: '#f5c76b',
+    blue: '#6cb6ff', magenta: '#d2a8ff', cyan: '#7ee7f0', white: '#d7e2f0',
+    brightBlack: '#5a6b84', brightRed: '#ff9d97', brightGreen: '#9af0c0',
+    brightYellow: '#ffdd92', brightBlue: '#9ccdff', brightMagenta: '#e3c2ff',
+    brightCyan: '#a7f2f8', brightWhite: '#f4f8ff',
+  };
+
+  function terminalFontFamily() {
+    const value = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim();
+    return value || 'monospace';
+  }
+
+  function ptySupported() {
+    return typeof window.Terminal === 'function' && !!window.FitAddon?.FitAddon;
+  }
+
+  async function showExec(item) {
     if (item.state !== 'running') {
       U.toast('Container is not running', 'warning', { description: 'Start it first to open an interactive shell.' });
       return;
     }
+    let capabilities = null;
+    if (ptySupported()) {
+      capabilities = await api.docker.execCapabilities().catch(() => null);
+    }
+    if (capabilities?.ok && capabilities.pty === true) {
+      showPtyShell(item);
+      return;
+    }
+    showLineShell(item);
+  }
+
+  /**
+   * Real interactive terminal: util-linux `script` gives docker exec a host
+   * PTY, and xterm.js renders it. Tab completion, history, colours and Ctrl+C
+   * all come from the shell itself, inside the container.
+   */
+  function showPtyShell(item) {
+    const short = shortId(item.id, 12);
+    U.drawer({
+      title: item.name,
+      subtitle: `${short} · interactive shell`,
+      eyebrow: 'Container shell',
+      icon: 'terminal',
+      width: '960px',
+      body: `<div class="terminal-shell terminal-drawer exec-pty" id="exec-shell">
+        <div class="term-head">
+          <div class="term-lights"><i></i><i></i><i></i></div>
+          <span class="term-title" id="exec-title">${esc(item.name)} · starting shell</span>
+          <span class="term-status" id="exec-state">connecting</span>
+          <button type="button" class="term-btn" data-exec-copy title="Copy selection (Ctrl+Shift+C)" aria-label="Copy selection">${icon('copy', 12)}</button>
+          <button type="button" class="term-btn" data-exec-expand title="Fullscreen terminal" aria-label="Toggle fullscreen terminal">${icon('maximize', 12)}</button>
+        </div>
+        <div class="xterm-host" id="exec-host"></div>
+        <div class="term-hint">Tab completes paths and commands inside the container · Ctrl+Shift+C / Ctrl+Shift+V copy and paste · Esc leaves fullscreen</div>
+      </div>`,
+      footer: `<span class="faint text-xs mono">docker exec -it ${esc(short)} bash</span><div class="row gap-2">${learnLink('run-exec-logs', 'Exec and logs lesson')}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
+      onMount: ({ root, onClose }) => {
+        const panel = root.querySelector('.overlay-panel.drawer');
+        const shell = root.querySelector('#exec-shell');
+        const host = root.querySelector('#exec-host');
+        const titleEl = root.querySelector('#exec-title');
+        const stateEl = root.querySelector('#exec-state');
+        const expandBtn = root.querySelector('[data-exec-expand]');
+        const copyBtn = root.querySelector('[data-exec-copy]');
+        panel?.classList.add('exec-drawer');
+
+        const term = new window.Terminal({
+          cursorBlink: true,
+          cursorStyle: 'bar',
+          fontFamily: terminalFontFamily(),
+          fontSize: 12.5,
+          lineHeight: 1.28,
+          letterSpacing: 0,
+          scrollback: 8000,
+          theme: TERM_THEME,
+          allowTransparency: true,
+          macOptionIsMeta: true,
+        });
+        const fit = new window.FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open(host);
+
+        const refit = () => {
+          try { fit.fit(); } catch { /* host is not laid out yet */ }
+        };
+        requestAnimationFrame(() => { refit(); term.focus(); });
+        const observer = new ResizeObserver(() => refit());
+        observer.observe(host);
+
+        let sessionId = null;
+        let ended = false;
+        let closed = false;
+        let fullscreen = false;
+        const pending = [];
+
+        const write = (text) => { if (text) term.write(text); };
+
+        const handleExit = (payload) => {
+          if (ended) return;
+          ended = true;
+          stateEl.textContent = payload?.code === 0 ? 'exited' : 'ended';
+          const code = payload?.code == null ? '' : ` (exit ${payload.code})`;
+          write(`\r\n\x1b[38;5;243m— session ended${code} —\x1b[0m\r\n`);
+        };
+
+        const sendInput = (data) => {
+          if (!sessionId || ended || !data) return;
+          api.docker.execInput(sessionId, data).then((res) => {
+            if (!res?.ok && !ended) {
+              ended = true;
+              stateEl.textContent = 'ended';
+              write(`\r\n\x1b[31m${res?.error || 'The session has ended.'}\x1b[0m\r\n`);
+            }
+          }).catch(() => {});
+        };
+        // Used by the smoke harness to drive the exact same input path as xterm.
+        shell._type = sendInput;
+        shell._text = () => {
+          const buffer = term.buffer.active;
+          const lines = [];
+          for (let index = 0; index < buffer.length; index += 1) {
+            const line = buffer.getLine(index);
+            if (line) lines.push(line.translateToString(true));
+          }
+          return lines.join('\n').trimEnd();
+        };
+
+        term.onData(sendInput);
+
+        term.attachCustomKeyEventHandler((event) => {
+          if (event.type !== 'keydown') return true;
+          const meta = event.ctrlKey || event.metaKey;
+          const key = String(event.key || '').toLowerCase();
+          if (meta && event.shiftKey && key === 'c') {
+            const selection = term.getSelection();
+            if (selection) api.app.copy(selection);
+            return false;
+          }
+          if (meta && event.shiftKey && key === 'v') {
+            api.app.readClipboard()
+              .then((text) => { if (typeof text === 'string' && text) term.paste(text); })
+              .catch(() => {});
+            return false;
+          }
+          return true;
+        });
+
+        const setFullscreen = (value) => {
+          fullscreen = value === true;
+          panel?.classList.toggle('drawer-fullscreen', fullscreen);
+          document.body.classList.toggle('exec-fullscreen', fullscreen);
+          if (expandBtn) {
+            expandBtn.innerHTML = icon(fullscreen ? 'shrink' : 'maximize', 12);
+            expandBtn.title = fullscreen ? 'Exit fullscreen terminal' : 'Fullscreen terminal';
+            expandBtn.setAttribute('aria-label', expandBtn.title);
+          }
+          requestAnimationFrame(() => { refit(); term.focus(); });
+          setTimeout(() => { if (!closed) { refit(); term.focus(); } }, 230);
+        };
+
+        expandBtn?.addEventListener('click', () => setFullscreen(!fullscreen));
+        root.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && fullscreen) {
+            event.preventDefault();
+            event.stopPropagation();
+            setFullscreen(false);
+          }
+        }, true);
+
+        copyBtn?.addEventListener('click', async () => {
+          const selection = term.getSelection();
+          if (!selection) {
+            U.toast('Nothing selected', 'info', { description: 'Drag across text in the terminal first.' });
+            return;
+          }
+          await api.app.copy(selection);
+          U.toast('Copied selection', 'success', { description: `${selection.length} characters` });
+        });
+
+        const unsubscribeData = api.events.execData((payload) => {
+          if (!payload) return;
+          if (!sessionId) { pending.push({ type: 'data', payload }); return; }
+          if (payload.sessionId === sessionId) write(payload.data);
+        });
+        const unsubscribeExit = api.events.execExit((payload) => {
+          if (!payload) return;
+          if (!sessionId) { pending.push({ type: 'exit', payload }); return; }
+          if (payload.sessionId === sessionId) handleExit(payload);
+        });
+
+        onClose(() => {
+          closed = true;
+          observer.disconnect();
+          unsubscribeData();
+          unsubscribeExit();
+          document.body.classList.remove('exec-fullscreen');
+          if (sessionId && !ended) api.docker.execStop(sessionId);
+          setTimeout(() => { try { term.dispose(); } catch { /* already gone */ } }, 220);
+        });
+
+        (async () => {
+          const res = await api.docker.execStart(item.id, { pty: true, cols: term.cols, rows: term.rows });
+          if (closed) {
+            if (res?.ok) api.docker.execStop(res.sessionId);
+            return;
+          }
+          if (!res?.ok) {
+            ended = true;
+            stateEl.textContent = 'unavailable';
+            write(`\x1b[31m${res?.error || 'Could not open a shell in this container.'}\x1b[0m\r\n`);
+            return;
+          }
+          sessionId = res.sessionId;
+          shell.dataset.execSession = sessionId;
+          shell.dataset.execMode = res.mode || 'pipe';
+          titleEl.textContent = `${item.name} · ${res.shellLabel || res.shell}`;
+          stateEl.textContent = 'connected';
+          for (const entry of pending.splice(0)) {
+            if (entry.type === 'data') write(entry.payload.data);
+            else handleExit(entry.payload);
+          }
+          if (!ended) {
+            refit();
+            term.focus();
+          }
+        })();
+      },
+    });
+  }
+
+  function showLineShell(item) {
     const short = shortId(item.id, 12);
     const MAX_OUTPUT = 250000;
     U.drawer({
