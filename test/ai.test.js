@@ -25,6 +25,11 @@ const {
   parseClaudeCliOutput,
   parseOpencodeAuthList,
   parseClaudeAuthStatus,
+  stripJsonComments,
+  cleanClaudeEnv,
+  parseVsCodeClaudeEnv,
+  parseClaudeSettingsEnv,
+  noteFileName,
   cliPrompt,
   publicConfig,
 } = __test;
@@ -201,6 +206,42 @@ test('CLI sign-in reports are parsed without exposing credentials', () => {
   });
   assert.equal(parseClaudeAuthStatus('not json'), null);
   assert.equal(cleanCliText('\u001b[32mhello\u001b[0m\r\n'), 'hello');
+});
+
+test('Claude Code environments are read from JSONC and limited to allowlisted names', () => {
+  const vsCode = parseVsCodeClaudeEnv(`{
+    // the editor stores the same block Inkwell reads
+    "claudeCode.environmentVariables": [
+      { "name": "ANTHROPIC_AUTH_TOKEN", "value": "token-value" },
+      { "name": "ANTHROPIC_BASE_URL", "value": "https://gateway.example/v1" },
+      { "name": "HTTP_PROXY", "value": "http://proxy:8080" },
+      { "name": "PATH", "value": "/usr/bin" },
+      { "name": "NODE_OPTIONS", "value": "--require ./evil.js" },
+      { "name": "ANTHROPIC_MODEL", "value": "line\\nbreak" },
+      { "name": "BAD NAME", "value": "x" },
+    ],
+  }`);
+  assert.deepEqual(vsCode, {
+    ANTHROPIC_AUTH_TOKEN: 'token-value',
+    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+    HTTP_PROXY: 'http://proxy:8080',
+  });
+  assert.deepEqual(parseVsCodeClaudeEnv('not json'), {});
+  assert.deepEqual(parseClaudeSettingsEnv('{"env":{"ANTHROPIC_API_KEY":"k","AWS_REGION":"eu-west-1","HOME":"/root"}}'), {
+    ANTHROPIC_API_KEY: 'k',
+    AWS_REGION: 'eu-west-1',
+  });
+  assert.deepEqual(cleanClaudeEnv({ ANTHROPIC_API_KEY: ' ', ANTHROPIC_MODEL: 'sonnet' }), { ANTHROPIC_MODEL: 'sonnet' });
+  assert.equal(stripJsonComments('{"a":1, // note\n "b":[1,2,],}'), '{"a":1, \n "b":[1,2]}');
+});
+
+test('Inkwell filenames keep answers safe and readable', () => {
+  assert.equal(noteFileName('# Pod restart plan: api/worker'), 'Pod restart plan- api-worker.md');
+  assert.equal(noteFileName('  Bad\\Name*with?chars<>|  '), 'Bad-Name-with-chars---.md');
+  assert.equal(noteFileName(''), 'OpsDeck AI answer.md');
+  assert.equal(noteFileName('...'), 'OpsDeck AI answer.md');
+  assert.ok(noteFileName('x'.repeat(400)).length <= 98);
+  assert.ok(noteFileName('x'.repeat(400)).endsWith('.md'));
 });
 
 test('sensitive object keys and all environment values are omitted for AI context', () => {

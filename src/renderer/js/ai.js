@@ -207,13 +207,21 @@
       return;
     }
     const chips = [tool.installed ? U.badge('Installed', 'green') : U.badge('Not installed', 'red')];
-    if (tool.installed && tool.authenticated === true) chips.push(U.badge('Signed in', 'green'));
-    else if (tool.installed && tool.authenticated === false) chips.push(U.badge('Sign-in required', 'amber'));
+    if (tool.installed && tool.authenticated === true) {
+      chips.push(tool.authSource === 'environment' ? U.badge('Configured by env', 'green') : U.badge('Signed in', 'green'));
+    } else if (tool.installed && tool.authenticated === false) chips.push(U.badge('Sign-in required', 'amber'));
     const version = tool.version ? `<span class="mono text-xs faint">${esc(tool.version)}</span>` : '';
     const login = transport === 'claude-code' ? 'claude /login' : 'opencode auth login';
+    const signedOutHint = transport === 'claude-code'
+      ? `<div class="ai-cli-hint">${icon('terminal', 11)} Set <code>ANTHROPIC_AUTH_TOKEN</code> and <code>ANTHROPIC_BASE_URL</code> in <code>~/.claude/settings.json</code> (env) or in VS Code <code>claudeCode.environmentVariables</code>. OpsDeck passes them to Claude Code, so no <code>/login</code> is needed. Otherwise run <code>${esc(login)}</code> in a terminal.</div>`
+      : `<div class="ai-cli-hint">${icon('terminal', 11)} Run <code>${esc(login)}</code> in a terminal, then test again.</div>`;
+    const envSource = tool.authSource === 'environment' && Array.isArray(tool.envSources) && tool.envSources.length
+      ? `<div class="ai-cli-hint">${icon('shield-check', 11)} Credentials read from ${tool.envSources.map((source) => `<code>${esc(source)}</code>`).join(', ')}.</div>`
+      : '';
     el.innerHTML = `<div class="ai-cli-row">${chips.join('')}${version}</div>
       <div class="ai-cli-detail">${esc(tool.detail || '')}</div>
-      ${tool.installed && tool.authenticated === false ? `<div class="ai-cli-hint">${icon('terminal', 11)} Run <code>${esc(login)}</code> in a terminal, then test again.</div>` : ''}`;
+      ${envSource}
+      ${tool.installed && tool.authenticated === false ? signedOutHint : ''}`;
   }
 
   function applyTransportForm(form, config) {
@@ -232,6 +240,71 @@
     if (note) note.textContent = transportNote(config, id);
     if (info.cli) paintCliStatus(form, id);
     return id;
+  }
+
+  function chatChoiceHtml() {
+    const c = state.config || {};
+    return `<div class="ai-choice-bar">
+      <label class="ai-choice-field"><span>Provider</span><select class="input" data-ai-chat-transport>${transportOptions(c)}</select></label>
+      <label class="ai-choice-field ai-choice-model"><span>Model</span><input class="input" data-ai-chat-model list="ai-chat-models" value="${esc(c.model || c.defaultModel || '')}" placeholder="${esc(c.defaultModel || 'Model name')}" spellcheck="false" /></label>
+      <datalist id="ai-chat-models"></datalist>
+      <button type="button" class="icon-btn ai-choice-settings" data-ai-open-settings title="AI settings" aria-label="AI settings">${icon('settings', 14)}</button>
+    </div>`;
+  }
+
+  function fillChatModels(ctx, models) {
+    const datalist = ctx.root?.querySelector('#ai-chat-models');
+    if (!datalist) return;
+    datalist.innerHTML = (models || []).map((model) => `<option value="${esc(model)}"></option>`).join('');
+  }
+
+  async function loadChatModels(ctx) {
+    const transport = state.config?.transport || 'api';
+    ctx.modelCache = ctx.modelCache || new Map();
+    if (ctx.modelCache.has(transport)) {
+      fillChatModels(ctx, ctx.modelCache.get(transport));
+      return;
+    }
+    fillChatModels(ctx, [state.config?.model, state.config?.defaultModel].filter(Boolean));
+    try {
+      const res = await api.ai.models({ transport });
+      if (state.active !== ctx || !res?.ok) return;
+      const models = Array.isArray(res.models) ? res.models : [];
+      ctx.modelCache.set(transport, models);
+      fillChatModels(ctx, models);
+    } catch { /* model discovery is optional */ }
+  }
+
+  function paintChoices(ctx) {
+    const wrap = ctx.root?.querySelector('#ai-choice-wrap');
+    if (!wrap) return;
+    const visible = state.config?.configured === true;
+    wrap.hidden = !visible;
+    if (!visible) {
+      wrap.innerHTML = '';
+      ctx.choiceSignature = null;
+      return;
+    }
+    const signature = [state.config?.transport, state.config?.model, state.config?.defaultModel, state.config?.provider].join('|');
+    if (ctx.choiceSignature === signature) return;
+    ctx.choiceSignature = signature;
+    wrap.innerHTML = chatChoiceHtml();
+    loadChatModels(ctx);
+  }
+
+  async function saveChoice(ctx, patch) {
+    if (!api?.ai) return null;
+    const res = await api.ai.saveConfig(patch);
+    if (!res?.ok) {
+      U.toast('Could not change the AI selection', 'error', { description: res?.error || 'Try again.' });
+      return null;
+    }
+    state.config = res.config;
+    ctx.choiceSignature = null;
+    paintDrawer(ctx);
+    updateComposer(ctx);
+    if (state.config?.configured && !ctx.context) loadContext(ctx, true);
+    return res.config;
   }
 
   // ------------------------------------------------------------------ settings card
@@ -434,7 +507,7 @@
       ? `<div class="ai-context-preview" id="ai-context-preview">
           <div class="ai-source-chips">${sources.map((source) => `<span class="ai-source-chip">${esc(source.label)} <i>${esc(String(source.chars || 0))}</i></span>`).join('') || '<span class="ai-source-chip">Live resource data</span>'}</div>
           <pre>${esc(ctx.context.text || '')}</pre>
-          <div class="ai-context-foot">${icon('shield-check', 11)} Secret-like values are redacted before this context leaves the main process.</div>
+          <div class="ai-context-foot">${icon('shield-check', 11)} Sensitive keys, environment values and Secret data are omitted before this context leaves the main process.</div>
         </div>`
       : '';
     return `<div class="ai-context-bar ${ctx.contextLoading ? 'refreshing' : ''}">
@@ -459,6 +532,18 @@
     </div>`;
   }
 
+  function isRtlText(text) {
+    const value = String(text || '');
+    const rtl = (value.match(/[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/g) || []).length;
+    if (!rtl) return false;
+    const latin = (value.match(/[A-Za-z]/g) || []).length;
+    return rtl / (rtl + latin + 1) > 0.15;
+  }
+
+  function dirAttr(text) {
+    return isRtlText(text) ? ' dir="rtl"' : '';
+  }
+
   function formatAnswer(text) {
     const source = String(text || '');
     const lines = source.replace(/\r\n/g, '\n').split('\n');
@@ -481,7 +566,7 @@
       if (/^```/.test(raw.trim())) {
         closeList();
         if (inCode) {
-          out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+          out.push(`<pre dir="ltr"><code>${esc(code.join('\n'))}</code></pre>`);
           code = [];
           inCode = false;
         } else {
@@ -495,31 +580,31 @@
       const heading = /^(#{1,4})\s+(.+)$/.exec(line);
       if (heading) {
         closeList();
-        out.push(`<h4>${inline(heading[2])}</h4>`);
+        out.push(`<h4${dirAttr(heading[2])}>${inline(heading[2])}</h4>`);
         continue;
       }
       const quote = /^>\s?(.*)$/.exec(line);
       if (quote) {
         closeList();
-        out.push(`<blockquote>${inline(quote[1])}</blockquote>`);
+        out.push(`<blockquote${dirAttr(quote[1])}>${inline(quote[1])}</blockquote>`);
         continue;
       }
       const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
       if (bullet) {
-        if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+        if (list !== 'ul') { closeList(); out.push(`<ul${dirAttr(bullet[1])}>`); list = 'ul'; }
         out.push(`<li>${inline(bullet[1])}</li>`);
         continue;
       }
       const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
       if (ordered) {
-        if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+        if (list !== 'ol') { closeList(); out.push(`<ol${dirAttr(ordered[1])}>`); list = 'ol'; }
         out.push(`<li>${inline(ordered[1])}</li>`);
         continue;
       }
       closeList();
-      out.push(`<p>${inline(line)}</p>`);
+      out.push(`<p${dirAttr(line)}>${inline(line)}</p>`);
     }
-    if (inCode) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+    if (inCode) out.push(`<pre dir="ltr"><code>${esc(code.join('\n'))}</code></pre>`);
     closeList();
     return out.join('');
   }
@@ -529,7 +614,7 @@
     if (!messages.length) return welcomeHtml(ctx);
     return messages.map((message, index) => {
       if (message.role === 'user') {
-        return `<div class="ai-msg user"><div class="ai-bubble">${esc(message.content).replace(/\n/g, '<br>')}</div></div>`;
+        return `<div class="ai-msg user"><div class="ai-bubble"${dirAttr(message.content)}>${esc(message.content).replace(/\n/g, '<br>')}</div></div>`;
       }
       if (message.role === 'note') {
         return `<div class="ai-note">${icon('info', 12)}<span>${esc(message.content)}</span></div>`;
@@ -542,8 +627,8 @@
       return `<div class="ai-msg assistant">
         <span class="ai-msg-avatar">${icon('sparkles', 15)}</span>
         <div class="ai-msg-main">
-          <div class="ai-answer">${formatAnswer(message.content)}</div>
-          <div class="ai-msg-meta"><span>${esc(metaBits.join(' · ') || 'OpsDeck AI')}</span><button type="button" class="ai-msg-action" data-ai-copy="${index}">${icon('copy', 11)} Copy</button></div>
+          <div class="ai-answer"${isRtlText(message.content) ? ' dir="rtl"' : ''}>${formatAnswer(message.content)}</div>
+          <div class="ai-msg-meta"><span>${esc(metaBits.join(' · ') || 'OpsDeck AI')}</span><button type="button" class="ai-msg-action" data-ai-copy="${index}">${icon('copy', 11)} Copy</button><button type="button" class="ai-msg-action" data-ai-save-inkwell="${index}">${icon('notebook-pen', 11)} Save to Inkwell</button></div>
         </div>
       </div>`;
     }).join('');
@@ -578,7 +663,7 @@
           <button type="submit" class="btn btn-primary btn-sm">${icon('check', 13)}<span>Save and test</span></button>
           <button type="button" class="btn btn-ghost btn-sm" data-ai-close>${icon('x', 12)}<span>Not now</span></button>
         </div>
-        <div class="ai-config-foot">${icon('info', 11)} Local CLIs use their own saved sign-in. Local API providers such as Ollama work without a key at <span class="mono">localhost</span>.</div>
+        <div class="ai-config-foot">${icon('info', 11)} Local CLIs use their own saved sign-in. Claude Code also reads <span class="mono">ANTHROPIC_*</span> variables from <span class="mono">~/.claude/settings.json</span> or VS Code, so no <span class="mono">/login</span> is needed when they are set. Local API providers such as Ollama work without a key at <span class="mono">localhost</span>.</div>
       </form>
     </div>`;
   }
@@ -633,6 +718,7 @@
 
   function paintDrawer(ctx) {
     updateHeader(ctx);
+    paintChoices(ctx);
     paintContext(ctx);
     paintChat(ctx);
     updateComposer(ctx);
@@ -733,6 +819,7 @@
       icon: 'sparkles',
       width: '620px',
       body: `<div class="ai-shell">
+        <div class="ai-choice-wrap" id="ai-choice-wrap"></div>
         <div class="ai-context-wrap" id="ai-context-wrap"></div>
         <div class="ai-chat" id="ai-chat"></div>
       </div>`,
@@ -768,8 +855,7 @@
     (async () => {
       await loadConfig(true);
       if (state.active !== ctx) return;
-      paintChat(ctx);
-      updateComposer(ctx);
+      paintDrawer(ctx);
       await loadContext(ctx, false);
       if (state.active !== ctx) return;
       if (state.config?.configured && ctx.root) {
@@ -843,6 +929,46 @@
         if (message?.content) OD.utils.copyText(message.content, 'Answer copied');
         return;
       }
+      const inkwell = event.target.closest('[data-ai-save-inkwell]');
+      if (inkwell) {
+        const index = Number(inkwell.dataset.aiSaveInkwell);
+        const message = ctx.session.messages[index];
+        if (!message?.content || inkwell.dataset.busy === '1') return;
+        if (!api?.ai?.saveToInkwell) {
+          U.toast('Could not save to Inkwell', 'error', { description: 'The Inkwell bridge is not available in this build.' });
+          return;
+        }
+        const question = ctx.session.messages.slice(0, index).reverse().find((item) => item.role === 'user')?.content || '';
+        const label = inkwell.innerHTML;
+        inkwell.dataset.busy = '1';
+        inkwell.disabled = true;
+        inkwell.innerHTML = `<span class="spinner">${icon('loader', 11)}</span> Saving…`;
+        try {
+          const res = await api.ai.saveToInkwell({
+            answer: message.content,
+            question,
+            contextTitle: ctx.context?.title || ctx.title || '',
+            contextSubtitle: ctx.context?.subtitle || '',
+            provider: message.meta?.provider || '',
+            model: message.meta?.model || '',
+          });
+          if (res?.ok) {
+            inkwell.innerHTML = `${icon('check', 11)} Saved`;
+            U.toast('Saved to Inkwell', 'success', { description: res.file });
+          } else {
+            inkwell.innerHTML = label;
+            inkwell.disabled = false;
+            delete inkwell.dataset.busy;
+            U.toast('Could not save to Inkwell', 'error', { description: res?.error || 'Try again.' });
+          }
+        } catch (error) {
+          inkwell.innerHTML = label;
+          inkwell.disabled = false;
+          delete inkwell.dataset.busy;
+          U.toast('Could not save to Inkwell', 'error', { description: error.message || 'Try again.' });
+        }
+        return;
+      }
       if (event.target.closest('[data-ai-retry]')) {
         const question = ctx.lastQuestion;
         if (question && !ctx.busy) sendQuestion(ctx, question);
@@ -859,13 +985,33 @@
       }
     });
 
-    root.addEventListener('change', (event) => {
+    root.addEventListener('change', async (event) => {
       if (event.target.id === 'ai-config-preset') {
         applyPreset(event.target, root.querySelector('#ai-config-base'), root.querySelector('#ai-config-model'), root.querySelector('#ai-config-note'));
       }
       if (event.target.matches('[data-ai-transport]')) {
         const form = event.target.closest('form');
         if (form?.id === 'ai-drawer-config') applyTransportForm(form, state.config);
+      }
+      if (event.target.matches('[data-ai-chat-transport]')) {
+        const select = event.target;
+        select.disabled = true;
+        const saved = await saveChoice(ctx, { transport: select.value });
+        if (select.isConnected) select.disabled = false;
+        if (!saved) paintDrawer(ctx);
+        return;
+      }
+      if (event.target.matches('[data-ai-chat-model]')) {
+        const input = event.target;
+        const value = input.value.trim();
+        if (value === String(state.config?.model || '')) return;
+        input.disabled = true;
+        const saved = await saveChoice(ctx, { model: value });
+        if (!saved && input.isConnected) {
+          input.value = state.config?.model || '';
+          input.disabled = false;
+        }
+        return;
       }
     });
 

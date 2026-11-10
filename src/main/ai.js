@@ -56,6 +56,8 @@ const DEFAULT_CLI_MODELS = {
 };
 const CLI_MAX_OUTPUT_CHARS = 8 * 1024 * 1024;
 const CLI_MODEL_RE = /^[A-Za-z0-9._:#/@+-]{1,160}$/;
+const CLAUDE_ENV_RE = /^(ANTHROPIC_|CLAUDE_|CLAUDE_CODE_|AWS_|GOOGLE_|CLOUD_ML_|VERTEX_|HTTP_PROXY$|HTTPS_PROXY$|ALL_PROXY$|NO_PROXY$|SSL_CERT_FILE$|NODE_EXTRA_CA_CERTS$)/;
+const INKWELL_NOTE_MAX = 400000;
 
 const DEFAULT_MODELS = {
   deepseek: 'deepseek-chat',
@@ -564,6 +566,86 @@ function parseClaudeAuthStatus(raw) {
   }
 }
 
+// VS Code settings are JSONC. Inkwell reads the same block, so OpsDeck reuses
+// the Claude Code environment the editor already uses (for example a gateway
+// token in ANTHROPIC_AUTH_TOKEN and its ANTHROPIC_BASE_URL).
+function stripJsonComments(text) {
+  let out = '';
+  let inString = false;
+  let inLine = false;
+  let inBlock = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (inLine) { if (char === '\n') { inLine = false; out += char; } continue; }
+    if (inBlock) { if (char === '*' && next === '/') { inBlock = false; index += 1; } continue; }
+    if (inString) {
+      out += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; out += char; continue; }
+    if (char === '/' && next === '/') { inLine = true; index += 1; continue; }
+    if (char === '/' && next === '*') { inBlock = true; index += 1; continue; }
+    out += char;
+  }
+  return out.replace(/,\s*([}\]])/g, '$1');
+}
+
+function cleanClaudeEnv(entries) {
+  const out = {};
+  for (const [rawName, rawValue] of Object.entries(entries || {})) {
+    const name = String(rawName || '').trim();
+    const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!name || !value || value.length > 8192) continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    if (!CLAUDE_ENV_RE.test(name)) continue;
+    if (/[\r\n\u0000]/.test(value)) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
+function parseVsCodeClaudeEnv(raw) {
+  try {
+    const data = JSON.parse(stripJsonComments(String(raw || '')));
+    const list = Array.isArray(data?.['claudeCode.environmentVariables'])
+      ? data['claudeCode.environmentVariables']
+      : [];
+    const entries = {};
+    for (const item of list) {
+      if (item && typeof item.name === 'string') entries[item.name] = item.value;
+    }
+    return cleanClaudeEnv(entries);
+  } catch {
+    return {};
+  }
+}
+
+function parseClaudeSettingsEnv(raw) {
+  try {
+    const data = JSON.parse(String(raw || ''));
+    return cleanClaudeEnv(data?.env && typeof data.env === 'object' ? data.env : {});
+  } catch {
+    return {};
+  }
+}
+
+function noteFileName(rawTitle, fallback = 'OpsDeck AI answer') {
+  const base = String(rawTitle || '')
+    .replace(/^#+\s*/, '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+    .slice(0, 95)
+    .trim();
+  return `${base || fallback}.md`;
+}
+
 class ContextBuilder {
   constructor(limit = MAX_CONTEXT_CHARS) {
     this.limit = limit;
@@ -799,6 +881,7 @@ class AIService {
     this.controllers = new Map();
     this.cliCache = null;
     this.cliModelsCache = new Map();
+    this.claudeEnvCache = null;
   }
 
   defaultConfig() {
@@ -1012,7 +1095,7 @@ class AIService {
    * question travels over stdin so large contexts do not hit command-line
    * length limits, and the child is killed when the caller cancels.
    */
-  spawnCli(transport, args, { input = '', timeout = CLI_TIMEOUT_MS, signal = null } = {}) {
+  spawnCli(transport, args, { input = '', timeout = CLI_TIMEOUT_MS, signal = null, extraEnv = {} } = {}) {
     const spec = CLI_SPECS[transport];
     if (!spec) return Promise.resolve({ ok: false, installed: false, error: 'Unknown AI CLI.' });
     return new Promise((resolve) => {
@@ -1020,7 +1103,7 @@ class AIService {
       try {
         child = spawn(spec.command, args, {
           cwd: this.cliWorkdir(),
-          env: { ...process.env },
+          env: { ...process.env, ...extraEnv },
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
           shell: process.platform === 'win32',
@@ -1106,10 +1189,78 @@ class AIService {
     });
   }
 
+  /**
+   * Claude Code reads credentials from its own settings or the VS Code
+   * claudeCode.environmentVariables block. Both are local files; values stay
+   * in the main process and are only handed to the child process.
+   */
+  claudeEnvironment() {
+    const now = Date.now();
+    if (this.claudeEnvCache && now - this.claudeEnvCache.at < 5000) return this.claudeEnvCache.value;
+    const env = {};
+    const sources = [];
+    const files = [
+      {
+        label: '~/.claude/settings.json',
+        file: path.join(os.homedir(), '.claude', 'settings.json'),
+        parse: parseClaudeSettingsEnv,
+      },
+      {
+        label: 'VS Code Claude Code settings',
+        file: path.join(this.app.getPath('appData'), 'Code', 'User', 'settings.json'),
+        parse: parseVsCodeClaudeEnv,
+      },
+      {
+        label: 'VS Code Insiders Claude Code settings',
+        file: path.join(this.app.getPath('appData'), 'Code - Insiders', 'User', 'settings.json'),
+        parse: parseVsCodeClaudeEnv,
+      },
+    ];
+    for (const item of files) {
+      try {
+        const parsed = item.parse(fs.readFileSync(item.file, 'utf8'));
+        if (Object.keys(parsed).length) {
+          Object.assign(env, parsed);
+          sources.push(item.label);
+        }
+      } catch { /* missing file is normal */ }
+    }
+    const models = [];
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+      if (settings?.model) models.push(String(settings.model));
+      if (settings?.env && typeof settings.env === 'object') {
+        models.push(
+          String(settings.env.ANTHROPIC_MODEL || ''),
+          String(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL || ''),
+          String(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL || ''),
+          String(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL || ''),
+        );
+      }
+    } catch { /* optional */ }
+    models.push(
+      String(env.ANTHROPIC_MODEL || ''),
+      String(env.ANTHROPIC_DEFAULT_OPUS_MODEL || ''),
+      String(env.ANTHROPIC_DEFAULT_SONNET_MODEL || ''),
+      String(env.ANTHROPIC_DEFAULT_HAIKU_MODEL || ''),
+    );
+    const names = Object.keys(env).sort();
+    const value = {
+      env,
+      names,
+      sources,
+      models: [...new Set(models.map((model) => model.trim()).filter(Boolean))],
+      hasCredential: names.includes('ANTHROPIC_API_KEY') || names.includes('ANTHROPIC_AUTH_TOKEN'),
+    };
+    this.claudeEnvCache = { at: now, value };
+    return value;
+  }
+
   async probeCli(transport) {
     const spec = CLI_SPECS[transport];
     if (!spec) return { installed: false, authenticated: null };
-    const version = await this.spawnCli(transport, spec.versionArgs, { timeout: 8000 });
+    const extraEnv = transport === 'claude-code' ? this.claudeEnvironment().env : {};
+    const version = await this.spawnCli(transport, spec.versionArgs, { timeout: 8000, extraEnv });
     const installed = version.installed !== false && version.ok;
     if (!installed) {
       return {
@@ -1123,7 +1274,23 @@ class AIService {
       };
     }
     const versionText = cleanCliText(version.stdout || version.stderr).split(/\r?\n/)[0] || '';
-    const authRun = await this.spawnCli(transport, spec.authArgs, { timeout: 10000 });
+    if (transport === 'claude-code') {
+      const claudeEnv = this.claudeEnvironment();
+      if (claudeEnv.hasCredential) {
+        return {
+          id: transport,
+          label: spec.label,
+          command: spec.command,
+          installed: true,
+          authenticated: true,
+          authSource: 'environment',
+          version: versionText,
+          detail: `Configured by environment: ${claudeEnv.names.filter((name) => /API_KEY|AUTH_TOKEN|BASE_URL|MODEL/.test(name)).join(', ')}`,
+          envSources: claudeEnv.sources,
+        };
+      }
+    }
+    const authRun = await this.spawnCli(transport, spec.authArgs, { timeout: 10000, extraEnv });
     let authenticated = null;
     let authDetail = '';
     if (transport === 'opencode') {
@@ -1176,8 +1343,16 @@ class AIService {
     const hit = this.cliModelsCache.get(id);
     if (!force && hit && now - hit.at < 60000) return hit.value;
     if (id === 'claude-code') {
-      const models = ['sonnet', 'opus', 'haiku'];
-      const value = { ok: true, transport: id, models, detail: 'Claude Code model aliases. Exact model IDs also work.' };
+      const claudeEnv = this.claudeEnvironment();
+      const models = [...new Set(['sonnet', 'opus', 'haiku', ...claudeEnv.models])];
+      const value = {
+        ok: true,
+        transport: id,
+        models,
+        detail: claudeEnv.models.length
+          ? `Claude model aliases plus ${claudeEnv.models.length} configured model${claudeEnv.models.length === 1 ? '' : 's'}`
+          : 'Claude Code model aliases. Exact model IDs also work.',
+      };
       this.cliModelsCache.set(id, { at: now, value });
       return value;
     }
@@ -1197,6 +1372,50 @@ class AIService {
     };
     this.cliModelsCache.set(id, { at: now, value });
     return value;
+  }
+
+  async listApiModels(payload = {}) {
+    const config = this.resolvedConfig({ ...payload, transport: 'api' });
+    const ready = this.checkReady(config);
+    const known = [...new Set([config.model, ...PRESETS.map((preset) => preset.model)].filter(Boolean))];
+    if (!ready.ok) {
+      return {
+        ok: true,
+        transport: 'api',
+        models: known,
+        detail: 'Finish the API configuration to discover the provider model list.',
+      };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      for (const url of apiEndpointCandidates(ready.base, 'models')) {
+        try {
+          const response = await fetch(url, { headers: this.requestHeaders(config), signal: controller.signal });
+          if (!response.ok) continue;
+          const data = await response.json();
+          const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.models) ? data.models : []);
+          const models = [...new Set(list.map((model) => model?.id || model?.name).filter(Boolean))].slice(0, 500);
+          if (models.length) {
+            return { ok: true, transport: 'api', models, detail: `${models.length} model${models.length === 1 ? '' : 's'} from ${ready.name}` };
+          }
+        } catch { /* try the next candidate endpoint */ }
+      }
+      return {
+        ok: true,
+        transport: 'api',
+        models: known,
+        detail: 'The provider did not list models. Configured models are shown.',
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async listModels(payload = {}) {
+    const transport = normalizeTransport(payload.transport || this.config.transport);
+    if (transport === 'api') return this.listApiModels(payload);
+    return this.listCliModels({ transport, force: payload.force === true });
   }
 
   async callCliProvider(config, messages, { timeout = CLI_TIMEOUT_MS, signal = null } = {}) {
@@ -1222,7 +1441,8 @@ class AIService {
       ? ['run', '--standalone', '--agent', 'plan', '--format', 'json', ...(model ? ['--model', model] : []), '--title', 'OpsDeck AI']
       : ['-p', '--output-format', 'json', '--permission-mode', 'plan', '--restricted', '--strict-mcp-config', ...(model ? ['--model', model] : [])];
 
-    const result = await this.spawnCli(transport, args, { input: cliPrompt(messages), timeout, signal });
+    const extraEnv = transport === 'claude-code' ? this.claudeEnvironment().env : {};
+    const result = await this.spawnCli(transport, args, { input: cliPrompt(messages), timeout, signal, extraEnv });
     if (result.cancelled) return { ok: false, error: 'Cancelled', cancelled: true };
     if (result.timedOut) return { ok: false, error: `${spec.label} timed out after ${Math.round(timeout / 1000)}s.`, timeout: true };
 
@@ -1334,6 +1554,106 @@ class AIService {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  inkwellNotesDir() {
+    const usable = (value) => {
+      if (!value) return '';
+      try {
+        const abs = path.resolve(String(value));
+        return fs.statSync(abs).isDirectory() ? fs.realpathSync(abs) : '';
+      } catch { return ''; }
+    };
+    const override = usable(process.env.OPSDECK_INKWELL_DIR);
+    if (override) return override;
+    const configFiles = [
+      path.join(this.app.getPath('appData'), 'Inkwell', 'inkwell.json'),
+      path.join(os.homedir(), '.config', 'Inkwell', 'inkwell.json'),
+    ];
+    for (const file of configFiles) {
+      try {
+        const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const dir = usable(data?.notesDir);
+        if (dir) return dir;
+      } catch { /* Inkwell may not be installed */ }
+    }
+    return usable(path.join(os.homedir(), 'Documents', 'Inkwell'));
+  }
+
+  /**
+   * Save one answer as a new Markdown document in Inkwell's vault. The context
+   * snapshot is deliberately not saved: it can contain live infrastructure
+   * detail, and the document should contain only the answer and question.
+   */
+  async saveToInkwell(payload = {}) {
+    const answer = String(payload.answer || '').trim();
+    if (!answer) return { ok: false, error: 'There is no answer to save.' };
+    if (answer.length > INKWELL_NOTE_MAX) return { ok: false, error: 'This answer is too large to save as a note.' };
+    const question = String(payload.question || '').trim().slice(0, 20000);
+    const contextTitle = String(payload.contextTitle || '').trim().slice(0, 300);
+    const contextSubtitle = String(payload.contextSubtitle || '').trim().slice(0, 300);
+    const provider = String(payload.provider || '').trim().slice(0, 120);
+    const model = String(payload.model || '').trim().slice(0, 160);
+
+    const notesDir = this.inkwellNotesDir();
+    if (!notesDir) {
+      return {
+        ok: false,
+        error: 'The Inkwell notes folder was not found. Open Inkwell once, or set its notes folder in Inkwell settings.',
+      };
+    }
+    const folder = path.join(notesDir, 'OpsDeck');
+    try {
+      fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+      const real = fs.realpathSync(folder);
+      if (real !== notesDir && !real.startsWith(`${notesDir}${path.sep}`)) {
+        return { ok: false, error: 'The Inkwell notes folder points outside the vault.' };
+      }
+    } catch (error) {
+      return { ok: false, error: `Could not create the OpsDeck folder in Inkwell: ${error.message}` };
+    }
+
+    const heading = (/^\s{0,3}#{1,3}\s+(.+)$/.exec(String(answer).split(/\r?\n/)[0] || '') || [])[1] || '';
+    const answerBody = heading
+      ? answer.replace(/^\s{0,3}#{1,3}\s+[^\n]*(?:\r?\n)?/, '').replace(/^\s+/, '')
+      : answer;
+    let title = heading || (contextTitle ? `${contextTitle}${question ? ` — ${question}` : ''}` : question) || 'OpsDeck AI answer';
+    title = title.replace(/[*`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 110) || 'OpsDeck AI answer';
+
+    const header = [
+      `# ${title}`,
+      '',
+      `> Saved from OpsDeck AI · ${new Date().toISOString()}`,
+    ];
+    if (contextTitle) header.push(`> Context: ${contextTitle}${contextSubtitle ? ` — ${contextSubtitle}` : ''}`);
+    if (provider || model) header.push(`> Provider: ${provider || 'AI'}${model ? ` · ${model}` : ''}`);
+    const body = [
+      ...header,
+      '',
+      answerBody,
+      '',
+    ];
+    if (question) body.push('---', '', '## Question', '', question, '');
+
+    const baseName = noteFileName(title);
+    for (let attempt = 1; attempt <= 50; attempt += 1) {
+      const fileName = attempt === 1 ? baseName : baseName.replace(/\.md$/, ` ${attempt}.md`);
+      const target = path.join(folder, fileName);
+      try {
+        fs.writeFileSync(target, body.join('\n'), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        return {
+          ok: true,
+          title,
+          file: `OpsDeck/${fileName}`,
+          absolutePath: target,
+          folder: 'OpsDeck',
+        };
+      } catch (error) {
+        if (error.code === 'EEXIST') continue;
+        return { ok: false, error: `Could not write the Inkwell note: ${error.message}` };
+      }
+    }
+    return { ok: false, error: 'Could not find a free filename in the OpsDeck folder.' };
   }
 
   cancel(senderId) {
@@ -1946,6 +2266,11 @@ module.exports = {
     parseClaudeCliOutput,
     parseOpencodeAuthList,
     parseClaudeAuthStatus,
+    stripJsonComments,
+    cleanClaudeEnv,
+    parseVsCodeClaudeEnv,
+    parseClaudeSettingsEnv,
+    noteFileName,
     cliPrompt,
     publicConfig,
     formatEngine,

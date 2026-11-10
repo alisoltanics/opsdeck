@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     test: (payload) => invoke('ai:test', payload),
     detect: (payload) => invoke('ai:detect', payload),
     models: (payload) => invoke('ai:models', payload),
+    saveToInkwell: (payload) => invoke('ai:save-to-inkwell', payload),
     context: (target) => invoke('ai:context', target),
     ask: (payload) => invoke('ai:ask', payload),
     cancel: () => invoke('ai:cancel'),
