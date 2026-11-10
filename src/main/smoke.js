@@ -36,6 +36,30 @@ const ROUTES = [
   ['kubernetes contexts', '#/kubernetes/contexts'],
   ['kubernetes namespaces', '#/kubernetes/namespaces'],
   ['kubernetes nodes', '#/kubernetes/nodes'],
+  ['kubernetes pods', '#/kubernetes/pods'],
+  ['kubernetes deployments', '#/kubernetes/deployments'],
+  ['kubernetes statefulsets', '#/kubernetes/statefulsets'],
+  ['kubernetes daemonsets', '#/kubernetes/daemonsets'],
+  ['kubernetes jobs', '#/kubernetes/jobs'],
+  ['kubernetes cronjobs', '#/kubernetes/cronjobs'],
+  ['kubernetes services', '#/kubernetes/services'],
+  ['kubernetes ingresses', '#/kubernetes/ingresses'],
+  ['kubernetes network policies', '#/kubernetes/networkpolicies'],
+  ['kubernetes persistent volumes', '#/kubernetes/persistentvolumes'],
+  ['kubernetes volume claims', '#/kubernetes/persistentvolumeclaims'],
+  ['kubernetes storage classes', '#/kubernetes/storageclasses'],
+  ['kubernetes configmaps', '#/kubernetes/configmaps'],
+  ['kubernetes secrets', '#/kubernetes/secrets'],
+  ['kubernetes resource quotas', '#/kubernetes/resourcequotas'],
+  ['kubernetes limit ranges', '#/kubernetes/limitranges'],
+  ['kubernetes service accounts', '#/kubernetes/serviceaccounts'],
+  ['kubernetes roles', '#/kubernetes/roles'],
+  ['kubernetes role bindings', '#/kubernetes/rolebindings'],
+  ['kubernetes cluster roles', '#/kubernetes/clusterroles'],
+  ['kubernetes cluster bindings', '#/kubernetes/clusterrolebindings'],
+  ['kubernetes helm', '#/kubernetes/helm'],
+  ['kubernetes events', '#/kubernetes/events'],
+  ['kubernetes tools', '#/kubernetes/tools'],
   ['academy', '#/academy'],
   ['courses', '#/academy/courses'],
   ['course', '#/academy/course/docker-fundamentals'],
@@ -149,6 +173,45 @@ function rendererScript(routes) {
     if (!document.querySelector('[data-k8s-install-status]')) failures.push('kubernetes: tools installer status area is missing');
     const installStatus = await window.opsdeck.kubernetes.installStatus();
     if (!installStatus?.ok || !installStatus.binDir) failures.push('kubernetes: install status bridge failed');
+    const k8sTools = await window.opsdeck.kubernetes.tools();
+    const k8sContexts = await window.opsdeck.kubernetes.contexts();
+    if (k8sContexts?.contexts?.length && k8sTools?.tools?.kubectl?.installed) {
+      for (const section of ['pods', 'deployments', 'services', 'secrets', 'events']) {
+        const list = await window.opsdeck.kubernetes.resources({ section, allNamespaces: true });
+        if (!list?.ok || list.error) failures.push('kubernetes: ' + section + ' query failed :: ' + (list?.error || 'no result'));
+        if (section === 'secrets' && list?.rows?.some((row) => JSON.stringify(row).includes('"data"'))) {
+          failures.push('kubernetes: secret data leaked into the renderer');
+        }
+      }
+      const helmList = await window.opsdeck.kubernetes.helmReleases({ allNamespaces: true });
+      if (!helmList?.ok) failures.push('kubernetes: helm list bridge failed');
+      const podList = await window.opsdeck.kubernetes.resources({ section: 'pods', allNamespaces: true });
+      if (podList?.rows?.length) {
+        const first = podList.rows[0];
+        const detail = await window.opsdeck.kubernetes.resourceDetail({ section: 'pods', name: first.name, namespace: first.namespace });
+        if (!detail?.ok || !detail.manifest) failures.push('kubernetes: pod detail failed :: ' + (detail?.error || 'no manifest'));
+        const forbidden = await window.opsdeck.kubernetes.resourceAction('persistentvolumes', 'delete', { name: 'guard-test' });
+        if (forbidden?.ok) failures.push('kubernetes: cluster-scoped delete was accepted');
+
+        location.hash = '#/kubernetes/pods?all=1';
+        const rowsReady = await waitFor(() => !!document.querySelector('[data-k8s-row]'), 12000);
+        if (!rowsReady) failures.push('kubernetes: clickable pod rows did not render');
+        else {
+          document.querySelector('[data-k8s-row]').click();
+          const drawerOpen = await waitFor(() => !!document.querySelector('.drawer-overlay [data-k8s-detail-body]'), 8000);
+          if (!drawerOpen) failures.push('kubernetes: detail drawer did not open');
+          else {
+            const drawer = document.querySelector('.drawer-overlay');
+            if (!drawer.querySelector('.detail-section') || !drawer.querySelector('.tab')) failures.push('kubernetes: detail drawer is incomplete');
+            const manifestTab = drawer.querySelector('[data-tabs="k8s-detail"] [data-tab="manifest"]');
+            manifestTab?.click();
+            if (!(await waitFor(() => !!drawer.querySelector('.code-block'), 2000))) failures.push('kubernetes: manifest tab did not render');
+            window.OD.ui.closeTopOverlay();
+            await sleep(220);
+          }
+        }
+      }
+    }
     document.querySelector('#workspace-btn')?.click();
     const menuReopened = await waitFor(() => !!document.querySelector('[data-workspace="docker"]'), 2500);
     if (!menuReopened) failures.push('workspace: menu did not reopen');

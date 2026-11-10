@@ -42,6 +42,7 @@ const required = [
   'src/main/kubernetes/exec.js',
   'src/main/kubernetes/install.js',
   'src/main/kubernetes/registry.js',
+  'src/main/kubernetes/resources.js',
   'src/renderer/index.html',
   'src/renderer/js/app.js',
   'src/renderer/js/ai.js',

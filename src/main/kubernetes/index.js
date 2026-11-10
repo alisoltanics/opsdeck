@@ -14,6 +14,7 @@ const crypto = require('node:crypto');
 const { run, runJson, scrub } = require('./exec');
 const { KubeRegistry } = require('./registry');
 const { TOOL_NAMES, labelFor, installTool, binDir, toolsPathEnv, readInstalled } = require('./install');
+const { RESOURCES, sanitizeManifest, validObjectName, actionsFor, actionArgs } = require('./resources');
 
 const CONTEXT_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@/+=,-]{0,252}$/;
 const NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
@@ -449,6 +450,184 @@ class KubernetesService {
     }
     this.invalidate();
     return { ok: true, removed: entry.id, state: await this.bootstrap() };
+  }
+
+  async resources(section, { allNamespaces = false } = {}) {
+    const def = RESOURCES[section];
+    if (!def) return { ok: false, error: 'Unknown Kubernetes resource.' };
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    const base = {
+      ok: true,
+      section,
+      title: def.label,
+      columns: def.columns,
+      namespaced: def.namespaced,
+      allNamespaces: def.namespaced ? allNamespaces === true : false,
+      contexts: state.contexts,
+      selected: state.selected,
+      namespace: state.namespace,
+      tools: tools.tools,
+      checkedAt: tools.checkedAt,
+      rows: [],
+      total: 0,
+      truncated: false,
+      error: '',
+    };
+    if (!tools.tools.kubectl.installed) return { ...base, error: 'kubectl is not installed.' };
+    if (!state.selected) return base;
+
+    const all = def.namespaced && allNamespaces === true;
+    const args = ['get', def.resource, '-o', 'json'];
+    if (all) args.push('--all-namespaces');
+    const res = await this.kubeJson(args, {
+      timeout: 20000,
+      context: state.selected,
+      namespace: all ? '' : state.namespace,
+    });
+    if (!res.ok) {
+      return { ...base, error: scrub(res.stderr || `Could not list ${def.label}.`, 600) };
+    }
+    const items = Array.isArray(res.data?.items) ? res.data.items : [];
+    let rows = items.slice(0, 500).map(def.trim);
+    if (def.sortDescending) rows = rows.slice().sort((a, b) => (b.sortAt || 0) - (a.sortAt || 0));
+    return { ...base, rows, total: items.length, truncated: items.length > rows.length };
+  }
+
+  async resourceDetail(section, { name, namespace } = {}) {
+    const def = RESOURCES[section];
+    if (!def) return { ok: false, error: 'Unknown Kubernetes resource.' };
+    if (!validObjectName(name)) return { ok: false, error: 'That object name is not valid.' };
+
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    if (!tools.tools.kubectl.installed) return { ok: false, error: 'kubectl is not installed.' };
+    if (!state.selected) return { ok: false, error: 'Choose a context before opening an object.' };
+
+    const ns = def.namespaced ? (validNamespace(namespace) ? namespace : state.namespace) : '';
+    const res = await this.kubeJson(['get', def.resource, name, '-o', 'json'], {
+      timeout: 15000,
+      context: state.selected,
+      namespace: ns,
+    });
+    if (!res.ok) {
+      return { ok: false, error: scrub(res.stderr || `Could not read this ${def.label.toLowerCase().replace(/s$/, '')}.`, 600) };
+    }
+
+    const manifest = sanitizeManifest(res.data, section);
+    const describeResult = await this.kube(['describe', def.resource, name], {
+      timeout: 15000,
+      context: state.selected,
+      namespace: ns,
+    });
+    const metadata = manifest.metadata || {};
+    return {
+      ok: true,
+      section,
+      title: def.label,
+      name: String(metadata.name || name),
+      namespace: ns,
+      kind: String(manifest.kind || ''),
+      context: state.selected,
+      created: metadata.creationTimestamp || null,
+      labels: metadata.labels && typeof metadata.labels === 'object' ? metadata.labels : {},
+      annotations: metadata.annotations && typeof metadata.annotations === 'object' ? metadata.annotations : {},
+      manifest,
+      describe: describeResult.ok ? String(describeResult.stdout || '').slice(0, 24000) : '',
+      describeError: describeResult.ok ? '' : scrub(describeResult.stderr || 'Could not describe this object.', 400),
+      actions: actionsFor(section),
+    };
+  }
+
+  async resourceAction(section, action, { name, namespace, replicas } = {}) {
+    let plan;
+    try {
+      plan = actionArgs(section, action, name, { namespace, replicas });
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    if (!tools.tools.kubectl.installed) return { ok: false, error: 'kubectl is not installed.' };
+    if (!state.selected) return { ok: false, error: 'Choose a context before changing objects.' };
+
+    const res = await this.kube(plan.args, {
+      timeout: 20000,
+      context: state.selected,
+      namespace: plan.namespace,
+    });
+    if (!res.ok) {
+      return { ok: false, error: scrub(res.stderr || `The ${action} command failed.`, 600) };
+    }
+    return {
+      ok: true,
+      section,
+      action,
+      name,
+      namespace: plan.namespace,
+      replicas: plan.replicas,
+      message: scrub(String(res.stdout || '').trim(), 400) || `${action} requested.`,
+    };
+  }
+
+  async helmReleases({ allNamespaces = false } = {}) {
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    const base = {
+      ok: true,
+      section: 'helm',
+      title: 'Helm releases',
+      columns: ['Name', 'Namespace', 'Revision', 'Updated', 'Status', 'Chart', 'App version'],
+      namespaced: true,
+      allNamespaces: allNamespaces === true,
+      contexts: state.contexts,
+      selected: state.selected,
+      namespace: state.namespace,
+      tools: tools.tools,
+      checkedAt: tools.checkedAt,
+      rows: [],
+      total: 0,
+      truncated: false,
+      error: '',
+    };
+    if (!tools.tools.helm.installed) return { ...base, error: 'Helm is not installed. Open Tools to install it.' };
+    if (!state.selected) return base;
+
+    const args = ['list', '-o', 'json', '--kube-context', state.selected];
+    if (allNamespaces === true) args.push('--all-namespaces');
+    else args.push('--namespace', state.namespace);
+    const res = await run('helm', args, { timeout: 20000, env: this.env() });
+    if (!res.ok) return { ...base, error: scrub(res.stderr || 'Could not list Helm releases.', 600) };
+
+    let data = [];
+    try { data = JSON.parse(String(res.stdout || '[]')); } catch {
+      return { ...base, error: 'Helm returned output OpsDeck could not read as JSON.' };
+    }
+    const releases = Array.isArray(data) ? data : [];
+    const toneFor = (status) => {
+      if (status === 'deployed') return 'green';
+      if (status === 'failed') return 'red';
+      if (/pending|uninstalling/.test(status || '')) return 'amber';
+      return 'slate';
+    };
+    const rows = releases.slice(0, 500).map((release) => {
+      const updated = Date.parse(release.updated || '');
+      return {
+        name: String(release.name || ''),
+        namespace: String(release.namespace || ''),
+        created: Number.isFinite(updated) ? new Date(updated).toISOString() : null,
+        sortAt: Number.isFinite(updated) ? updated : 0,
+        cells: [
+          { text: String(release.name || '—'), strong: true, mono: true },
+          { text: String(release.namespace || '—'), mono: true },
+          { text: String(release.revision || '—'), mono: true },
+          Number.isFinite(updated) ? { text: new Date(updated).toISOString(), age: true } : { text: String(release.updated || '—') },
+          { text: String(release.status || '—'), badge: true, tone: toneFor(release.status) },
+          { text: String(release.chart || '—'), mono: true },
+          { text: String(release.app_version || '—'), mono: true },
+        ],
+        status: String(release.status || ''),
+        chart: String(release.chart || ''),
+      };
+    });
+    return { ...base, rows, total: releases.length, truncated: releases.length > rows.length };
   }
 
   async dashboard() {

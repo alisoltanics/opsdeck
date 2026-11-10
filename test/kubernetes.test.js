@@ -12,9 +12,10 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const crypto = require('node:crypto');
-const { __test } = require('../src/main/kubernetes');
+const { KubernetesService, __test } = require('../src/main/kubernetes');
 const { KubeRegistry } = require('../src/main/kubernetes/registry');
 const { scrub } = require('../src/main/kubernetes/exec');
+const { RESOURCES, __test: resourceTest, actionArgs, actionsFor, sanitizeManifest, validObjectName } = require('../src/main/kubernetes/resources');
 const {
   FALLBACK_VERSIONS,
   installTool,
@@ -275,4 +276,158 @@ test('release lookup falls back to a known version when the network is unavailab
     fetchImpl: async () => { throw new Error('offline'); },
   });
   assert.equal(version, FALLBACK_VERSIONS.kind);
+});
+
+test('every resource section has a real kubectl resource and a trimmer', () => {
+  for (const [section, def] of Object.entries(RESOURCES)) {
+    assert.ok(def.resource, section);
+    assert.ok(Array.isArray(def.columns) && def.columns.length, section);
+    assert.equal(typeof def.trim, 'function', section);
+    assert.equal(typeof def.namespaced, 'boolean', section);
+  }
+  assert.equal(RESOURCES.pods.resource, 'pods');
+  assert.equal(RESOURCES.deployments.resource, 'deployments.apps');
+  assert.equal(RESOURCES.persistentvolumes.namespaced, false);
+});
+
+test('workload and network objects become compact, readable rows', () => {
+  const pod = resourceTest.trimPod({
+    metadata: { name: 'web-0', namespace: 'team', creationTimestamp: '2026-01-01T00:00:00Z' },
+    spec: { nodeName: 'node-a', containers: [{ image: 'nginx:1.27' }, { image: 'sidecar:1' }] },
+    status: {
+      phase: 'Running',
+      podIP: '10.1.2.3',
+      containerStatuses: [{ ready: true, restartCount: 1 }, { ready: false, restartCount: 0 }],
+    },
+  });
+  assert.equal(pod.name, 'web-0');
+  assert.equal(pod.ready, 1);
+  assert.equal(pod.total, 2);
+  assert.equal(pod.restarts, 1);
+  assert.equal(pod.cells[1].text, '1/2');
+  assert.equal(pod.cells[5].badge, true);
+  assert.equal(pod.cells[5].text, 'Running');
+
+  const deployment = resourceTest.trimDeployment({
+    metadata: { name: 'web', namespace: 'team', creationTimestamp: '2026-01-01T00:00:00Z' },
+    spec: { replicas: 3, template: { spec: { containers: [{ image: 'nginx:1.27' }] } } },
+    status: { readyReplicas: 2, updatedReplicas: 3, availableReplicas: 2 },
+  });
+  assert.equal(deployment.cells[1].text, '2/3');
+  assert.equal(deployment.cells[5].text, 'Progressing');
+  assert.equal(deployment.cells[4].text, 'nginx:1.27');
+
+  const service = resourceTest.trimService({
+    metadata: { name: 'web', namespace: 'team' },
+    spec: { type: 'NodePort', clusterIP: '10.96.0.10', ports: [{ port: 80, protocol: 'TCP', nodePort: 30080 }], selector: { app: 'web' } },
+  });
+  assert.equal(service.cells[1].text, 'NodePort');
+  assert.equal(service.cells[4].text, '80/TCP→30080');
+  assert.equal(service.cells[5].text, 'app=web');
+});
+
+test('secret rows never contain secret values or data keys', () => {
+  const secret = resourceTest.trimSecret({
+    metadata: {
+      name: 'db-password',
+      namespace: 'team',
+      annotations: { 'kubectl.kubernetes.io/last-applied-configuration': '{"data":{"password":"c2VjcmV0"}}' },
+      creationTimestamp: '2026-01-01T00:00:00Z',
+    },
+    type: 'Opaque',
+    data: { password: 'c2VjcmV0', token: 'YWJjZA==' },
+    stringData: { extra: 'plain-text-secret' },
+  });
+  const serialized = JSON.stringify(secret);
+  assert.ok(!serialized.includes('c2VjcmV0'));
+  assert.ok(!serialized.includes('plain-text-secret'));
+  assert.ok(!serialized.includes('YWJjZA=='));
+  assert.equal(secret.cells[1].text, 'Opaque');
+  assert.equal(secret.cells[2].text, '3');
+});
+
+test('event timestamps and job durations are formatted without locale assumptions', () => {
+  assert.equal(resourceTest.duration('2026-01-01T00:00:00Z', '2026-01-01T00:02:10Z'), '2m');
+  assert.equal(resourceTest.duration('2026-01-01T00:00:00Z', '2026-01-01T02:00:00Z'), '2h');
+  const event = resourceTest.trimEvent({
+    metadata: { name: 'web.1', namespace: 'team', creationTimestamp: '2026-01-01T00:00:00Z' },
+    type: 'Warning',
+    reason: 'BackOff',
+    involvedObject: { kind: 'Pod', name: 'web-0' },
+    count: 4,
+    lastTimestamp: '2026-01-01T00:01:00Z',
+    message: 'Back-off restarting failed container',
+  });
+  assert.equal(event.cells[0].text, 'Warning');
+  assert.equal(event.cells[0].tone, 'amber');
+  assert.equal(event.cells[2].text, 'Pod/web-0');
+  assert.equal(event.cells[4].text, '4');
+  assert.equal(event.cells[6].age, true);
+});
+
+test('manifests are sanitized before they reach the renderer', () => {
+  const source = {
+    metadata: {
+      name: 'web-0',
+      managedFields: [{ manager: 'kubectl' }],
+      annotations: {
+        'kubectl.kubernetes.io/last-applied-configuration': '{"data":{"password":"c2VjcmV0"}}',
+        'example.com/owner': 'team-a',
+      },
+    },
+    data: { password: 'c2VjcmV0' },
+    stringData: { token: 'plain-text-secret' },
+    spec: { containers: [{ name: 'web', env: [{ name: 'TOKEN', value: 'hunter2' }] }] },
+  };
+  const clean = sanitizeManifest(source, 'secrets');
+  assert.equal(clean.metadata.managedFields, undefined);
+  assert.equal(clean.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'], undefined);
+  assert.equal(clean.metadata.annotations['example.com/owner'], 'team-a');
+  assert.equal(clean.data, undefined);
+  assert.equal(clean.stringData, undefined);
+  assert.ok(source.metadata.managedFields, 'the source object must not be mutated');
+
+  const config = sanitizeManifest({ kind: 'ConfigMap', metadata: { name: 'cfg' }, data: { mode: 'production' } }, 'configmaps');
+  assert.deepEqual(config.data, { mode: 'production' });
+});
+
+test('object names and actions are validated before kubectl is called', () => {
+  assert.equal(validObjectName('web-0'), true);
+  assert.equal(validObjectName('web.example.com'), true);
+  assert.equal(validObjectName('web_0'), false);
+  assert.equal(validObjectName('../etc/passwd'), false);
+  assert.equal(validObjectName(''), false);
+  assert.equal(validObjectName('A'.repeat(254)), false);
+
+  assert.deepEqual(actionsFor('deployments'), ['scale', 'restart', 'delete']);
+  assert.deepEqual(actionsFor('persistentvolumes'), []);
+  assert.deepEqual(actionsFor('events'), []);
+
+  const scale = actionArgs('deployments', 'scale', 'web', { namespace: 'team-a', replicas: 3 });
+  assert.deepEqual(scale.args, ['scale', 'deployments.apps', 'web', '--replicas=3']);
+  assert.equal(scale.namespace, 'team-a');
+  assert.equal(scale.replicas, 3);
+
+  assert.deepEqual(actionArgs('pods', 'delete', 'web-0', { namespace: 'team-a' }).args, ['delete', 'pods', 'web-0', '--wait=false']);
+  assert.deepEqual(actionArgs('daemonsets', 'restart', 'agent', { namespace: 'kube-system' }).args, ['rollout', 'restart', 'daemonsets.apps/agent']);
+
+  assert.throws(() => actionArgs('pods', 'scale', 'web-0', { namespace: 'team-a', replicas: 2 }), /not available/);
+  assert.throws(() => actionArgs('persistentvolumes', 'delete', 'data', {}), /not available/);
+  assert.throws(() => actionArgs('deployments', 'scale', 'web', { namespace: 'team-a', replicas: -1 }), /between 0 and 1000/);
+  assert.throws(() => actionArgs('deployments', 'scale', 'web', { namespace: 'team-a', replicas: 1.5 }), /whole number/);
+  assert.throws(() => actionArgs('deployments', 'scale', 'web', { namespace: '../bad', replicas: 1 }), /namespace/);
+  assert.throws(() => actionArgs('deployments', 'scale', '../web', { namespace: 'team-a', replicas: 1 }), /name/);
+});
+
+test('service rejects invalid detail and action input before touching a cluster', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opsdeck-k8s-guard-'));
+  const service = new KubernetesService({ app: { getPath: () => dir }, dialog: {}, getWindow: () => null });
+  try {
+    assert.equal((await service.resourceDetail('not-a-resource', { name: 'web' })).ok, false);
+    assert.equal((await service.resourceDetail('pods', { name: '../evil' })).ok, false);
+    assert.equal((await service.resourceAction('pods', 'delete', { name: '../evil', namespace: 'default' })).ok, false);
+    assert.equal((await service.resourceAction('persistentvolumes', 'delete', { name: 'data' })).ok, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

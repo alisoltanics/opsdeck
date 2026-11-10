@@ -150,6 +150,10 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('k8s:import-kubeconfig', () => kubernetes.importKubeconfig());
   handle('k8s:remove-kubeconfig', (p) => kubernetes.removeKubeconfig(p?.id));
   handle('k8s:dashboard', () => kubernetes.dashboard());
+  handle('k8s:resources', (p) => kubernetes.resources(p?.section, { allNamespaces: p?.allNamespaces === true }));
+  handle('k8s:resource-detail', (p) => kubernetes.resourceDetail(p?.section, { name: p?.name, namespace: p?.namespace }));
+  handle('k8s:resource-action', (p) => kubernetes.resourceAction(p?.section, p?.action, { name: p?.name, namespace: p?.namespace, replicas: p?.replicas }));
+  handle('k8s:helm-releases', (p) => kubernetes.helmReleases({ allNamespaces: p?.allNamespaces === true }));
   handle('k8s:install-status', () => kubernetes.installStatus());
   handle('k8s:install-tools', () => kubernetes.installTools((event) => {
     const win = getWindow();

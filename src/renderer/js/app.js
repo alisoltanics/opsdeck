@@ -58,6 +58,70 @@
         { id: 'kubernetes', section: 'nodes', label: 'Nodes', icon: 'server', href: '#/kubernetes/nodes' },
       ],
     },
+    {
+      label: 'Workloads',
+      items: [
+        { id: 'kubernetes', section: 'pods', label: 'Pods', icon: 'box', href: '#/kubernetes/pods' },
+        { id: 'kubernetes', section: 'deployments', label: 'Deployments', icon: 'layers', href: '#/kubernetes/deployments' },
+        { id: 'kubernetes', section: 'statefulsets', label: 'StatefulSets', icon: 'database', href: '#/kubernetes/statefulsets' },
+        { id: 'kubernetes', section: 'daemonsets', label: 'DaemonSets', icon: 'server', href: '#/kubernetes/daemonsets' },
+        { id: 'kubernetes', section: 'jobs', label: 'Jobs', icon: 'play', href: '#/kubernetes/jobs' },
+        { id: 'kubernetes', section: 'cronjobs', label: 'CronJobs', icon: 'clock', href: '#/kubernetes/cronjobs' },
+      ],
+    },
+    {
+      label: 'Networking',
+      items: [
+        { id: 'kubernetes', section: 'services', label: 'Services', icon: 'network', href: '#/kubernetes/services' },
+        { id: 'kubernetes', section: 'ingresses', label: 'Ingresses', icon: 'globe', href: '#/kubernetes/ingresses' },
+        { id: 'kubernetes', section: 'networkpolicies', label: 'Network policies', icon: 'lock', href: '#/kubernetes/networkpolicies' },
+      ],
+    },
+    {
+      label: 'Storage',
+      items: [
+        { id: 'kubernetes', section: 'persistentvolumes', label: 'Persistent volumes', icon: 'database', href: '#/kubernetes/persistentvolumes' },
+        { id: 'kubernetes', section: 'persistentvolumeclaims', label: 'Volume claims', icon: 'folder', href: '#/kubernetes/persistentvolumeclaims' },
+        { id: 'kubernetes', section: 'storageclasses', label: 'Storage classes', icon: 'layers', href: '#/kubernetes/storageclasses' },
+      ],
+    },
+    {
+      label: 'Configuration',
+      items: [
+        { id: 'kubernetes', section: 'configmaps', label: 'ConfigMaps', icon: 'file', href: '#/kubernetes/configmaps' },
+        { id: 'kubernetes', section: 'secrets', label: 'Secrets', icon: 'key', href: '#/kubernetes/secrets' },
+        { id: 'kubernetes', section: 'resourcequotas', label: 'Resource quotas', icon: 'filter', href: '#/kubernetes/resourcequotas' },
+        { id: 'kubernetes', section: 'limitranges', label: 'Limit ranges', icon: 'target', href: '#/kubernetes/limitranges' },
+      ],
+    },
+    {
+      label: 'Security',
+      items: [
+        { id: 'kubernetes', section: 'serviceaccounts', label: 'Service accounts', icon: 'user', href: '#/kubernetes/serviceaccounts' },
+        { id: 'kubernetes', section: 'roles', label: 'Roles', icon: 'shield', href: '#/kubernetes/roles' },
+        { id: 'kubernetes', section: 'rolebindings', label: 'Role bindings', icon: 'link', href: '#/kubernetes/rolebindings' },
+        { id: 'kubernetes', section: 'clusterroles', label: 'Cluster roles', icon: 'crown', href: '#/kubernetes/clusterroles' },
+        { id: 'kubernetes', section: 'clusterrolebindings', label: 'Cluster bindings', icon: 'globe', href: '#/kubernetes/clusterrolebindings' },
+      ],
+    },
+    {
+      label: 'Applications',
+      items: [
+        { id: 'kubernetes', section: 'helm', label: 'Helm releases', icon: 'rocket', href: '#/kubernetes/helm' },
+      ],
+    },
+    {
+      label: 'Observability',
+      items: [
+        { id: 'kubernetes', section: 'events', label: 'Events', icon: 'activity', href: '#/kubernetes/events' },
+      ],
+    },
+    {
+      label: 'Tools',
+      items: [
+        { id: 'kubernetes', section: 'tools', label: 'Local tools', icon: 'terminal', href: '#/kubernetes/tools' },
+      ],
+    },
   ];
 
   const PAGE_LABELS = {
