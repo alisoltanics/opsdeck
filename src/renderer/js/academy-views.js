@@ -387,7 +387,7 @@
       ${academyNav('courses')}
       <div class="page-head">
         <div class="page-head-left"><div class="eyebrow">${icon('graduation-cap', 12)}Curriculum</div><h1 class="page-title">Docker Academy</h1><p class="page-sub">Eighteen courses from first principles to expert operations. Every lesson has objectives, real commands, a knowledge check and a next step.</p></div>
-        <div class="page-actions"><span class="badge tone-accent">${courses.length} courses</span><span class="badge tone-slate">${OD.store.allLessons().length} lessons</span></div>
+        <div class="page-actions"><span class="badge tone-accent">${courses.length} courses</span><span class="badge tone-slate">${OD.store.allLessons().length} lessons</span>${OD.ai ? OD.ai.button({ kind: 'academy' }, { label: 'Ask AI about the Academy' }) : ''}</div>
       </div>
       <div class="toolbar">
         <label class="search-box">${icon('search', 14)}<input id="course-search" type="search" placeholder="Find a course…" value="${esc(state.courseQuery)}" /></label>
@@ -429,6 +429,7 @@
           </div>
           <div class="course-detail-metrics">
             ${next ? `<a class="btn btn-primary btn-md" href="#/academy/lesson/${esc(next.id)}">${icon(stats.completed ? 'play' : 'arrow-right', 14)}<span>${stats.completed ? 'Continue' : 'Start course'}</span></a>` : ''}
+            ${OD.ai ? OD.ai.button({ kind: 'course', id: course.id, name: course.title }, { label: 'Ask AI about this course', size: 'md' }) : ''}
             ${next && OD.store.progressFor(next.id) ? `<span class="text-xs muted">Next: ${esc(next.title)}</span>` : ''}
           </div>
         </div>
@@ -604,6 +605,7 @@
               ${U.button({ label: complete ? 'Completed' : 'Mark complete', icon: complete ? 'circle-check' : 'check', variant: complete ? 'success' : 'primary', size: 'sm', attrs: `data-lesson-action="complete" ${complete ? 'disabled' : ''}` })}
               ${U.button({ label: bookmarked ? 'Bookmarked' : 'Bookmark', icon: 'bookmark', size: 'sm', variant: bookmarked ? 'subtle' : 'secondary', attrs: 'data-lesson-action="bookmark"' })}
               ${U.button({ label: 'Focus notes', icon: 'notebook-pen', size: 'sm', variant: 'secondary', attrs: 'data-lesson-action="notes"' })}
+              ${OD.ai ? OD.ai.button({ kind: 'lesson', id: lesson.id, name: lesson.title }, { label: 'Ask AI', size: 'sm' }) : ''}
               ${next ? `<a class="btn btn-sm btn-secondary" href="#/academy/lesson/${esc(next.id)}">${icon('arrow-right', 13)}<span>Next lesson</span></a>` : ''}
             </div>
           </div>

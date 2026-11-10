@@ -243,6 +243,16 @@ async function containerLogs(id, tail = 400) {
   return { ok: res.ok || !!res.stdout, stdout: stripAnsi(res.stdout), stderr: stripAnsi(res.stderr) };
 }
 
+/**
+ * Read-only process list for a container. Docker passes the options to the
+ * container's ps, so no options keeps this portable across minimal images.
+ */
+async function containerTop(id) {
+  if (!validId(id)) throw new Error('Invalid container id');
+  const res = await run(['top', id], { timeout: 10000 });
+  return { ok: res.ok, stdout: stripAnsi(res.stdout), error: res.ok ? null : stripAnsi(res.stderr) };
+}
+
 const CONTAINER_ACTIONS = {
   start: (id) => ['start', id],
   stop: (id) => ['stop', id],
@@ -367,6 +377,68 @@ async function removeUnusedImages(refs) {
   };
 }
 
+/**
+ * A sanitised image inspect. Environment values whose names look secret are
+ * masked here as well as redacted again when the AI context is assembled, so
+ * the renderer and the provider never receive credentials by accident.
+ */
+async function imageInspect(ref) {
+  if (!validId(ref)) throw new Error('Invalid image reference');
+  const res = await run(['image', 'inspect', ref], { timeout: 12000 });
+  if (!res.ok) return { ok: false, error: stripAnsi(res.stderr) };
+  let data;
+  try { data = JSON.parse(res.stdout)[0]; } catch { return { ok: false, error: 'Could not parse image details.' }; }
+  if (!data) return { ok: false, error: 'The image could not be found.' };
+  const sanitizeEnv = (entries) => (entries || []).map((entry) => {
+    const idx = entry.indexOf('=');
+    const key = idx > 0 ? entry.slice(0, idx) : entry;
+    const value = idx > 0 ? entry.slice(idx + 1) : '';
+    const sensitive = /(secret|token|password|passwd|api[_-]?key|private|credential|auth)/i.test(key);
+    return sensitive ? `${key}=••••••••` : entry;
+  });
+  const config = data.Config || {};
+  const containerConfig = data.ContainerConfig || {};
+  return {
+    ok: true,
+    item: {
+      id: data.Id,
+      repoTags: data.RepoTags || [],
+      repoDigests: data.RepoDigests || [],
+      created: data.Created,
+      author: data.Author || '',
+      architecture: data.Architecture || '',
+      os: data.Os || '',
+      size: data.Size || 0,
+      virtualSize: data.VirtualSize || 0,
+      config: {
+        user: config.User || '',
+        exposedPorts: config.ExposedPorts || {},
+        env: sanitizeEnv(config.Env),
+        cmd: config.Cmd || [],
+        entrypoint: config.Entrypoint || [],
+        workingDir: config.WorkingDir || '',
+        labels: config.Labels || {},
+        stopSignal: config.StopSignal || '',
+        healthcheck: config.Healthcheck || null,
+      },
+      containerConfig: {
+        env: sanitizeEnv(containerConfig.Env),
+        cmd: containerConfig.Cmd || [],
+        entrypoint: containerConfig.Entrypoint || [],
+      },
+      rootFS: {
+        type: data.RootFS?.Type || '',
+        layers: (data.RootFS?.Layers || []).length,
+      },
+      graphDriver: {
+        name: data.GraphDriver?.Name || '',
+        data: data.GraphDriver?.Data || {},
+      },
+      metadata: data.Metadata || null,
+    },
+  };
+}
+
 async function imageAction(id, action, options = {}) {
   if (action === 'prune') {
     const res = await run(['image', 'prune', '--force'], { timeout: 120000 });
@@ -426,6 +498,22 @@ async function volumeAction(name, action, options = {}) {
   return { ok: res.ok, stdout: res.stdout.trim(), error: res.ok ? null : res.stderr };
 }
 
+/**
+ * Containers that mount a named volume. The ps Mounts field is a comma
+ * separated list such as "data:/var/lib/data,config:/etc/app"; match the
+ * source segment exactly so a volume called "data" does not match "database".
+ */
+async function containersForVolume(name) {
+  if (!validName(name)) throw new Error('Invalid volume name');
+  const list = await containersList();
+  if (!list.ok) return { ok: false, error: list.error, items: [] };
+  const items = (list.items || []).filter((entry) => String(entry.mounts || '')
+    .split(',')
+    .map((mount) => mount.trim())
+    .some((mount) => mount === name || mount.startsWith(`${name}:`)));
+  return { ok: true, items };
+}
+
 async function networksList() {
   return cached('networks', 3000, async () => {
     const res = await runJson(['network', 'ls', '--format', '{{json .}}'], { timeout: 12000 });
@@ -469,6 +557,36 @@ async function networkAction(name, action, options = {}) {
     catch { return { ok: false, error: 'Could not parse network details.' }; }
   }
   return { ok: res.ok, stdout: res.stdout.trim(), error: res.ok ? null : res.stderr };
+}
+
+/**
+ * Containers attached to a network come from network inspect, which includes
+ * the endpoint addresses Docker assigned. Merge them with the ps row so the UI
+ * and AI get the container state, image and port information too.
+ */
+async function containersForNetwork(name) {
+  if (!validName(name)) throw new Error('Invalid network name');
+  const res = await run(['network', 'inspect', name], { timeout: 12000 });
+  if (!res.ok) return { ok: false, error: stripAnsi(res.stderr), items: [] };
+  let data;
+  try { data = JSON.parse(res.stdout)[0]; } catch { return { ok: false, error: 'Could not parse network details.', items: [] }; }
+  const attached = data?.Containers || {};
+  const list = await containersList();
+  const byId = new Map(((list.items || [])).map((entry) => [entry.id, entry]));
+  const items = Object.entries(attached).map(([id, endpoint]) => {
+    const row = byId.get(id) || {};
+    return {
+      ...row,
+      id,
+      name: endpoint?.Name || row.name || id.slice(0, 12),
+      ipv4: endpoint?.IPv4Address || '',
+      ipv6: endpoint?.IPv6Address || '',
+      mac: endpoint?.MacAddress || '',
+      state: row.state || 'unknown',
+      image: row.image || '',
+    };
+  });
+  return { ok: true, items, network: data ? { id: data.Id, name: data.Name, driver: data.Driver } : null };
 }
 
 async function composeList() {
@@ -854,9 +972,9 @@ async function commandHelp(command) {
 }
 
 module.exports = {
-  status, overview, containersList, inspectContainer, containerLogs, containerAction,
-  imagesList, imageAction, removeUnusedImages, isProtectedImageRepository,
-  volumesList, volumeAction, networksList, networkAction,
+  status, overview, containersList, inspectContainer, containerLogs, containerTop, containerAction,
+  imagesList, imageInspect, imageAction, removeUnusedImages, isProtectedImageRepository,
+  volumesList, volumeAction, containersForVolume, networksList, networkAction, containersForNetwork,
   composeList, composeConfig, composeAction, pickComposeFile, builds, registries,
   searchRegistry, stats, events, systemDf, terminalRun, commandIndex, commandHelp,
   parseHelp, stripAnsi, invalidate, validId, validName, validProject, runRaw: run,

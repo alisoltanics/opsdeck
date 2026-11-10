@@ -4,7 +4,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, nativeTheme, Menu
 const path = require('node:path');
 const fs = require('node:fs');
 const { registerIpc } = require('./src/main/ipc');
-const { watchSmokeTest } = require('./src/main/smoke');
+const { watchSmokeTest, startSmokeAI, stopSmokeAI } = require('./src/main/smoke');
 
 const isDev = process.argv.includes('--dev') || !app.isPackaged;
 const smokeMode = process.argv.includes('--smoke-test');
@@ -103,7 +103,12 @@ function createWindow() {
 
   if (smokeMode) {
     mainWindow.webContents.once('did-finish-load', () => {
-      watchSmokeTest(mainWindow, (code) => app.exit(code));
+      watchSmokeTest(mainWindow, (code) => {
+        // app.exit() skips will-quit, so remove the mock provider and its
+        // throwaway config before leaving.
+        stopSmokeAI();
+        app.exit(code);
+      });
     });
   }
 
@@ -212,8 +217,11 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     nativeTheme.themeSource = 'dark';
+    // The mock provider and its isolated config path must exist before the AI
+    // service is constructed by registerIpc.
+    if (smokeMode) await startSmokeAI(app);
     registerIpc({ getWindow: () => mainWindow, dialog, shell, clipboard, app });
     if (!smokeMode) createSplash();
     createWindow();
@@ -226,6 +234,10 @@ if (!gotLock) {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  if (smokeMode) stopSmokeAI();
 });
 
 ipcMain.on('window:minimize', () => mainWindow?.minimize());

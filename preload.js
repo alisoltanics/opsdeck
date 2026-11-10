@@ -57,6 +57,15 @@ contextBridge.exposeInMainWorld('opsdeck', {
     runTerminal: (command, consent) => invoke('docker:terminal-run', { command, consent }),
     pickComposeFile: () => invoke('docker:pick-compose'),
   },
+  ai: {
+    config: () => invoke('ai:config'),
+    saveConfig: (payload) => invoke('ai:save-config', payload),
+    clearKey: () => invoke('ai:clear-key'),
+    test: (payload) => invoke('ai:test', payload),
+    context: (target) => invoke('ai:context', target),
+    ask: (payload) => invoke('ai:ask', payload),
+    cancel: () => invoke('ai:cancel'),
+  },
   academy: {
     bootstrap: () => invoke('academy:bootstrap'),
     reload: () => invoke('academy:reload'),

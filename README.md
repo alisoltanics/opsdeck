@@ -52,6 +52,28 @@ renderer. Docker commands go through `execFile('docker', ...)` — never a shell
 Progress, quiz scores, bookmarks, notes, settings and activity are stored locally in
 SQLite (`~/.config/OpsDeck/academy.db` on Linux).
 
+**OpsDeck AI**
+
+- An assistant in a right-hand drawer, opened from the topbar, `Ctrl/Cmd+Shift+A`, the
+  command palette, a page header, or the Ask AI button on any container, image, volume,
+  network, Compose project, monitoring row, lesson or course
+- Each question carries a live snapshot of the selected resource, not just the visible
+  row: container inspect, recent logs, live stats, `docker top`, base image history and
+  Compose siblings; image inspect, layer history, disk usage and the containers that use
+  it; volume/network inspect plus attached containers; Compose config, services, stats and
+  logs; Academy lesson or course content
+- Configure any OpenAI-compatible chat-completions endpoint in Settings → AI assistant.
+  Presets cover DeepSeek, OpenAI, OpenRouter, Ollama and LM Studio; local providers on
+  `localhost`/`127.0.0.1` work without a key
+- Suggested questions, Markdown answers, a context preview with source character counts,
+  copy and retry, cancellation, and a persistent provider status card
+- The API key is stored in the main process only (`%APPDATA%`/`~/.config/OpsDeck/ai.json`,
+  mode `0600` on POSIX) and is never sent to the renderer. Requests run in the main
+  process, so the renderer CSP stays `connect-src 'none'`
+- Context is capped, secret-like values are redacted before it leaves the machine, and
+  live logs/labels/Compose files are treated as untrusted data in the system prompt.
+  Nothing is sent until you press Send
+
 ## Requirements
 
 - Node.js 20+ and npm
@@ -71,12 +93,19 @@ npm run dev        # development launch (DevTools enabled)
 
 ```bash
 npm run check      # syntax, content integrity, IPC bridge, CSP and security rules
-npm test           # node:test suites for content and command validation
+npm test           # node:test suites for content, AI helpers and command validation
 npm run smoke      # launches Electron, walks all 27 routes and tests the shell
 ```
 
 The smoke test uses the real preload bridge and real IPC handlers. It exits non-zero
-on any render, search, palette, theme or sidebar failure.
+on any render, search, palette, theme, shell or AI failure. AI is exercised against a
+throwaway OpenAI-compatible server on `127.0.0.1` with a separate
+`ai-smoke.json` config; your real provider, key and config are never read or changed.
+When another OpsDeck instance is running, pass an isolated profile:
+
+```bash
+npm run smoke -- --user-data-dir=/tmp/opsdeck-smoke
+```
 
 ## Build and install as a desktop app (Linux)
 
@@ -143,9 +172,10 @@ src/main/security.js    tokenizer + command/compose validation
 src/main/store.js       sql.js SQLite store for learning progress
 src/main/content.js     loads the compiled Academy JSON
 src/main/labs.js        lab sandbox, hardening, file workspace, reset
+src/main/ai.js          AI config, provider calls and live context builders
 src/main/ipc.js         IPC handlers
-src/main/smoke.js       Electron route/interaction smoke test
-src/renderer/           design system, shell, Docker views, Academy views
+src/main/smoke.js       Electron route/interaction smoke test (mock AI provider)
+src/renderer/           design system, shell, Docker views, Academy views, AI drawer
 src/renderer/vendor/    vendored xterm.js + fit addon (MIT) for the container terminal
 scripts/content/        authored Academy curriculum and reference sources
 scripts/build-content.js validates and compiles sources into content/*.json
@@ -187,8 +217,9 @@ reaches the Docker binary.
 
 Dark-first with a designed light theme, custom tokens and components, Inter and
 JetBrains Mono, a collapsible grouped sidebar, `Ctrl/Cmd+K` command palette,
-`Ctrl/Cmd+B` sidebar toggle, `Ctrl/Cmd+Shift+F` Academy search, app-wide zoom
-(`Ctrl/Cmd +`, `−`, `0`), keyboard navigation and reduced-motion support.
+`Ctrl/Cmd+B` sidebar toggle, `Ctrl/Cmd+Shift+F` Academy search,
+`Ctrl/Cmd+Shift+A` AI assistant, app-wide zoom (`Ctrl/Cmd +`, `−`, `0`), keyboard
+navigation and reduced-motion support.
 
 ## License
 

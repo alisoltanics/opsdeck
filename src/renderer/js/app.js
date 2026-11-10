@@ -294,6 +294,7 @@
         ${icon('search', 13)}<span>Search or jump to…</span><span class="kbd">Ctrl K</span>
       </button>
       <div class="topbar-actions">
+        ${OD.ai ? OD.ai.topbarButton() : ''}
         <a class="env-pill ${ok ? '' : 'offline'}" href="#/terminal" title="${esc(ok ? `Engine ${status.serverVersion || ''}` : (status?.reason || 'Engine offline'))}"><span class="dot"></span>${ok ? 'Engine online' : 'Engine offline'}</a>
         <div class="zoom-control" title="Interface scale — Ctrl + / Ctrl − / Ctrl 0">
           <button type="button" class="icon-btn" data-action="zoom-out" aria-label="Zoom out">${icon('minus', 14)}</button>
@@ -361,6 +362,7 @@
       { title: 'Academy', sub: 'Courses, lessons and progress', type: 'Navigate', icon: 'graduation-cap', href: '#/academy' },
       { title: 'Academy search', sub: 'Search every lesson, command and guide', type: 'Navigate', icon: 'search', href: '#/academy/search' },
       { title: 'Settings', sub: 'Appearance, goals and security', type: 'Navigate', icon: 'settings', href: '#/settings' },
+      { title: 'Ask AI about this page', sub: 'Open the assistant with live context  (Ctrl+Shift+A)', type: 'Action', icon: 'sparkles', action: 'ai-ask' },
       { title: `Switch to ${store.resolvedTheme() === 'dark' ? 'light' : 'dark'} theme`, sub: 'Change the interface appearance', type: 'Action', icon: store.resolvedTheme() === 'dark' ? 'sun' : 'moon', action: 'toggle-theme' },
       { title: 'Zoom in', sub: 'Increase the interface scale  (Ctrl +)', type: 'Action', icon: 'zoom-in', action: 'zoom-in' },
       { title: 'Zoom out', sub: 'Decrease the interface scale  (Ctrl −)', type: 'Action', icon: 'zoom-out', action: 'zoom-out' },
@@ -499,6 +501,9 @@
       renderRoute();
     } else if (action === 'open-workspace') {
       U.toast('That workspace is planned', 'info', { description: 'OpsDeck currently ships the Docker workspace and Academy. The shell is ready for Kubernetes, databases and observability.' });
+    } else if (action === 'ai-ask') {
+      if (OD.ai) OD.ai.openForCurrent();
+      else U.toast('AI is unavailable in this build', 'warning');
     }
   }
 

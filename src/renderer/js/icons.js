@@ -109,6 +109,9 @@
     'circle-x': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/>',
     dot: '<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>',
     deck: '<rect x="3" y="3" width="18" height="18" rx="5"/><path d="M7.5 12.5h3.5V16H7.5zM13 8h3.5v3.5H13z"/><path d="M13 12.5h3.5M10 12.5v3.5"/>',
+    sparkles: '<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/>',
+    send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+    bot: '<rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/>',
   };
 
   function icon(name, size = 16, cls = '') {

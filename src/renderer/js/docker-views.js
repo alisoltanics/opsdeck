@@ -32,13 +32,14 @@
 
   function pageHead(opts) {
     const actions = opts.actions || '';
+    const aiAction = opts.ai && OD.ai ? OD.ai.button(opts.ai, { size: 'sm' }) : '';
     return `<div class="page-head">
       <div class="page-head-left">
         ${opts.eyebrow ? `<div class="eyebrow">${icon(opts.iconName || 'sparkles', 12)}${esc(opts.eyebrow)}</div>` : ''}
         <h1 class="page-title">${esc(opts.title)}</h1>
         ${opts.sub ? `<p class="page-sub">${esc(opts.sub)}</p>` : ''}
       </div>
-      ${actions ? `<div class="page-actions">${actions}</div>` : ''}
+      ${(actions || aiAction) ? `<div class="page-actions">${actions}${aiAction}</div>` : ''}
     </div>`;
   }
 
@@ -283,6 +284,7 @@
         <p class="hero-sub">${c.running || 0} containers are running across ${ov.status?.context || 'default'} with Docker ${ov.status?.serverVersion || ''}. Jump into a workflow or continue where the Academy left off.</p>
         <div class="hero-actions">
           ${U.button({ label: 'New container', icon: 'plus', variant: 'primary', attrs: 'data-action="run-container"' })}
+          ${OD.ai ? OD.ai.button({ kind: 'page', page: 'overview' }, { label: 'Ask AI about this workspace' }) : ''}
           <a class="btn btn-secondary btn-md" href="#/terminal">${icon('terminal', 14)}<span>Open terminal</span></a>
           <a class="btn btn-ghost btn-md" href="${next ? `#/academy/lesson/${esc(next.id)}` : '#/academy'}">${icon('graduation-cap', 14)}<span>Continue learning</span></a>
         </div>
@@ -507,6 +509,7 @@
           attrs: `data-caction="exec" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"${x.state === 'running' ? '' : ' disabled'}`,
         })}
         ${U.iconButton({ icon: 'file-code', label: 'Logs', attrs: `data-caction="logs" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
+        ${OD.ai ? OD.ai.iconButton({ kind: 'container', id: x.id, name: x.name }, { title: 'Ask AI about this container with live logs, stats and inspect' }) : ''}
         ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-caction="remove" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
       </div></td>
     </tr>`;
@@ -611,6 +614,7 @@
         eyebrow: 'Docker workspace', iconName: 'box', title: 'Containers',
         sub: 'Inspect state, stream logs, and control lifecycle operations without leaving the keyboard.',
         actions: `${U.button({ label: 'Run container', icon: 'play', variant: 'primary', attrs: 'data-action="run-container"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}`,
+        ai: { kind: 'page', page: 'containers' },
       })}
       <div class="toolbar">
         <label class="search-box">${icon('search', 14)}<input id="container-search" type="search" placeholder="Search name, image, project, service…" value="${esc(state.containerFilter.q)}" /><span class="kbd">/</span></label>
@@ -650,7 +654,7 @@
           <div class="log-view" id="log-view">${U.loader('Reading logs…')}</div>
           <button type="button" class="log-latest" data-log-latest>${icon('chevron-down', 12)}<span>Latest</span></button>
         </div>`,
-      footer: `<span class="faint text-xs mono">docker logs --tail 300 --timestamps ${esc(item.id)}</span><div class="row gap-2">${OD.store.lessonById('logs-and-debugging') ? `<a class="btn btn-sm btn-ghost" href="#/academy/lesson/logs-and-debugging">${icon('graduation-cap', 13)}<span>Debugging lesson</span></a>` : ''}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker logs --tail 300 --timestamps ${esc(item.id)}"` })}</div>`,
+      footer: `<span class="faint text-xs mono">docker logs --tail 300 --timestamps ${esc(item.id)}</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${OD.store.lessonById('logs-and-debugging') ? `<a class="btn btn-sm btn-ghost" href="#/academy/lesson/logs-and-debugging">${icon('graduation-cap', 13)}<span>Debugging lesson</span></a>` : ''}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker logs --tail 300 --timestamps ${esc(item.id)}"` })}</div>`,
       onMount: ({ root, close, onClose }) => {
         const view = root.querySelector('#log-view');
         const select = root.querySelector('#log-tail');
@@ -766,7 +770,7 @@
         <div class="xterm-host" id="exec-host"></div>
         <div class="term-hint">Tab completes paths and commands inside the container · Ctrl+Shift+C / Ctrl+Shift+V copy and paste · Esc leaves fullscreen</div>
       </div>`,
-      footer: `<span class="faint text-xs mono">docker exec -it ${esc(short)} bash</span><div class="row gap-2">${learnLink('run-exec-logs', 'Exec and logs lesson')}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
+      footer: `<span class="faint text-xs mono">docker exec -it ${esc(short)} bash</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('run-exec-logs', 'Exec and logs lesson')}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
       onMount: ({ root, onClose }) => {
         const panel = root.querySelector('.overlay-panel.drawer');
         const shell = root.querySelector('#exec-shell');
@@ -966,7 +970,7 @@
         </form>
         <div class="term-hint">Enter runs inside the container · ↑/↓ history · Ctrl+L clears · closing this panel ends the session</div>
       </div>`,
-      footer: `<span class="faint text-xs mono">docker exec -it ${esc(short)} bash</span><div class="row gap-2">${learnLink('run-exec-logs', 'Exec and logs lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker exec -it ${esc(short)} bash"` })}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
+      footer: `<span class="faint text-xs mono">docker exec -it ${esc(short)} bash</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('run-exec-logs', 'Exec and logs lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker exec -it ${esc(short)} bash"` })}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
       onMount: ({ root, onClose }) => {
         const output = root.querySelector('#exec-output');
         const form = root.querySelector('#exec-form');
@@ -1225,7 +1229,7 @@
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Network</th><th>IP</th><th>Gateway</th><th>MAC</th></tr></thead><tbody>${networks || '<tr><td colspan="4" class="muted">No networks.</td></tr>'}</tbody></table></div>
       <div class="section-head"><div><h2 class="section-title">Labels</h2></div></div>
       <div class="tag-row">${Object.entries(d.labels || {}).map(([k, v]) => `<span class="badge mono">${esc(k)}=${esc(v)}</span>`).join('') || '<span class="muted text-sm">No labels.</span>'}</div>`,
-      footer: `<div class="row gap-2">${learnLink(lesson?.id, 'Explain this container')}${firefoxAction}${U.button({ label: 'Copy inspect command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker inspect ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink(lesson?.id, 'Explain this container')}${firefoxAction}${U.button({ label: 'Copy inspect command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker inspect ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
       onMount: ({ root }) => {
         root.querySelector('[data-open-firefox]')?.addEventListener('click', (event) => {
           openContainerInFirefox(item, event.currentTarget.dataset.openFirefox);
@@ -1316,6 +1320,7 @@
         eyebrow: 'Docker workspace', iconName: 'layers', title: 'Images',
         sub: 'Understand layer composition, tags and registry provenance before you build or prune.',
         actions: `${U.button({ label: 'Pull image', icon: 'download', variant: 'primary', attrs: 'data-action="pull-image"' })}${U.button({ label: 'Free space', icon: 'sparkles', variant: 'secondary', attrs: 'data-action="cleanup-images"' })}${U.button({ label: 'Prune dangling', icon: 'trash', variant: 'secondary', attrs: 'data-action="prune-images"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'ghost', attrs: 'data-action="refresh"' })}`,
+        ai: { kind: 'page', page: 'images' },
       })}
       <div class="stat-grid">
         ${U.statCard({ label: 'Local images', value: items.length, sub: `${dangling} dangling`, icon: 'layers', tone: 'violet' })}
@@ -1350,7 +1355,7 @@
       width: '880px',
       body: `<div class="banner banner-info"><div class="banner-icon">${icon('shield', 16)}</div><div class="banner-text"><strong>History is not a secret store</strong><span>Build arguments and commands appear in layer history. Never bake credentials into an image.</span></div></div>
         <div class="table-wrap"><table class="data-table"><thead><tr><th>Layer</th><th>Created</th><th>Created by</th><th>Size</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">No history returned.</td></tr>'}</tbody></table></div>`,
-      footer: `<div class="row gap-2">${learnLink('image-anatomy', 'Explain layers')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker image history --no-trunc ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'image', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('image-anatomy', 'Explain layers')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker image history --no-trunc ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
     });
   }
 
@@ -1383,6 +1388,7 @@
           <div class="project-file" title="${esc(p.files[0] || '')}">${esc(p.files[0] || 'No config file')}</div>
         </div>
         <div class="row gap-1">
+          ${OD.ai ? OD.ai.iconButton({ kind: 'compose', id: p.name, name: p.name }, { title: 'Ask AI about this Compose project with config, logs and live services' }) : ''}
           ${U.iconButton({ icon: 'file-code', label: 'Resolved config', attrs: `data-pact="config" data-project="${esc(p.name)}"` })}
           ${U.iconButton({ icon: 'terminal', label: 'Logs', attrs: `data-pact="logs" data-project="${esc(p.name)}"` })}
         </div>
@@ -1407,6 +1413,7 @@
         eyebrow: 'Docker workspace', iconName: 'boxes', title: 'Compose',
         sub: 'Manage multi-service projects with resolved configuration, logs and lifecycle controls.',
         actions: `${U.button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}${U.button({ label: 'Compose docs', variant: 'primary', icon: 'book-open', attrs: 'data-goto="#/academy/course/docker-compose"' })}`,
+        ai: { kind: 'page', page: 'compose' },
       })}
       ${items.length ? `<div class="summary-strip mb-4">
         <div class="summary-item"><span>Projects</span><strong>${items.length}</strong></div>
@@ -1432,7 +1439,7 @@
       width: '780px',
       body: `<div class="pill-row mb-3">${services.map((s) => `<span class="badge tone-violet">${esc(s)}</span>`).join('') || '<span class="muted text-sm">No services reported.</span>'}</div>
         <div class="config-view"><div class="config-toolbar"><span class="path">${esc(res.file || '')}</span>${U.button({ label: 'Copy', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(pretty)}"` })}</div><pre>${esc(pretty)}</pre></div>`,
-      footer: `<div class="row gap-2">${learnLink('compose-services', 'Compose services lesson')}${U.button({ label: 'Copy path', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(res.file || '')}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'compose', id: project, name: project }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('compose-services', 'Compose services lesson')}${U.button({ label: 'Copy path', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(res.file || '')}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
     });
   }
 
@@ -1443,7 +1450,7 @@
       icon: 'terminal',
       width: '780px',
       body: `<div class="row gap-2 mb-2"><span class="muted text-xs">Last 200 lines, ANSI stripped</span><div class="toolbar-spacer"></div>${U.button({ label: 'Reload', icon: 'refresh', size: 'sm', attrs: 'data-action="reload-compose-logs"' })}</div><div class="log-view" id="compose-log-view">${U.loader('Reading logs…')}</div>`,
-      footer: `<span class="mono faint text-xs">docker compose -p ${esc(project)} logs --tail 200</span>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      footer: `<span class="mono faint text-xs">docker compose -p ${esc(project)} logs --tail 200</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'compose', id: project, name: project }, { label: 'Ask AI', size: 'sm' }) : ''}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
       onMount: ({ root, onClose }) => {
         const view = root.querySelector('#compose-log-view');
         const load = async () => {
@@ -1474,6 +1481,7 @@
       <td>${Object.entries(v.labels || {}).slice(0, 2).map(([k, val]) => `<span class="badge mono">${esc(k)}=${esc(val)}</span>`).join(' ') || '<span class="faint">—</span>'}</td>
       <td><div class="row-actions">
         ${U.iconButton({ icon: 'eye', label: 'Inspect', attrs: `data-vact="inspect" data-vname="${esc(v.name)}"` })}
+        ${OD.ai ? OD.ai.iconButton({ kind: 'volume', id: v.name, name: v.name }, { title: 'Ask AI about this volume and the containers using it' }) : ''}
         ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-vact="remove" data-vname="${esc(v.name)}"` })}
       </div></td>
     </tr>`).join('');
@@ -1482,6 +1490,7 @@
         eyebrow: 'Docker workspace', iconName: 'database', title: 'Volumes',
         sub: 'Persistent storage managed by Docker. Named volumes survive container removal and are never host bind mounts.',
         actions: `${U.button({ label: 'Create volume', icon: 'plus', variant: 'primary', attrs: 'data-action="create-volume"' })}${U.button({ label: 'Prune unused', icon: 'trash', variant: 'secondary', attrs: 'data-action="prune-volumes"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'ghost', attrs: 'data-action="refresh"' })}`,
+        ai: { kind: 'page', page: 'volumes' },
       })}
       <div class="summary-strip mb-4">
         <div class="summary-item"><span>Volumes</span><strong>${items.length}</strong></div>
@@ -1523,6 +1532,7 @@
       <td class="cell-nowrap">${esc(n.createdAt ? timeAgo(n.createdAt) : '—')}</td>
       <td><div class="row-actions">
         ${U.iconButton({ icon: 'eye', label: 'Inspect', attrs: `data-nact="inspect" data-nname="${esc(n.name)}"` })}
+        ${OD.ai ? OD.ai.iconButton({ kind: 'network', id: n.name, name: n.name }, { title: 'Ask AI about this network and attached containers' }) : ''}
         ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-nact="remove" data-nname="${esc(n.name)}"` })}
       </div></td>
     </tr>`).join('');
@@ -1531,6 +1541,7 @@
         eyebrow: 'Docker workspace', iconName: 'network', title: 'Networks',
         sub: 'User-defined bridge networks provide embedded DNS and isolation. Prefer them over the default bridge.',
         actions: `${U.button({ label: 'Create network', icon: 'plus', variant: 'primary', attrs: 'data-action="create-network"' })}${U.button({ label: 'Prune unused', icon: 'trash', variant: 'secondary', attrs: 'data-action="prune-networks"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'ghost', attrs: 'data-action="refresh"' })}`,
+        ai: { kind: 'page', page: 'networks' },
       })}
       <div class="summary-strip mb-4">
         <div class="summary-item"><span>Networks</span><strong>${items.length}</strong></div>
@@ -1606,6 +1617,7 @@
         eyebrow: 'Docker workspace', iconName: 'hammer', title: 'Builds',
         sub: 'Buildx builders, node platforms and build cache. Reproducible images start with pinned inputs.',
         actions: `${U.button({ label: 'Build an image', icon: 'play', variant: 'primary', attrs: 'data-action="build-image"' })}${U.button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}`,
+        ai: { kind: 'page', page: 'builds' },
       })}
       ${items.length ? `<div class="builder-grid">${cards}</div>` : U.card({ body: U.empty({ icon: 'hammer', title: 'No buildx builders', body: 'Create a builder or use the default Docker build driver. The academy build lesson walks through the full pipeline.', action: U.button({ label: 'Open build academy', icon: 'graduation-cap', variant: 'primary', attrs: 'data-goto="#/academy/course/docker-build-buildkit"' }) }) })}
       <div class="split-2 mt-4">
@@ -1692,6 +1704,7 @@
         eyebrow: 'Docker workspace', iconName: 'cloud', title: 'Registries',
         sub: 'Authenticated endpoints, image provenance and Docker Hub search. Credentials stay in the Docker config, never in OpsDeck.',
         actions: `${U.button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}${learnLink('registry-auth', 'Registry lesson')}`,
+        ai: { kind: 'page', page: 'registries' },
       })}
       <div class="split-2">
         ${U.card({
@@ -1735,7 +1748,7 @@
       <td class="cell-mono">${fmtBytes(s.netIn)} ↓ / ${fmtBytes(s.netOut)} ↑</td>
       <td class="cell-mono">${fmtBytes(s.blockRead)} / ${fmtBytes(s.blockWrite)}</td>
       <td class="cell-mono">${s.pids}</td>
-      <td>${learnLink(OD.store.contextLesson('container', { image: s.name })?.id, '')}</td>
+      <td><div class="row-actions">${OD.ai ? OD.ai.iconButton({ kind: 'container', id: s.id, name: s.name }, { title: 'Ask AI about this container with live telemetry' }) : ''}${learnLink(OD.store.contextLesson('container', { image: s.name })?.id, '')}</div></td>
     </tr>`).join('');
   }
 
@@ -1756,6 +1769,7 @@
         eyebrow: 'Docker workspace', iconName: 'activity', title: 'Monitoring',
         sub: 'Live per-container CPU, memory, network and block I/O sampled from docker stats.',
         actions: `${U.button({ label: 'Refresh now', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}<span class="badge tone-green" id="mon-live-badge"><i class="badge-dot"></i>Live · 4s</span>`,
+        ai: { kind: 'page', page: 'monitoring' },
       })}
       <div class="stat-grid">
         ${U.statCard({ label: 'Aggregate CPU', value: `${totalCpu.toFixed(1)}%`, sub: `${items.length} running containers`, icon: 'cpu', tone: 'accent' })}
@@ -1794,6 +1808,7 @@
         eyebrow: 'Docker workspace', iconName: 'list', title: 'Events',
         sub: 'A structured view of engine activity. Use it to correlate a failure with the operation that caused it.',
         actions: `${U.button({ label: 'Refresh', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}`,
+        ai: { kind: 'page', page: 'events' },
       })}
       <div class="toolbar">
         <div class="filter-row">${types.map((t) => `<button type="button" class="chip ${f.type === t ? 'active' : ''}" data-etype="${esc(t)}">${esc(titleCase(t))}</button>`).join('')}</div>
@@ -1834,6 +1849,7 @@
         eyebrow: 'Docker workspace', iconName: 'terminal', title: 'Terminal',
         sub: 'A constrained Docker console. It is not a host shell: shell operators, pipes and host paths are rejected before execution.',
         actions: `${U.button({ label: 'Clear', icon: 'trash', variant: 'secondary', attrs: 'data-action="clear-terminal"' })}<span class="badge tone-${consent ? 'green' : 'amber'}">${consent ? 'Consent granted' : 'Consent required'}</span>`,
+        ai: { kind: 'page', page: 'terminal' },
       })}
       ${!consent ? `<div id="term-consent">${U.infoBanner('Explicit consent is required', 'Running commands affects your local Docker engine. OpsDeck validates every command, rejects privileged and host-level options, and never uses a shell. Review the command before you run it.', 'warning', U.button({ label: 'Review consent', icon: 'shield-check', size: 'sm', variant: 'primary', attrs: 'data-action="terminal-consent"' }))}</div>` : ''}
       <div class="terminal-shell">
@@ -1906,10 +1922,11 @@
 
   // ------------------------------------------------------------------ settings
 
-  function renderSettings() {
+  async function renderSettings() {
     const s = OD.store.state.settings || {};
     const info = OD.store.state.info || {};
     const a = OD.store.overallStats();
+    const aiConfig = OD.ai ? await OD.ai.ready() : null;
     const goal = Number(s.dailyGoalMinutes || OD.store.state.academy.meta?.dailyGoalMinutes || 20);
     const themes = [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['system', 'System', 'monitor']];
     return `<div class="page">
@@ -1917,9 +1934,11 @@
         eyebrow: 'OpsDeck', iconName: 'settings', title: 'Settings',
         sub: 'Appearance, learning goals, local data and the security model behind every operation.',
         actions: `${U.button({ label: 'Reload content', icon: 'refresh', variant: 'secondary', attrs: 'data-action="reload-content"' })}`,
+        ai: { kind: 'page', page: 'settings' },
       })}
       <div class="split-2">
         <div class="stack-3">
+          ${OD.ai ? OD.ai.settingsCard(aiConfig) : ''}
           ${U.card({
             title: 'Appearance', icon: 'palette', sub: 'Dark is the default. Light mode is designed, not inverted.',
             body: `<div class="stack-3">
@@ -2167,6 +2186,7 @@
         ${U.iconButton({ icon: 'boxes', label: 'Show containers using this image', attrs: `data-iact="containers" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
         ${U.iconButton({ icon: 'history', label: 'History', attrs: `data-iact="history" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
         ${U.iconButton({ icon: 'tag', label: 'Tag', attrs: `data-iact="tag" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
+        ${OD.ai ? OD.ai.iconButton({ kind: 'image', id: x.id, name: x.name }, { title: 'Ask AI about this image with inspect, history and container usage' }) : ''}
         ${U.iconButton({ icon: 'trash', tone: 'red', label: 'Remove', attrs: `data-iact="remove" data-iid="${esc(x.id)}" data-iname="${esc(x.name)}"` })}
       </div></td>
     </tr>`;
@@ -2231,7 +2251,7 @@
         U.drawer({
           title: name, eyebrow: 'Volume detail', icon: 'database', width: '640px',
           body: res.ok ? `<div class="config-view"><pre>${esc(res.stdout || '')}</pre></div>` : U.errorBanner('Inspect failed', res.error || 'Unknown error'),
-          footer: `<div class="row gap-2">${learnLink('storage-and-volumes', 'Storage lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker volume inspect ${esc(name)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+          footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'volume', id: name, name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('storage-and-volumes', 'Storage lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker volume inspect ${esc(name)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
         });
       }
     });
@@ -2274,7 +2294,7 @@
             ['Internal', data?.Internal ? 'yes' : 'no', false],
             ['IPv6', data?.EnableIPv6 ? 'yes' : 'no', false],
           ])}</div><div class="detail-section"><h4>Attached containers</h4>${attached.length ? attached.map((c) => `<div class="registry-row"><span class="host">${esc(c.Name)}</span><span class="badge mono">${esc(c.IPv4Address || '')}</span></div>`).join('') : '<span class="muted text-sm">No containers attached.</span>'}</div></div>` : U.errorBanner('Inspect failed', res.error || 'Unknown error'),
-          footer: `<div class="row gap-2">${learnLink('bridge-dns', 'DNS lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker network inspect ${esc(name)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+          footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'network', id: name, name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('bridge-dns', 'DNS lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker network inspect ${esc(name)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
         });
       }
     });
@@ -2380,6 +2400,7 @@
   }
 
   function mountSettings(root) {
+    if (OD.ai) OD.ai.mountSettings(root);
     root.querySelectorAll('[data-theme-set]').forEach((chip) => chip.addEventListener('click', async () => {
       await OD.store.setSetting('theme', chip.dataset.themeSet);
       root.querySelectorAll('[data-theme-set]').forEach((c) => c.classList.toggle('active', c === chip));

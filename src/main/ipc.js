@@ -10,9 +10,11 @@ const exec = require('./exec');
 const { ContentService } = require('./content');
 const { AcademyStore } = require('./store');
 const { LabService } = require('./labs');
+const { AIService } = require('./ai');
 
 function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
+  const ai = new AIService({ app, content });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
     console.error('Academy store failed to initialise:', error);
@@ -137,6 +139,15 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('docker:terminal-run', (p) => docker.terminalRun(p?.command, p?.consent === true));
   handle('docker:pick-compose', () => docker.pickComposeFile(dialog, getWindow()));
 
+  // ---------------- AI assistant ----------------
+  handle('ai:config', () => ai.publicConfig());
+  handle('ai:save-config', (p) => ai.saveConfig(p || {}));
+  handle('ai:clear-key', () => ai.clearKey());
+  handle('ai:test', (p) => ai.test(p || {}));
+  handle('ai:context', (p, event) => ai.context(event.sender.id, p || {}));
+  handle('ai:ask', (p, event) => ai.ask(event.sender.id, p || {}));
+  handle('ai:cancel', (_p, event) => ai.cancel(event.sender.id));
+
   // ---------------- Academy ----------------
   handle('academy:bootstrap', async () => {
     await storeReady;
@@ -213,6 +224,7 @@ function registerIpc({ getWindow, dialog, app }) {
   app.on('before-quit', () => {
     store.persistNow();
     exec.stopAll();
+    ai.dispose();
   });
 }
 
