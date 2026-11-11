@@ -96,6 +96,7 @@
 
   const PAGES = {
     overview: 'Cluster overview',
+    topology: 'Cluster map',
     contexts: 'Contexts',
     namespaces: 'Namespaces',
     nodes: 'Nodes',
@@ -127,6 +128,7 @@
   };
 
   const SECTION_ICONS = {
+    topology: 'map',
     pods: 'box', deployments: 'layers', statefulsets: 'database', daemonsets: 'server',
     jobs: 'play', cronjobs: 'clock', services: 'network', ingresses: 'globe',
     networkpolicies: 'lock', persistentvolumes: 'database', persistentvolumeclaims: 'folder',
@@ -629,6 +631,33 @@
       ${overviewBody(data)}
       <div class="mt-4">${commandsCard('overview', commands)}</div>
       <div class="split-2 mt-4">${toolsCard(data.tools)}${minikubeCard(minikube)}</div>
+    </div>`;
+  }
+
+  async function renderTopology() {
+    if (!api?.kubernetes?.topology) return unavailable('This build does not expose the cluster map bridge.');
+    const data = await api.kubernetes.topology();
+    if (!data?.ok) throw new Error(data?.error || 'Could not read the cluster topology.');
+    remember(data);
+    if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
+    if (!data.contexts?.length) return noContexts(await loadBootstrap());
+    if (!OD.kubernetesTopology) {
+      return `<div class="page">${pageHead({ title: PAGES.topology })}${U.errorBanner('Cluster map unavailable', 'The topology renderer did not load. Check the script order in index.html.')}</div>`;
+    }
+    const commands = data.commands?.length ? data.commands : await loadCommands('topology');
+    const connection = data.connection || {};
+    const sub = connection.connected
+      ? `${connection.context || data.selected} · all namespaces · ${connection.serverVersion || connection.cluster || 'live cluster'}`
+      : 'The selected context is not answering. The map will show an empty cluster until it reconnects.';
+    return `<div class="page topo-page">
+      ${pageHead({
+        title: PAGES.topology,
+        sub,
+        actions: pageActions('topology'),
+      })}
+      ${selectorBar(data, { namespaced: false })}
+      ${OD.kubernetesTopology.body(data.model || {})}
+      <div class="mt-4">${commandsCard('topology', commands)}</div>
     </div>`;
   }
 
@@ -1329,6 +1358,7 @@
 
   const RENDERERS = {
     overview: renderOverview,
+    topology: renderTopology,
     contexts: renderContexts,
     helm: renderHelm,
     tools: renderTools,
@@ -1396,6 +1426,13 @@
   }
 
   function mount(root) {
+    if (OD.kubernetesTopology && root.querySelector('[data-topo-map]')) {
+      OD.kubernetesTopology.mount(root, {
+        openResourceDrawer,
+        openPodLogs,
+        showPodShell,
+      });
+    }
     root.addEventListener('click', async (event) => {
       if (event.target.closest('[data-copy-text], .code-copy')) return;
       const installBtn = event.target.closest('[data-k8s-install-tools]');

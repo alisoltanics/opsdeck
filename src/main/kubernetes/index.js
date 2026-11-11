@@ -16,6 +16,7 @@ const { KubeRegistry } = require('./registry');
 const { TOOL_NAMES, labelFor, installTool, binDir, toolsPathEnv, readInstalled } = require('./install');
 const { RESOURCES, sanitizeManifest, validObjectName, actionsFor, actionArgs, trimEvent, summaryFor } = require('./resources');
 const { sectionCommands, objectCommands } = require('./commands');
+const { buildTopology } = require('./topology');
 const { runKubectl } = require('./kubectl-runner');
 const { start: shellStart, input: shellInput, resize: shellResize, stop: shellStop, disposeAll: shellDisposeAll } = require('./shell');
 
@@ -810,6 +811,137 @@ class KubernetesService {
       };
     });
     return { ...base, rows, total: releases.length, truncated: releases.length > rows.length };
+  }
+
+  async topology() {
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    const base = {
+      ok: true,
+      section: 'topology',
+      title: 'Cluster map',
+      contexts: state.contexts,
+      selected: state.selected,
+      namespace: state.namespace,
+      tools: tools.tools,
+      checkedAt: tools.checkedAt,
+      connection: null,
+      commands: sectionCommands('topology', { context: state.selected, namespace: state.namespace }),
+      model: null,
+      error: '',
+    };
+    const emptyModel = (error = '') => buildTopology({
+      errors: error ? [{ resource: 'cluster', error }] : [],
+      context: state.selected,
+      namespace: state.namespace,
+    }, { context: state.selected, namespace: state.namespace });
+
+    if (!tools.tools.kubectl.installed) {
+      return { ...base, model: emptyModel('kubectl is not installed.'), error: 'kubectl is not installed.' };
+    }
+    if (!state.selected) {
+      return { ...base, model: emptyModel('No Kubernetes context is selected.') };
+    }
+
+    const connection = await this.connection(state);
+    base.connection = connection;
+    if (!connection.connected) {
+      return { ...base, model: emptyModel(connection.reason || 'The selected context is not connected.') };
+    }
+
+    const context = state.selected;
+    const all = (args, timeout = 25000) => this.kubeJson([...args, '--all-namespaces', '-o', 'json'], { timeout, context });
+    // Multiple resource types must be comma-separated: `kubectl get a b` is
+    // parsed as TYPE NAME. Namespaced and cluster-scoped resources also need
+    // separate calls because one request cannot mix both scopes.
+    const inventoryNamespaced = [
+      'configmaps', 'secrets', 'persistentvolumeclaims', 'serviceaccounts',
+      'roles.rbac.authorization.k8s.io', 'rolebindings.rbac.authorization.k8s.io',
+      'networkpolicies.networking.k8s.io', 'resourcequotas', 'limitranges',
+      'jobs.batch', 'cronjobs.batch',
+    ];
+    const inventoryCluster = ['persistentvolumes', 'storageclasses.storage.k8s.io'];
+    const inventoryPrefix = {
+      configmap: 'configmaps', secret: 'secrets', persistentvolumeclaim: 'persistentvolumeclaims',
+      persistentvolume: 'persistentvolumes', 'storageclass.storage.k8s.io': 'storageclasses',
+      serviceaccount: 'serviceaccounts', 'role.rbac.authorization.k8s.io': 'roles',
+      'rolebinding.rbac.authorization.k8s.io': 'rolebindings',
+      'networkpolicy.networking.k8s.io': 'networkpolicies', resourcequota: 'resourcequotas',
+      limitrange: 'limitranges', 'job.batch': 'jobs', 'cronjob.batch': 'cronjobs',
+    };
+
+    const [nsRes, nodeRes, podRes, deploymentRes, statefulsetRes, daemonsetRes, serviceRes, ingressRes, eventRes, inventoryRes, inventoryClusterRes] = await Promise.all([
+      all(['get', 'namespaces']),
+      all(['get', 'nodes']),
+      all(['get', 'pods']),
+      all(['get', 'deployments.apps']),
+      all(['get', 'statefulsets.apps']),
+      all(['get', 'daemonsets.apps']),
+      all(['get', 'services']),
+      all(['get', 'ingresses.networking.k8s.io']),
+      all(['get', 'events', '--field-selector=type=Warning']),
+      this.kube(['get', inventoryNamespaced.join(','), '--all-namespaces', '-o', 'name'], { timeout: 25000, context }),
+      this.kube(['get', inventoryCluster.join(','), '-o', 'name'], { timeout: 25000, context }),
+    ]);
+
+    const items = (result) => (result.ok && Array.isArray(result.data?.items) ? result.data.items : []);
+    const errors = [];
+    const note = (resource, result) => {
+      if (!result.ok) errors.push({ resource, error: scrub(result.stderr || `Could not read ${resource}.`, 400) });
+    };
+    note('namespaces', nsRes);
+    note('nodes', nodeRes);
+    note('pods', podRes);
+    note('deployments', deploymentRes);
+    note('statefulsets', statefulsetRes);
+    note('daemonsets', daemonsetRes);
+    note('services', serviceRes);
+    note('ingresses', ingressRes);
+    note('warnings', eventRes);
+
+    const inventory = {
+      configmaps: 0, secrets: 0, persistentvolumeclaims: 0, persistentvolumes: 0,
+      storageclasses: 0, serviceaccounts: 0, roles: 0, rolebindings: 0,
+      networkpolicies: 0, resourcequotas: 0, limitranges: 0, jobs: 0, cronjobs: 0,
+    };
+    let inventoryError = '';
+    const countInventory = (result) => {
+      if (!result.ok) return false;
+      for (const line of countLines(result.stdout)) {
+        const prefix = line.split('/')[0];
+        const id = inventoryPrefix[prefix];
+        if (id) inventory[id] += 1;
+      }
+      return true;
+    };
+    const namespacedInventoryOk = countInventory(inventoryRes);
+    const clusterInventoryOk = countInventory(inventoryClusterRes);
+    if (!namespacedInventoryOk || !clusterInventoryOk) {
+      inventoryError = scrub(
+        inventoryRes.stderr || inventoryClusterRes.stderr || 'Could not count the remaining resources.',
+        400,
+      );
+      errors.push({ resource: 'inventory', error: inventoryError });
+    }
+
+    const model = buildTopology({
+      namespaces: items(nsRes),
+      nodes: items(nodeRes),
+      pods: items(podRes),
+      deployments: items(deploymentRes),
+      statefulsets: items(statefulsetRes),
+      daemonsets: items(daemonsetRes),
+      services: items(serviceRes),
+      ingresses: items(ingressRes),
+      warnings: items(eventRes),
+      inventory,
+      inventoryError,
+      errors,
+      context,
+      namespace: state.namespace,
+      collectedAt: new Date().toISOString(),
+    }, { context, namespace: state.namespace });
+
+    return { ...base, model };
   }
 
   async dashboard() {

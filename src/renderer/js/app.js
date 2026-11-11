@@ -53,6 +53,7 @@
       label: 'Clusters',
       items: [
         { id: 'kubernetes', section: 'overview', label: 'Cluster overview', icon: 'layout-dashboard', href: '#/kubernetes/overview' },
+        { id: 'kubernetes', section: 'topology', label: 'Cluster map', icon: 'map', href: '#/kubernetes/topology' },
         { id: 'kubernetes', section: 'contexts', label: 'Contexts', icon: 'cloud', href: '#/kubernetes/contexts' },
         { id: 'kubernetes', section: 'namespaces', label: 'Namespaces', icon: 'layers', href: '#/kubernetes/namespaces' },
         { id: 'kubernetes', section: 'nodes', label: 'Nodes', icon: 'server', href: '#/kubernetes/nodes' },

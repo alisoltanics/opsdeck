@@ -2212,6 +2212,29 @@ class AIService {
       `${warning.namespace || '—'} · ${warning.reason || 'Warning'} · ${warning.kind || 'Object'}/${warning.object || '—'} · ${warning.count || 1}× · ${warning.message || ''}`,
     ).join('\n') || 'No warning events.');
 
+    if (page === 'topology') {
+      const topo = await this.kubernetes.topology().catch((error) => ({ ok: false, error: error.message }));
+      if (topo?.ok && topo.model) {
+        const model = topo.model;
+        builder.add('Cluster map', [
+          rows('Namespaces shown', `${model.stats.shownNamespaces} of ${model.stats.namespaces}`),
+          rows('Nodes ready', `${model.stats.nodesReady} of ${model.stats.nodes}`),
+          rows('Pods', `${model.stats.healthyPods} healthy of ${model.stats.pods} · ${model.stats.pending} pending · ${model.stats.failed} failed`),
+          rows('Workloads', `${model.stats.workloads} total · ${model.stats.degradedWorkloads} degraded`),
+          rows('Services / ingresses', `${model.stats.services} services · ${model.stats.ingresses} ingresses`),
+          rows('Graph edges', `${model.edges.length} resolved relationships`),
+        ].join('\n'));
+        builder.add('Workload map', (model.namespaces || []).flatMap((band) => band.workloads.map((workload) =>
+          `${band.name} · ${workload.kind}/${workload.name} · ${workload.status} · ${workload.ready}/${workload.desired} ready · image ${workload.images?.[0] || '—'}`,
+        )).slice(0, 80).join('\n') || 'No workloads in the map.');
+        builder.add('Nodes', (model.nodes || []).map((node) =>
+          `${node.name} · ready ${node.ready ? 'yes' : 'no'} · ${node.pods} pods · CPU ${node.cpu || '—'} · memory ${node.memory || '—'} · ${node.version || '—'}`,
+        ).join('\n') || 'No nodes in the map.');
+        builder.add('Resource inventory (counts only)', model.inventory.map((entry) => `${entry.label}: ${entry.count}`).join(' · '));
+        builder.add('Map safety', 'Only names, status, labels, selectors, images and container names are included. Secret values, ConfigMap values and environment values are never part of the map or this context.');
+      }
+    }
+
     if (page === 'contexts') {
       builder.add('Kubeconfig contexts', (data.contexts || []).map((context) =>
         `${context.name} · cluster ${context.cluster || '—'} · user ${context.user || '—'} · namespace ${context.namespace || 'default'} · server ${context.server || '—'}`,

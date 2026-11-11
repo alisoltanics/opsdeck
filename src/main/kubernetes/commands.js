@@ -72,6 +72,14 @@ function sectionCommands(section, opts = {}) {
         entry('API resources', join('kubectl api-resources', c), 'Every resource type this cluster serves.'),
         entry('Current context', 'kubectl config current-context', 'The context kubectl would use by default.'),
       ];
+    case 'topology':
+      return [
+        entry('Cluster map data', join('kubectl get pods,deployments,statefulsets,daemonsets,services,ingresses -A -o wide', c), 'The live objects behind the map in one command.'),
+        entry('Nodes', join('kubectl get nodes -o wide', c), 'Node readiness, capacity and versions.'),
+        entry('All services', join('kubectl get services -A -o wide', c), 'Service types, cluster IPs and selectors.'),
+        entry('All ingresses', join('kubectl get ingresses -A -o wide', c), 'Hosts, classes and ingress addresses.'),
+        entry('Warning events', join('kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp', c), 'Recent warnings across the cluster.'),
+      ];
     case 'contexts':
       return [
         entry('Contexts', 'kubectl config get-contexts', 'All contexts visible to OpsDeck.'),

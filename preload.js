@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     importKubeconfig: () => invoke('k8s:import-kubeconfig'),
     removeKubeconfig: (payload) => invoke('k8s:remove-kubeconfig', payload),
     dashboard: () => invoke('k8s:dashboard'),
+    topology: () => invoke('k8s:topology'),
     resources: (payload) => invoke('k8s:resources', payload),
     resourceDetail: (payload) => invoke('k8s:resource-detail', payload),
     resourceAction: (payload) => invoke('k8s:resource-action', payload),

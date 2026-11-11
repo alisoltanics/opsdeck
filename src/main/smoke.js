@@ -33,6 +33,7 @@ const ROUTES = [
   ['terminal', '#/terminal'],
   ['settings', '#/settings'],
   ['kubernetes overview', '#/kubernetes/overview'],
+  ['kubernetes topology', '#/kubernetes/topology'],
   ['kubernetes contexts', '#/kubernetes/contexts'],
   ['kubernetes namespaces', '#/kubernetes/namespaces'],
   ['kubernetes nodes', '#/kubernetes/nodes'],
@@ -84,6 +85,8 @@ function rendererScript(routes) {
   return `(async () => {
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const failures = [];
+    window.addEventListener('error', (event) => failures.push('renderer error: ' + (event.message || 'unknown') + ' @ ' + (event.filename || '') + ':' + (event.lineno || 0)));
+    window.addEventListener('unhandledrejection', (event) => failures.push('unhandled rejection: ' + (event.reason?.message || event.reason || 'unknown')));
 
     async function waitFor(check, timeout = 7000) {
       const started = Date.now();
@@ -196,6 +199,50 @@ function rendererScript(routes) {
       }
       const helmList = await window.opsdeck.kubernetes.helmReleases({ allNamespaces: true });
       if (!helmList?.ok) failures.push('kubernetes: helm list bridge failed');
+      const topology = await window.opsdeck.kubernetes.topology();
+      if (!topology?.ok || !topology.model) failures.push('kubernetes: topology bridge failed :: ' + (topology?.error || 'no model'));
+      else {
+        if (!Array.isArray(topology.model.edges)) failures.push('kubernetes: topology edges are missing');
+        if (!Array.isArray(topology.model.nodes)) failures.push('kubernetes: topology nodes are missing');
+        if (JSON.stringify(topology.model).includes('stringData')) failures.push('kubernetes: topology leaked secret data');
+        location.hash = '#/kubernetes/topology';
+        const mapReady = await waitFor(() => !!document.querySelector('[data-topo-map] .topo-card'), 12000);
+        if (!mapReady) failures.push('kubernetes: topology graph did not render cards');
+        if (!document.querySelector('[data-topo-node-id]')) failures.push('kubernetes: topology node rail is missing');
+        if (!document.querySelector('[data-topo-search]')) failures.push('kubernetes: topology filter is missing');
+        if (!document.querySelector('#view [data-ai-ask="kubernetes"]')) failures.push('kubernetes: topology Ask AI button is missing');
+        const topoAi = await window.opsdeck.ai.context({ kind: 'kubernetes', page: 'topology' });
+        if (!topoAi?.ok || !topoAi.context?.text) failures.push('kubernetes: topology AI context was empty');
+        else if (/## Docker engine|stringData/.test(topoAi.context.text)) failures.push('kubernetes: topology AI context leaked unsafe data');
+
+        document.querySelector('[data-topo-map] .topo-card')?.click();
+        const actionOpen = await waitFor(() => !!document.querySelector('.drawer-overlay .topo-drawer'), 5000);
+        if (!actionOpen) failures.push('kubernetes: topology action drawer did not open');
+        else {
+          if (!document.querySelector('.drawer-overlay [data-topo-jump]')) failures.push('kubernetes: topology drawer has no graph links');
+          if (!document.querySelector('.drawer-overlay [data-ai-ask="k8s-resource"]')) failures.push('kubernetes: topology drawer has no Ask AI action');
+          const details = document.querySelector('.drawer-overlay [data-topo-details]');
+          details?.click();
+          const detailOpen = await waitFor(() => !!document.querySelector('.drawer-overlay [data-k8s-detail-body]'), 8000);
+          if (!detailOpen) failures.push('kubernetes: topology details action failed');
+          window.OD.ui.closeTopOverlay();
+          await sleep(200);
+        }
+
+        const podCard = document.querySelector('[data-topo-map] .topo-card[data-topo-kind="Pod"]');
+        if (!podCard) failures.push('kubernetes: topology has no pod cards');
+        else {
+          podCard.click();
+          const podDrawer = await waitFor(() => !!document.querySelector('.drawer-overlay [data-topo-logs]'), 5000);
+          if (!podDrawer) failures.push('kubernetes: topology pod drawer did not open');
+          else {
+            if (!document.querySelector('.drawer-overlay [data-topo-shell]')) failures.push('kubernetes: topology pod drawer has no shell action');
+            if (!document.querySelector('.drawer-overlay [data-topo-pod-logs]')) failures.push('kubernetes: topology pod drawer has no per-pod log action');
+            window.OD.ui.closeTopOverlay();
+            await sleep(200);
+          }
+        }
+      }
       const podList = await window.opsdeck.kubernetes.resources({ section: 'pods', allNamespaces: true });
       if (podList?.rows?.length) {
         const first = podList.rows[0];
