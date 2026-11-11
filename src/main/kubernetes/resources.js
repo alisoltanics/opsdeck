@@ -436,6 +436,48 @@ function trimEvent(item) {
   });
 }
 
+function trimNodeRow(item) {
+  const status = item?.status || {};
+  const labels = item?.metadata?.labels || {};
+  const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+  const ready = conditions.find((entry) => entry.type === 'Ready');
+  const roles = Object.keys(labels)
+    .filter((key) => key.startsWith('node-role.kubernetes.io/'))
+    .map((key) => key.slice('node-role.kubernetes.io/'.length))
+    .filter(Boolean);
+  const internal = (Array.isArray(status.addresses) ? status.addresses : []).find((entry) => entry.type === 'InternalIP');
+  const info = status.nodeInfo || {};
+  const allocatable = status.allocatable || {};
+  const isReady = ready?.status === 'True';
+  return row(item, [
+    strong(item?.metadata?.name),
+    badge(isReady ? 'Ready' : (ready?.reason || 'Not ready'), isReady ? 'green' : 'red'),
+    mono((roles.length ? roles : ['worker']).join(', ')),
+    mono(info.kubeletVersion),
+    mono(allocatable.cpu),
+    mono(allocatable.memory),
+    mono(allocatable.pods),
+    age(item?.metadata?.creationTimestamp),
+  ], {
+    ready: isReady,
+    roles: roles.length ? roles : ['worker'],
+    internalIP: internal?.address || '',
+    version: info.kubeletVersion || '',
+    cpu: allocatable.cpu || '',
+    memory: allocatable.memory || '',
+    pods: allocatable.pods || '',
+  });
+}
+
+function trimNamespaceRow(item) {
+  const phase = item?.status?.phase || 'Active';
+  return row(item, [
+    strong(item?.metadata?.name),
+    badge(phase, phase === 'Active' ? 'green' : 'amber'),
+    age(item?.metadata?.creationTimestamp),
+  ], { status: phase });
+}
+
 const RESOURCES = {
   pods: { label: 'Pods', resource: 'pods', namespaced: true, columns: ['Name', 'Ready', 'Restarts', 'Node', 'IP', 'Status', 'Age'], trim: trimPod },
   deployments: { label: 'Deployments', resource: 'deployments.apps', namespaced: true, columns: ['Name', 'Ready', 'Updated', 'Available', 'Image', 'Status', 'Age'], trim: trimDeployment },
@@ -443,6 +485,8 @@ const RESOURCES = {
   daemonsets: { label: 'DaemonSets', resource: 'daemonsets.apps', namespaced: true, columns: ['Name', 'Desired', 'Ready', 'Available', 'Updated', 'Image', 'Status', 'Age'], trim: trimDaemonSet },
   jobs: { label: 'Jobs', resource: 'jobs.batch', namespaced: true, columns: ['Name', 'Completions', 'Succeeded', 'Failed', 'Active', 'Duration', 'Status', 'Age'], trim: trimJob },
   cronjobs: { label: 'CronJobs', resource: 'cronjobs.batch', namespaced: true, columns: ['Name', 'Schedule', 'Suspended', 'Active', 'Last Schedule', 'Status', 'Age'], trim: trimCronJob },
+  nodes: { label: 'Nodes', resource: 'nodes', namespaced: false, columns: ['Name', 'Status', 'Roles', 'Version', 'CPU', 'Memory', 'Pods', 'Age'], trim: trimNodeRow },
+  namespaces: { label: 'Namespaces', resource: 'namespaces', namespaced: false, columns: ['Name', 'Status', 'Age'], trim: trimNamespaceRow },
 
   services: { label: 'Services', resource: 'services', namespaced: true, columns: ['Name', 'Type', 'Cluster IP', 'External', 'Ports', 'Selector', 'Age'], trim: trimService },
   ingresses: { label: 'Ingresses', resource: 'ingresses.networking.k8s.io', namespaced: true, columns: ['Name', 'Class', 'Hosts', 'TLS', 'Address', 'Age'], trim: trimIngress },
@@ -571,6 +615,342 @@ function sanitizeManifest(input, section) {
   return value;
 }
 
+function summaryFor(section, input) {
+  const object = input && typeof input === 'object' ? input : {};
+  const spec = object.spec || {};
+  const status = object.status || {};
+  const meta = object.metadata || {};
+  const sections = [];
+  const add = (title, pairs) => {
+    if (typeof pairs === 'string') {
+      if (pairs.trim()) sections.push({ title, text: pairs });
+      return;
+    }
+    const entries = Array.isArray(pairs) ? pairs : [];
+    if (entries.length && !entries.some((entry) => Array.isArray(entry))) {
+      const list = entries.map(stringValue).filter((value) => value !== '');
+      if (list.length) sections.push({ title, list });
+      return;
+    }
+    const rows = entries
+      .map(([label, value]) => [label, stringValue(value)])
+      .filter(([, value]) => value !== '' && value !== undefined && value !== null);
+    if (rows.length) sections.push({ title, rows });
+  };
+  const conditionRows = (items) => (Array.isArray(items) ? items : []).map((item) =>
+    `${item.type}: ${item.status}${item.reason ? ` (${item.reason})` : ''}${item.message ? ` — ${item.message}` : ''}`,
+  ).join('\n');
+
+  if (section === 'pods' || object.kind === 'Pod') {
+    const containerStatuses = Array.isArray(status.containerStatuses) ? status.containerStatuses : [];
+    const containers = (Array.isArray(spec.containers) ? spec.containers : []).map((container) => {
+      const state = containerStatuses.find((item) => item.name === container.name) || {};
+      return {
+        name: String(container.name || ''),
+        image: String(container.image || ''),
+        ready: state.ready === true,
+        restarts: state.restartCount || 0,
+        state: state.state ? Object.keys(state.state)[0] || '' : '',
+        resources: container.resources || {},
+      };
+    });
+    add('Pod', [
+      ['Phase', status.phase],
+      ['QoS class', status.qosClass],
+      ['Node', spec.nodeName],
+      ['Pod IP', status.podIP],
+      ['Host IP', status.hostIP],
+      ['Service account', spec.serviceAccountName],
+      ['Restart policy', spec.restartPolicy],
+      ['Priority class', spec.priorityClassName],
+      ['Started', status.startTime],
+    ]);
+    add('Conditions', conditionRows(status.conditions));
+    if (containers.length) {
+      add('Containers', containers.map((container) =>
+        `${container.name}: ${container.ready ? 'ready' : 'not ready'} · ${container.state || 'unknown'} · restarts ${container.restarts} · ${container.image}`,
+      ));
+    }
+    add('Volumes', (Array.isArray(spec.volumes) ? spec.volumes : []).map((volume) => {
+      const kind = Object.keys(volume).find((key) => key !== 'name') || 'volume';
+      return `${volume.name}: ${kind}`;
+    }));
+    if (status.message) add('Status message', [['Message', status.message]]);
+    return { sections, containers };
+  }
+
+  if (section === 'nodes') {
+    const info = status.nodeInfo || {};
+    const addresses = (status.addresses || []).map((entry) => `${entry.type}: ${entry.address}`);
+    add('Node', [
+      ['Roles', Object.keys(meta.labels || {}).filter((key) => key.startsWith('node-role.kubernetes.io/')).map((key) => key.slice('node-role.kubernetes.io/'.length)).join(', ')],
+      ['Kubelet', info.kubeletVersion],
+      ['OS image', info.osImage],
+      ['Kernel', info.kernelVersion],
+      ['Container runtime', info.containerRuntimeVersion],
+      ['Architecture', info.architecture],
+      ['Unschedulable', spec.unschedulable === true ? 'yes' : 'no'],
+    ]);
+    add('Conditions', conditionRows(status.conditions));
+    add('Addresses', addresses);
+    add('Capacity', Object.entries(status.capacity || {}).map(([key, value]) => [key, value]));
+    add('Allocatable', Object.entries(status.allocatable || {}).map(([key, value]) => [key, value]));
+    add('Taints', (spec.taints || []).map((taint) => `${taint.key}${taint.value ? `=${taint.value}` : ''}:${taint.effect}`));
+    return { sections };
+  }
+
+  if (section === 'namespaces') {
+    add('Namespace', [
+      ['Status', status.phase],
+      ['Name', meta.name],
+      ['Created', meta.creationTimestamp],
+    ]);
+    return { sections };
+  }
+
+  if (section === 'deployments') {
+    const conditionRowsList = conditionRows(status.conditions);
+    add('Deployment', [
+      ['Desired replicas', spec.replicas],
+      ['Ready replicas', status.readyReplicas || 0],
+      ['Updated replicas', status.updatedReplicas || 0],
+      ['Available replicas', status.availableReplicas || 0],
+      ['Unavailable replicas', status.unavailableReplicas || 0],
+      ['Strategy', spec.strategy?.type],
+      ['Min ready seconds', spec.minReadySeconds],
+      ['Revision history limit', spec.revisionHistoryLimit],
+      ['Progress deadline', spec.progressDeadlineSeconds],
+    ]);
+    add('Conditions', conditionRowsList);
+    return { sections };
+  }
+
+  if (section === 'statefulsets') {
+    add('StatefulSet', [
+      ['Desired replicas', spec.replicas],
+      ['Ready replicas', status.readyReplicas || 0],
+      ['Current replicas', status.currentReplicas || 0],
+      ['Updated replicas', status.updatedReplicas || 0],
+      ['Service name', spec.serviceName],
+      ['Pod management', spec.podManagementPolicy],
+      ['Update strategy', spec.updateStrategy?.type],
+      ['Current revision', status.currentRevision],
+      ['Update revision', status.updateRevision],
+    ]);
+    add('Conditions', conditionRows(status.conditions));
+    return { sections };
+  }
+
+  if (section === 'daemonsets') {
+    add('DaemonSet', [
+      ['Desired', status.desiredNumberScheduled || 0],
+      ['Current', status.currentNumberScheduled || 0],
+      ['Ready', status.numberReady || 0],
+      ['Available', status.numberAvailable || 0],
+      ['Updated', status.updatedNumberScheduled || 0],
+      ['Misscheduled', status.numberMisscheduled || 0],
+      ['Update strategy', spec.updateStrategy?.type],
+    ]);
+    add('Conditions', conditionRows(status.conditions));
+    return { sections };
+  }
+
+  if (section === 'services') {
+    const ports = (Array.isArray(spec.ports) ? spec.ports : []).map((port) =>
+      `${port.name ? `${port.name}: ` : ''}${port.port}→${port.targetPort ?? port.port}/${port.protocol || 'TCP'}${port.nodePort ? ` nodePort ${port.nodePort}` : ''}`,
+    );
+    add('Service', [
+      ['Type', spec.type],
+      ['Cluster IP', spec.clusterIP],
+      ['External IPs', spec.externalIPs],
+      ['Load balancer', status.loadBalancer?.ingress?.map((entry) => entry.ip || entry.hostname).join(', ')],
+      ['Session affinity', spec.sessionAffinity],
+      ['External traffic policy', spec.externalTrafficPolicy],
+      ['Selector', spec.selector ? Object.entries(spec.selector).map(([key, value]) => `${key}=${value}`).join(', ') : ''],
+    ]);
+    add('Ports', ports);
+    return { sections };
+  }
+
+  if (section === 'ingresses') {
+    add('Ingress', [
+      ['Class', spec.ingressClassName],
+      ['Default backend', spec.defaultBackend?.service?.name],
+      ['TLS', (spec.tls || []).map((tls) => `${(tls.hosts || []).join(', ')} → ${tls.secretName || 'default'}`)],
+    ]);
+    const rules = [];
+    for (const rule of spec.rules || []) {
+      for (const path of rule.http?.paths || []) {
+        rules.push(`${rule.host || '*'}${path.path || '/'} → ${path.backend?.service?.name || '?'}:${path.backend?.service?.port?.number || path.backend?.service?.port?.name || '?'}`);
+      }
+    }
+    add('Rules', rules);
+    return { sections };
+  }
+
+  if (section === 'persistentvolumeclaims') {
+    add('Claim', [
+      ['Phase', status.phase],
+      ['Volume', spec.volumeName],
+      ['Storage class', spec.storageClassName],
+      ['Access modes', spec.accessModes],
+      ['Requested', spec.resources?.requests?.storage],
+      ['Capacity', status.capacity?.storage],
+      ['Volume mode', spec.volumeMode],
+    ]);
+    add('Conditions', conditionRows(status.conditions));
+    return { sections };
+  }
+
+  if (section === 'persistentvolumes') {
+    add('Volume', [
+      ['Capacity', spec.capacity?.storage],
+      ['Access modes', spec.accessModes],
+      ['Reclaim policy', spec.persistentVolumeReclaimPolicy],
+      ['Storage class', spec.storageClassName],
+      ['Volume mode', spec.volumeMode],
+      ['Phase', status.phase],
+      ['Claim', spec.claimRef ? `${spec.claimRef.namespace}/${spec.claimRef.name}` : ''],
+      ['Reason', status.reason],
+    ]);
+    return { sections };
+  }
+
+  if (section === 'storageclasses') {
+    add('Storage class', [
+      ['Provisioner', object.provisioner],
+      ['Reclaim policy', object.reclaimPolicy],
+      ['Binding mode', object.volumeBindingMode],
+      ['Expansion', object.allowVolumeExpansion === true ? 'allowed' : 'disabled'],
+      ['Default class', meta.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true' ? 'yes' : 'no'],
+    ]);
+    add('Parameters', Object.entries(object.parameters || {}).map(([key, value]) => `${key}=${value}`));
+    return { sections };
+  }
+
+  if (section === 'configmaps' || section === 'secrets') {
+    const keys = Object.keys(object.data || {});
+    const stringKeys = Object.keys(object.stringData || {});
+    add(section === 'secrets' ? 'Secret' : 'ConfigMap', [
+      ['Type', object.type || 'Opaque'],
+      ['Keys', keys.length],
+      ['StringData keys', stringKeys.length],
+      ['Immutable', object.immutable === true ? 'yes' : 'no'],
+    ]);
+    add('Key names', [...new Set([...keys, ...stringKeys])]);
+    return { sections };
+  }
+
+  if (section === 'jobs') {
+    add('Job', [
+      ['Completions', spec.completions],
+      ['Parallelism', spec.parallelism],
+      ['Succeeded', status.succeeded || 0],
+      ['Failed', status.failed || 0],
+      ['Active', status.active || 0],
+      ['Started', status.startTime],
+      ['Completed', status.completionTime],
+      ['Backoff limit', spec.backoffLimit],
+      ['TTL after finished', spec.ttlSecondsAfterFinished],
+    ]);
+    add('Conditions', conditionRows(status.conditions));
+    return { sections };
+  }
+
+  if (section === 'cronjobs') {
+    add('CronJob', [
+      ['Schedule', spec.schedule],
+      ['Suspended', spec.suspend === true ? 'yes' : 'no'],
+      ['Concurrency', spec.concurrencyPolicy],
+      ['Last schedule', status.lastScheduleTime],
+      ['Last successful', status.lastSuccessfulTime],
+      ['Successful history', spec.successfulJobsHistoryLimit],
+      ['Failed history', spec.failedJobsHistoryLimit],
+      ['Starting deadline', spec.startingDeadlineSeconds],
+    ]);
+    add('Active jobs', (status.active || []).map((job) => job.name));
+    return { sections };
+  }
+
+  if (section === 'networkpolicies') {
+    add('Network policy', [
+      ['Pod selector', Object.entries(spec.podSelector?.matchLabels || {}).map(([key, value]) => `${key}=${value}`).join(', ') || 'all pods'],
+      ['Policy types', spec.policyTypes],
+      ['Ingress rules', (spec.ingress || []).length],
+      ['Egress rules', (spec.egress || []).length],
+    ]);
+    return { sections };
+  }
+
+  if (section === 'resourcequotas') {
+    add('Quota', [['Status', status.phase]]);
+    add('Hard', Object.entries(spec.hard || {}).map(([key, value]) => `${key}: ${value}`));
+    add('Used', Object.entries(status.used || {}).map(([key, value]) => `${key}: ${value}`));
+    return { sections };
+  }
+
+  if (section === 'limitranges') {
+    const limits = (spec.limits || []).map((limit) => `${limit.type}: ${Object.entries(limit.default || {}).map(([key, value]) => `${key}=${value}`).join(', ')}`);
+    add('Limit range', limits);
+    return { sections };
+  }
+
+  if (section === 'serviceaccounts') {
+    add('Service account', [
+      ['Automount token', spec.automountServiceAccountToken === false ? 'disabled' : 'enabled'],
+      ['Secrets', (object.secrets || []).map((secret) => secret.name)],
+      ['Pull secrets', (spec.imagePullSecrets || []).map((secret) => secret.name)],
+    ]);
+    return { sections };
+  }
+
+  if (section === 'roles' || section === 'clusterroles') {
+    add('Role', [['Rules', (object.rules || []).length]]);
+    add('Rules', (object.rules || []).map((rule) => `${(rule.verbs || []).join(', ')} on ${[...(rule.resources || []), ...(rule.nonResourceURLs || [])].join(', ') || '*'}`));
+    return { sections };
+  }
+
+  if (section === 'rolebindings' || section === 'clusterrolebindings') {
+    add('Binding', [
+      ['Role', object.roleRef ? `${object.roleRef.kind}/${object.roleRef.name}` : ''],
+      ['Subjects', (object.subjects || []).map((subject) => `${subject.kind}/${subject.name}${subject.namespace ? ` (${subject.namespace})` : ''}`)],
+    ]);
+    return { sections };
+  }
+
+  if (section === 'events') {
+    add('Event', [
+      ['Type', object.type],
+      ['Reason', object.reason],
+      ['Source', object.source?.component],
+      ['Object', `${object.involvedObject?.kind || ''}/${object.involvedObject?.name || ''}`],
+      ['Count', object.count],
+      ['First seen', object.firstTimestamp],
+      ['Last seen', object.lastTimestamp],
+      ['Message', object.message],
+    ]);
+    return { sections };
+  }
+
+  add('Object', [
+    ['Kind', object.kind],
+    ['Name', meta.name],
+    ['Namespace', meta.namespace],
+    ['Created', meta.creationTimestamp],
+  ]);
+  return { sections };
+}
+
+function stringValue(value) {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return value.map(stringValue).join(', ');
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value); } catch { return '[object]'; }
+  }
+  const text = String(value);
+  return text.length > 1200 ? `${text.slice(0, 1200)}…` : text;
+}
+
 module.exports = {
   RESOURCES,
   RESOURCE_SECTIONS,
@@ -580,6 +960,8 @@ module.exports = {
   actionsFor,
   actionArgs,
   sanitizeManifest,
+  summaryFor,
+  trimEvent,
   __test: {
     trimPod,
     trimDeployment,

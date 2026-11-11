@@ -119,7 +119,8 @@
     {
       label: 'Tools',
       items: [
-        { id: 'kubernetes', section: 'tools', label: 'Local tools', icon: 'terminal', href: '#/kubernetes/tools' },
+        { id: 'kubernetes', section: 'console', label: 'Kubectl console', icon: 'terminal', href: '#/kubernetes/console' },
+        { id: 'kubernetes', section: 'tools', label: 'Local tools', icon: 'download', href: '#/kubernetes/tools' },
       ],
     },
   ];

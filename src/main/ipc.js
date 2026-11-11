@@ -153,6 +153,15 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('k8s:resources', (p) => kubernetes.resources(p?.section, { allNamespaces: p?.allNamespaces === true }));
   handle('k8s:resource-detail', (p) => kubernetes.resourceDetail(p?.section, { name: p?.name, namespace: p?.namespace }));
   handle('k8s:resource-action', (p) => kubernetes.resourceAction(p?.section, p?.action, { name: p?.name, namespace: p?.namespace, replicas: p?.replicas }));
+  handle('k8s:commands', (p) => kubernetes.commandList(p?.section, { name: p?.name, namespace: p?.namespace, allNamespaces: p?.allNamespaces === true }));
+  handle('k8s:run-command', (p) => kubernetes.runCommand(p?.command));
+  handle('k8s:pod-logs', (p) => kubernetes.podLogs({ name: p?.name, namespace: p?.namespace, container: p?.container, tailLines: p?.tailLines, previous: p?.previous === true }));
+  handle('k8s:shell-start', (p, event) => kubernetes.shellStart(p, event.sender, { pty: p?.pty === true, cols: p?.cols, rows: p?.rows }));
+  handle('k8s:shell-input', (p, event) => kubernetes.shellInput(p?.sessionId, p?.data, event.sender.id));
+  handle('k8s:shell-resize', (p, event) => kubernetes.shellResize(p?.sessionId, p?.cols, p?.rows, event.sender.id));
+  handle('k8s:shell-stop', (p, event) => kubernetes.shellStop(p?.sessionId, event.sender.id));
+  handle('k8s:minikube-status', () => kubernetes.minikubeStatus());
+  handle('k8s:minikube-action', (p) => kubernetes.minikubeAction(p?.action));
   handle('k8s:helm-releases', (p) => kubernetes.helmReleases({ allNamespaces: p?.allNamespaces === true }));
   handle('k8s:install-status', () => kubernetes.installStatus());
   handle('k8s:install-tools', () => kubernetes.installTools((event) => {

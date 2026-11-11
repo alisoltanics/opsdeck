@@ -8,7 +8,7 @@
  * `kubectl config use-context`.
  */
 (function () {
-  const { esc, timeAgo, titleCase, fmtDateTime } = OD.utils;
+  const { esc, timeAgo, titleCase } = OD.utils;
   const { icon } = OD.icons;
   const U = OD.ui;
   const api = window.opsdeck;
@@ -19,6 +19,28 @@
   let installBound = false;
 
   const TOOL_LABELS = { kubectl: 'kubectl', kind: 'kind', minikube: 'Minikube', helm: 'Helm' };
+
+  const TERM_THEME = {
+    background: '#05080e',
+    foreground: '#d7e2f0',
+    cursor: '#63b3ff',
+    cursorAccent: '#05080e',
+    selectionBackground: 'rgba(99,179,255,.30)',
+    black: '#1b2433', red: '#ff7b72', green: '#7ee2a8', yellow: '#f5c76b',
+    blue: '#6cb6ff', magenta: '#d2a8ff', cyan: '#7ee7f0', white: '#d7e2f0',
+    brightBlack: '#5a6b84', brightRed: '#ff9d97', brightGreen: '#9af0c0',
+    brightYellow: '#ffdd92', brightBlue: '#9ccdff', brightMagenta: '#e3c2ff',
+    brightCyan: '#a7f2f8', brightWhite: '#f4f8ff',
+  };
+
+  function terminalFontFamily() {
+    const value = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim();
+    return value || 'monospace';
+  }
+
+  function ptySupported() {
+    return typeof window.Terminal === 'function' && !!window.FitAddon?.FitAddon;
+  }
 
   function toolLabel(name) {
     return TOOL_LABELS[name] || name;
@@ -101,6 +123,7 @@
     helm: 'Helm releases',
     events: 'Events',
     tools: 'Local tools',
+    console: 'Kubectl console',
   };
 
   const SECTION_ICONS = {
@@ -110,7 +133,7 @@
     storageclasses: 'layers', configmaps: 'file', secrets: 'key', resourcequotas: 'filter',
     limitranges: 'target', serviceaccounts: 'user', roles: 'shield', rolebindings: 'link',
     clusterroles: 'crown', clusterrolebindings: 'globe', helm: 'rocket', events: 'activity',
-    tools: 'terminal',
+    tools: 'terminal', console: 'terminal',
   };
 
   function pageHead(opts) {
@@ -203,6 +226,56 @@
         <div class="install-status" data-k8s-install-status ${showStatus ? '' : 'hidden'}>${showStatus ? installStatusHtml() : ''}</div>
       </div>`,
     });
+  }
+
+  function minikubeCard(status = null) {
+    const state = status || {};
+    const installed = state.installed !== false && state.state !== 'missing';
+    const running = state.running === true;
+    const tone = running ? 'green' : installed ? 'amber' : 'slate';
+    const label = running ? 'running' : state.state === 'absent' ? 'no profile' : installed ? 'stopped' : 'not installed';
+    const action = running
+      ? U.button({ label: 'Stop Minikube', icon: 'square', size: 'sm', variant: 'danger', attrs: 'data-minikube-action="stop"' })
+      : U.button({
+        label: installed ? 'Start Minikube' : 'Minikube not installed',
+        icon: 'play',
+        size: 'sm',
+        variant: 'primary',
+        attrs: installed ? 'data-minikube-action="start"' : 'data-minikube-action="start" disabled',
+      });
+    return U.card({
+      title: 'Minikube',
+      icon: 'server',
+      sub: 'Start or stop the local Minikube profile without leaving OpsDeck.',
+      body: `<div class="stack-2" style="display:flex;flex-direction:column;gap:9px">
+        <div class="row gap-2" style="justify-content:space-between">
+          <div class="row gap-2"><span class="mono text-xs">Profile ${esc(state.profile || 'minikube')}</span>${U.badge(label, tone, { dot: true })}</div>
+          ${action}
+        </div>
+        <div class="faint text-xs">${esc(state.detail || (installed ? 'Minikube status is read from the real binary.' : 'Install Minikube from the local tools card to use it.'))}</div>
+        <div class="faint text-xs">${icon('shield-check', 11)} OpsDeck runs <span class="mono">minikube start</span> or <span class="mono">minikube stop</span> only. It never rewrites kubeconfig files itself.</div>
+      </div>`,
+    });
+  }
+
+  async function minikubeStatusSafe() {
+    if (!api?.kubernetes?.minikubeStatus) return { ok: false, installed: false, running: false, state: 'missing', detail: 'The Minikube bridge is not available.' };
+    try {
+      const status = await api.kubernetes.minikubeStatus();
+      return status || { ok: false, installed: false, running: false, state: 'missing' };
+    } catch (error) {
+      return { ok: false, installed: true, running: false, state: 'unknown', detail: error.message || 'Could not read Minikube status.' };
+    }
+  }
+
+  async function loadCommands(section, opts = {}) {
+    if (!api?.kubernetes?.commands) return [];
+    try {
+      const res = await api.kubernetes.commands({ section, name: opts.name || '', namespace: opts.namespace || '', allNamespaces: opts.allNamespaces === true });
+      return res?.ok && Array.isArray(res.commands) ? res.commands : [];
+    } catch {
+      return [];
+    }
   }
 
   function noKubectl(tools) {
@@ -354,16 +427,137 @@
     return `<span class="${classes}"${title}>${esc(value || '—')}</span>`;
   }
 
+  function commandsCard(section, commands, opts = {}) {
+    if (!commands?.length) return '';
+    const rows = commands.map((item) => `<div class="k8s-cmd">
+      <div class="k8s-cmd-main">
+        <div class="row gap-2" style="align-items:center">
+          <strong class="text-sm">${esc(item.label)}</strong>
+          ${item.tone === 'write' ? U.badge('write', 'amber') : ''}
+          ${item.tone === 'danger' ? U.badge('danger', 'red') : ''}
+          ${item.runnable === false ? U.badge('copy only', 'slate') : ''}
+        </div>
+        <div class="faint text-xs">${esc(item.description || '')}</div>
+        <code class="k8s-cmd-text">${esc(item.command)}</code>
+      </div>
+      <div class="row-actions">
+        ${U.iconButton({ icon: 'copy', label: 'Copy command', attrs: `data-copy-text="${esc(item.command)}"` })}
+        ${item.runnable === false ? '' : U.iconButton({ icon: 'play', label: 'Run command', attrs: `data-k8s-run-command data-command="${esc(item.command)}" data-tone="${esc(item.tone || 'read')}"` })}
+      </div>
+    </div>`).join('');
+    const title = opts.title
+      || (section === 'helm' ? 'Ready-made Helm commands' : section === 'tools' ? 'Local tool commands' : 'Ready-made kubectl commands');
+    const sub = opts.sub
+      || (section === 'tools'
+        ? 'Commands for the real binaries on this machine. Copy-only entries run outside OpsDeck.'
+        : section === 'helm'
+          ? 'Commands use the selected context through --kube-context. Copy them into your own terminal.'
+          : 'Generated from the selected context and namespace. Commands run without a shell and the context is enforced.');
+    return U.card({
+      title,
+      icon: 'terminal',
+      sub,
+      body: `<details class="k8s-cmd-details" ${opts.open === false ? '' : 'open'}>
+        <summary>${commands.length} command${commands.length === 1 ? '' : 's'}</summary>
+        <div class="k8s-cmd-list">${rows}</div>
+      </details>`,
+    });
+  }
+
+  function commandOutputBody(result) {
+    const status = result?.ok
+      ? U.badge(`exit ${result.code ?? 0}`, 'green')
+      : U.badge(result?.timedOut ? 'timed out' : `exit ${result?.code ?? 1}`, 'red');
+    const body = [result?.stdout, result?.stderr].filter((text) => String(text || '').trim()).join('\n');
+    return `<div class="stack-2">
+      <div class="row gap-2" style="justify-content:space-between">
+        <code class="k8s-cmd-text">${esc(result?.command || '')}</code>
+        ${status}
+      </div>
+      ${body
+        ? `<pre class="k8s-output">${esc(body)}</pre>`
+        : `<div class="faint text-xs">The command produced no output.</div>`}
+      <div class="faint text-xs">${icon('shield-check', 11)} Context ${esc(result?.context || 'unknown')} · namespace ${esc(result?.namespace || 'default')}</div>
+    </div>`;
+  }
+
+  function consoleEntry(command, result) {
+    const ok = result?.ok === true;
+    const badge = ok
+      ? U.badge(`exit ${result.code ?? 0}`, 'green')
+      : U.badge(result?.timedOut ? 'timed out' : `exit ${result?.code ?? 1}`, 'red');
+    const body = [result?.stdout, result?.stderr].filter((text) => String(text || '').trim()).join('\n');
+    return `<div class="k8s-console-entry">
+      <div class="k8s-console-entry-head">
+        <code><span class="faint">$</span> ${esc(result?.command || command)}</code>
+        ${badge}
+      </div>
+      ${body
+        ? `<pre class="k8s-output">${esc(body)}</pre>`
+        : `<div class="faint text-xs">${esc(result?.error || 'The command produced no output.')}</div>`}
+    </div>`;
+  }
+
+  async function runCommandFromUi(button, command, tone = 'read') {
+    const dangerous = tone === 'write' || tone === 'danger' || /^\s*kubectl\s+(delete|apply|create|replace|patch|scale|edit|drain|cordon|uncordon|taint|run|expose|exec|label|annotate|set)\b/i.test(command) || /\brollout\s+(restart|undo)\b/i.test(command);
+    if (dangerous) {
+      const ok = await U.confirm({
+        title: 'Run a changing command?',
+        message: `This command can change the cluster:\n\n${command}`,
+        confirmLabel: 'Run command',
+        tone: 'red',
+        icon: 'alert-triangle',
+      });
+      if (!ok) return;
+    }
+    busy(button, true, 'Running…');
+    try {
+      const result = await api.kubernetes.runCommand({ command });
+      U.drawer({
+        eyebrow: 'kubectl',
+        title: 'Command output',
+        subtitle: result?.ok ? 'Completed' : 'Failed',
+        icon: 'terminal',
+        width: '860px',
+        body: commandOutputBody(result),
+        footer: `<div class="row gap-2">${U.button({ label: 'Copy output', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc([result?.stdout, result?.stderr].filter((text) => String(text || '').trim()).join('\n'))}"` })}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
+      });
+      if (result?.ok) U.toast('Command finished', 'success', { description: result.command });
+      else U.toast('Command failed', 'error', { description: result?.stderr || result?.error || 'Check the output.' });
+    } catch (error) {
+      U.toast('Could not run the command', 'error', { description: error.message || 'Try again.' });
+    } finally {
+      busy(button, false);
+    }
+  }
+
+  function tableActions(section, row) {
+    const ai = OD.ai
+      ? OD.ai.iconButton({ kind: 'k8s-resource', section, name: row.name, namespace: row.namespace || '' }, { size: 13, label: 'Ask AI about this object' })
+      : '';
+    const open = U.iconButton({ icon: 'info', label: 'Open details and commands', attrs: `data-k8s-row-open="${esc(row.name)}" data-k8s-row-section="${esc(section)}" data-k8s-row-namespace="${esc(row.namespace || '')}"` });
+    const nameCopy = U.iconButton({ icon: 'copy', label: 'Copy name', attrs: `data-copy-text="${esc(row.name)}"` });
+    if (section === 'pods') {
+      return `<div class="row-actions">${ai}
+        ${U.iconButton({ icon: 'file', label: 'Logs', attrs: `data-k8s-row-logs="${esc(row.name)}" data-k8s-row-namespace="${esc(row.namespace || '')}"` })}
+        ${U.iconButton({ icon: 'terminal', label: 'Shell', attrs: `data-k8s-row-shell="${esc(row.name)}" data-k8s-row-namespace="${esc(row.namespace || '')}"` })}
+        ${nameCopy}
+        ${open}
+      </div>`;
+    }
+    return `<div class="row-actions">${ai}${nameCopy}${open}</div>`;
+  }
+
   function dataTable(columns, rows, opts = {}) {
     if (!columns?.length || !rows?.length) return '';
     const interactive = Boolean(opts.section);
     return `<div class="table-wrap"><table class="data-table" data-k8s-table>
-      <thead><tr>${columns.map((column) => `<th>${esc(column)}</th>`).join('')}</tr></thead>
+      <thead><tr>${columns.map((column) => `<th>${esc(column)}</th>`).join('')}${interactive ? '<th>Actions</th>' : ''}</tr></thead>
       <tbody>${rows.map((row) => {
         const attrs = interactive
           ? ` class="clickable" data-k8s-row data-k8s-section="${esc(opts.section)}" data-k8s-name="${esc(row.name)}" data-k8s-namespace="${esc(row.namespace || '')}" title="Open ${esc(row.name)}"`
           : '';
-        return `<tr${attrs}>${(row.cells || []).map((cell) => `<td>${renderCell(cell)}</td>`).join('')}</tr>`;
+        return `<tr${attrs}>${(row.cells || []).map((cell) => `<td>${renderCell(cell)}</td>`).join('')}${interactive ? `<td>${tableActions(opts.section, row)}</td>` : ''}</tr>`;
       }).join('')}</tbody>
     </table></div>`;
   }
@@ -422,6 +616,7 @@
     const data = await loadDashboard();
     if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
     if (!data.contexts?.length) return noContexts(data);
+    const [commands, minikube] = await Promise.all([loadCommands('overview'), minikubeStatusSafe()]);
     return `<div class="page">
       ${pageHead({
         title: PAGES.overview,
@@ -432,7 +627,8 @@
       })}
       ${selectorBar(data)}
       ${overviewBody(data)}
-      <div class="mt-4">${toolsCard(data.tools)}</div>
+      <div class="mt-4">${commandsCard('overview', commands)}</div>
+      <div class="split-2 mt-4">${toolsCard(data.tools)}${minikubeCard(minikube)}</div>
     </div>`;
   }
 
@@ -457,7 +653,7 @@
 
   async function renderContexts() {
     if (!api?.kubernetes) return unavailable();
-    const data = await loadBootstrap();
+    const [data, commands] = await Promise.all([loadBootstrap(), loadCommands('contexts')]);
     if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
     return `<div class="page">
       ${pageHead({
@@ -468,35 +664,8 @@
       ${data.sources?.length
         ? `<div class="split-2">${data.sources.map((source) => sourceCard(source, data)).join('')}</div>`
         : U.card({ body: U.empty({ icon: 'cloud', title: 'No kubeconfig sources', body: 'Import a kubeconfig or let kind/Minikube write one to ~/.kube/config.', action: importButton() }) })}
+      <div class="mt-4">${commandsCard('contexts', commands)}</div>
       <div class="mt-4">${toolsCard(data.tools)}</div>
-    </div>`;
-  }
-
-  async function renderNamespaces() {
-    if (!api?.kubernetes) return unavailable();
-    const data = await loadDashboard();
-    if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
-    if (!data.contexts?.length) return noContexts(data);
-    return `<div class="page">
-      ${pageHead({ title: PAGES.namespaces, sub: 'Live namespace objects and pod counts for the selected context.', actions: pageActions('namespaces') })}
-      ${selectorBar(data)}
-      ${data.dashboard
-        ? U.card({ title: 'Namespaces', icon: 'layers', sub: `${data.dashboard.namespaceCount || 0} namespaces`, body: data.dashboard.namespaceError ? U.errorBanner('Namespaces unavailable', data.dashboard.namespaceError) : namespacesTable(data.dashboard.namespaces, data.dashboard.podsByNamespace) })
-        : connectionCard(data)}
-    </div>`;
-  }
-
-  async function renderNodes() {
-    if (!api?.kubernetes) return unavailable();
-    const data = await loadDashboard();
-    if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
-    if (!data.contexts?.length) return noContexts(data);
-    return `<div class="page">
-      ${pageHead({ title: PAGES.nodes, sub: 'Node readiness, allocatable capacity and kubelet versions from the cluster.', actions: pageActions('nodes') })}
-      ${selectorBar(data)}
-      ${data.dashboard
-        ? U.card({ title: 'Nodes', icon: 'server', sub: `${data.dashboard.nodeSummary?.ready || 0} of ${data.dashboard.nodeSummary?.total || 0} ready`, body: data.dashboard.nodesError ? U.errorBanner('Nodes unavailable', data.dashboard.nodesError) : nodesTable(data.dashboard.nodes) })
-        : connectionCard(data)}
     </div>`;
   }
 
@@ -508,24 +677,44 @@
     return `<div class="tag-row">${shown}${rest}</div>`;
   }
 
-  function detailOverview(detail) {
-    return `<div class="detail-hero">
-        <span class="icon-chip tone-violet" style="--chip-size:34px">${icon(SECTION_ICONS[detail.section] || 'box', 16)}</span>
-        <div style="min-width:0">
-          <div class="name">${esc(detail.name)}</div>
-          <div class="sub">${esc([detail.kind, detail.namespace, detail.context].filter(Boolean).join(' · '))}</div>
-        </div>
-      </div>
-      <div class="detail-grid">
-        <div class="detail-section"><h4>Object</h4>${U.kvRows([
-          ['Kind', esc(detail.kind || '—'), true],
-          ['Namespace', esc(detail.namespace || 'cluster-scoped'), true],
-          ['Context', esc(detail.context || '—'), true],
-          ['Created', esc(detail.created ? fmtDateTime(detail.created) : '—')],
-        ])}</div>
+  function detailSummary(detail) {
+    const cards = (detail.summary || []).map((section) => {
+      if (section.text) {
+        return `<div class="detail-section"><h4>${esc(section.title)}</h4><pre class="k8s-summary-text">${esc(section.text)}</pre></div>`;
+      }
+      if (section.list) {
+        return `<div class="detail-section"><h4>${esc(section.title)}</h4><ul class="k8s-summary-list">${section.list.map((item) => `<li class="mono">${esc(item)}</li>`).join('')}</ul></div>`;
+      }
+      const rows = (section.rows || []).map(([label, value]) => [label, esc(value), true]);
+      return `<div class="detail-section"><h4>${esc(section.title)}</h4>${rows.length ? U.kvRows(rows) : '<span class="faint text-xs">No values</span>'}</div>`;
+    }).join('');
+    return `<div class="detail-grid">
+        ${cards || `<div class="detail-section"><h4>Summary</h4><span class="faint text-xs">kubectl returned no summary values for this object.</span></div>`}
         <div class="detail-section"><h4>Labels</h4>${labelTags(detail.labels)}</div>
         <div class="detail-section" style="grid-column:1/-1"><h4>Annotations</h4>${labelTags(detail.annotations)}</div>
       </div>`;
+  }
+
+  const EVENT_COLUMNS = ['Type', 'Reason', 'Object', 'Namespace', 'Count', 'Message', 'Last seen'];
+
+  function eventsBody(rows, error) {
+    if (error) return U.infoBanner('Events unavailable', error, 'warning');
+    if (!rows?.length) {
+      return U.empty({ compact: true, icon: 'activity', title: 'No events for this object', body: 'Kubernetes keeps events for a limited time. Nothing is attached to this object right now.' });
+    }
+    return `<div class="muted text-xs" style="margin-bottom:8px">${rows.length} event${rows.length === 1 ? '' : 's'} involving this object, newest first.</div>${dataTable(EVENT_COLUMNS, rows)}`;
+  }
+
+  function logsBody(logs) {
+    if (!logs) return U.loader({ label: 'Reading logs…' });
+    if (!logs.ok) return U.infoBanner('Logs unavailable', logs.error || 'Could not read pod logs.', 'warning');
+    const text = String(logs.stdout || '').trim();
+    return `<div class="row gap-2" style="justify-content:space-between;margin-bottom:8px">
+        <span class="faint text-xs">${icon('file', 11)} ${esc(logs.container || 'all containers')} · last ${esc(String(logs.lines || 200))} lines${logs.previous ? ' · previous instance' : ''}</span>
+        ${U.button({ label: 'Copy logs', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(text)}"` })}
+      </div>${text
+        ? `<pre class="k8s-output k8s-logs">${esc(text)}</pre>`
+        : U.empty({ compact: true, icon: 'file', title: 'No log output', body: 'The container has not written to stdout or stderr.' })}`;
   }
 
   function detailAskAi(detail) {
@@ -536,9 +725,33 @@
     );
   }
 
+  function commandListBody(commands) {
+    if (!commands?.length) return U.empty({ compact: true, icon: 'terminal', title: 'No commands for this object', body: 'OpsDeck did not generate commands for this resource type.' });
+    return `<div class="k8s-cmd-list">${commands.map((item) => `<div class="k8s-cmd">
+        <div class="k8s-cmd-main">
+          <div class="row gap-2" style="align-items:center">
+            <strong class="text-sm">${esc(item.label)}</strong>
+            ${item.tone === 'write' ? U.badge('writes', 'amber') : ''}
+            ${item.tone === 'danger' ? U.badge('danger', 'red') : ''}
+          </div>
+          <div class="faint text-xs">${esc(item.description || '')}</div>
+          <code class="k8s-cmd-text">${esc(item.command)}</code>
+        </div>
+        <div class="row-actions">
+          ${U.iconButton({ icon: 'copy', label: 'Copy command', attrs: `data-copy-text="${esc(item.command)}"` })}
+          ${U.iconButton({ icon: 'play', label: 'Run command', attrs: `data-k8s-run-command data-command="${esc(item.command)}" data-tone="${esc(item.tone || 'read')}"` })}
+        </div>
+      </div>`).join('')}</div>
+      <div class="faint text-xs" style="margin-top:8px">${icon('shield-check', 11)} Commands run with the selected context and never through a host shell.</div>`;
+  }
+
   function detailActions(detail) {
+    const shell = detail.section === 'pods'
+      ? U.button({ label: 'Open shell', icon: 'terminal', size: 'sm', attrs: 'data-k8s-action-shell' })
+      : '';
     if (!detail.actions?.length) {
       return `<div class="row gap-2" style="width:100%">
+        ${shell}
         <span class="faint text-xs">${icon('lock', 11)} This object is read-only in OpsDeck.</span>
         <span class="toolbar-spacer"></span>
         ${detailAskAi(detail)}
@@ -550,7 +763,7 @@
       if (action === 'delete') return U.button({ label: 'Delete', icon: 'trash', size: 'sm', variant: 'danger', attrs: 'data-k8s-action="delete"' });
       return '';
     }).join('');
-    return `<div class="row gap-2" style="width:100%">${buttons}<span class="toolbar-spacer"></span>${detailAskAi(detail)}</div>`;
+    return `<div class="row gap-2" style="width:100%">${shell}${buttons}<span class="toolbar-spacer"></span>${detailAskAi(detail)}</div>`;
   }
 
   async function runResourceAction(button, detail, close) {
@@ -611,6 +824,290 @@
     }
   }
 
+  async function openPodLogs(name, namespace) {
+    let logs = null;
+    try {
+      logs = await api.kubernetes.podLogs({ name, namespace, tailLines: 300 });
+    } catch (error) {
+      logs = { ok: false, error: error.message || 'Could not read pod logs.' };
+    }
+    let previous = false;
+    U.drawer({
+      eyebrow: 'Pod logs',
+      title: name,
+      subtitle: `${namespace || 'default'} · last 300 lines`,
+      icon: 'file',
+      width: '900px',
+      body: `<div data-k8s-logs-body>${logsBody(logs)}</div>`,
+      footer: `<div class="row gap-2" style="width:100%">
+        ${OD.ai ? OD.ai.button({ kind: 'k8s-resource', section: 'pods', name, namespace }, { label: 'Ask AI', size: 'sm' }) : ''}
+        <span class="toolbar-spacer"></span>
+        ${U.button({ label: 'Open shell', icon: 'terminal', size: 'sm', attrs: 'data-k8s-logs-shell' })}
+        ${U.button({ label: 'Previous instance', icon: 'history', size: 'sm', attrs: 'data-k8s-logs-previous' })}
+        ${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}
+      </div>`,
+      onMount: ({ root, close, body }) => {
+        root.querySelector('[data-k8s-logs-shell]')?.addEventListener('click', () => {
+          close('shell');
+          showPodShell({ name, namespace });
+        });
+        const previousBtn = root.querySelector('[data-k8s-logs-previous]');
+        previousBtn?.addEventListener('click', async () => {
+          previous = !previous;
+          busy(previousBtn, true, 'Reading…');
+          body.innerHTML = U.loader(previous ? 'Reading logs from the previous container instance…' : 'Reading logs…');
+          try {
+            const next = await api.kubernetes.podLogs({ name, namespace, tailLines: 300, previous });
+            body.innerHTML = logsBody(next);
+          } catch (error) {
+            body.innerHTML = logsBody({ ok: false, error: error.message });
+          } finally {
+            busy(previousBtn, false);
+          }
+        });
+      },
+    });
+  }
+
+  /**
+   * Real pod shell: util-linux `script` allocates a host PTY so kubectl exec
+   * gives the renderer a genuine interactive terminal. The selected context
+   * and namespace are validated again in the main process.
+   */
+  function showPodShell(pod) {
+    if (!ptySupported()) {
+      U.toast('Interactive terminal unavailable', 'error', { description: 'This build does not include the terminal renderer.' });
+      return;
+    }
+    const context = pod.context || OD.store?.state?.kubernetes?.selected || '';
+    const namespace = pod.namespace || OD.store?.state?.kubernetes?.namespace || 'default';
+    if (!context) {
+      U.toast('Choose a context first', 'error', { description: 'Select a Kubernetes context before opening a pod shell.' });
+      return;
+    }
+    U.drawer({
+      title: pod.name,
+      subtitle: `${namespace} · interactive pod shell`,
+      eyebrow: 'Pod shell',
+      icon: 'terminal',
+      width: '960px',
+      body: `<div class="terminal-shell terminal-drawer exec-pty" id="k8s-exec-shell">
+        <div class="term-head">
+          <div class="term-lights"><i></i><i></i><i></i></div>
+          <span class="term-title" id="k8s-exec-title">${esc(pod.name)} · starting shell</span>
+          <span class="term-status" id="k8s-exec-state">connecting</span>
+          <button type="button" class="term-btn" data-exec-copy title="Copy selection (Ctrl+Shift+C)" aria-label="Copy selection">${icon('copy', 12)}</button>
+          <button type="button" class="term-btn" data-exec-expand title="Fullscreen terminal" aria-label="Toggle fullscreen terminal">${icon('maximize', 12)}</button>
+        </div>
+        <div class="xterm-host" id="k8s-exec-host"></div>
+        <div class="term-hint">Tab completes paths and commands inside the pod · Ctrl+Shift+C / Ctrl+Shift+V copy and paste · Esc leaves fullscreen</div>
+      </div>`,
+      footer: `<span class="faint text-xs mono">kubectl exec -it ${esc(pod.name)} -n ${esc(namespace)} --context ${esc(context)} -- sh</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'k8s-resource', section: 'pods', name: pod.name, namespace }, { label: 'Ask AI', size: 'sm' }) : ''}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
+      onMount: ({ root, onClose }) => {
+        const panel = root.querySelector('.overlay-panel.drawer');
+        const shell = root.querySelector('#k8s-exec-shell');
+        const host = root.querySelector('#k8s-exec-host');
+        const titleEl = root.querySelector('#k8s-exec-title');
+        const stateEl = root.querySelector('#k8s-exec-state');
+        const expandBtn = root.querySelector('[data-exec-expand]');
+        const copyBtn = root.querySelector('[data-exec-copy]');
+        panel?.classList.add('exec-drawer');
+
+        const term = new window.Terminal({
+          cursorBlink: true,
+          cursorStyle: 'bar',
+          fontFamily: terminalFontFamily(),
+          fontSize: 12.5,
+          lineHeight: 1.28,
+          letterSpacing: 0,
+          scrollback: 8000,
+          theme: TERM_THEME,
+          allowTransparency: true,
+          macOptionIsMeta: true,
+        });
+        const fit = new window.FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open(host);
+
+        const refit = () => {
+          try { fit.fit(); } catch { /* host is not laid out yet */ }
+        };
+        requestAnimationFrame(() => { refit(); term.focus(); });
+        const observer = new ResizeObserver(() => refit());
+        observer.observe(host);
+
+        let sessionId = null;
+        let ended = false;
+        let closed = false;
+        let fullscreen = false;
+        const pending = [];
+
+        const write = (text) => { if (text) term.write(text); };
+        const handleExit = (payload) => {
+          if (ended) return;
+          ended = true;
+          stateEl.textContent = payload?.code === 0 ? 'exited' : 'ended';
+          const code = payload?.code == null ? '' : ` (exit ${payload.code})`;
+          write(`\r\n\x1b[38;5;243m— session ended${code} —\x1b[0m\r\n`);
+        };
+        const sendInput = (data) => {
+          if (!sessionId || ended || !data) return;
+          api.kubernetes.shellInput({ sessionId, data }).then((res) => {
+            if (!res?.ok && !ended) {
+              ended = true;
+              stateEl.textContent = 'ended';
+              write(`\r\n\x1b[31m${res?.error || 'The session has ended.'}\x1b[0m\r\n`);
+            }
+          }).catch(() => {});
+        };
+        shell._type = sendInput;
+        shell._text = () => {
+          const buffer = term.buffer.active;
+          const lines = [];
+          for (let index = 0; index < buffer.length; index += 1) {
+            const line = buffer.getLine(index);
+            if (line) lines.push(line.translateToString(true));
+          }
+          return lines.join('\n').trimEnd();
+        };
+        term.onData(sendInput);
+
+        term.attachCustomKeyEventHandler((event) => {
+          if (event.type !== 'keydown') return true;
+          const meta = event.ctrlKey || event.metaKey;
+          const key = String(event.key || '').toLowerCase();
+          if (meta && event.shiftKey && key === 'c') {
+            const selection = term.getSelection();
+            if (selection) api.app.copy(selection);
+            return false;
+          }
+          if (meta && event.shiftKey && key === 'v') {
+            api.app.readClipboard()
+              .then((text) => { if (typeof text === 'string' && text) term.paste(text); })
+              .catch(() => {});
+            return false;
+          }
+          return true;
+        });
+
+        const setFullscreen = (value) => {
+          fullscreen = value === true;
+          panel?.classList.toggle('drawer-fullscreen', fullscreen);
+          document.body.classList.toggle('exec-fullscreen', fullscreen);
+          if (expandBtn) {
+            expandBtn.innerHTML = icon(fullscreen ? 'shrink' : 'maximize', 12);
+            expandBtn.title = fullscreen ? 'Exit fullscreen terminal' : 'Fullscreen terminal';
+            expandBtn.setAttribute('aria-label', expandBtn.title);
+          }
+          requestAnimationFrame(() => { refit(); term.focus(); });
+          setTimeout(() => { if (!closed) { refit(); term.focus(); } }, 230);
+        };
+        expandBtn?.addEventListener('click', () => setFullscreen(!fullscreen));
+        root.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && fullscreen) {
+            event.preventDefault();
+            event.stopPropagation();
+            setFullscreen(false);
+          }
+        }, true);
+
+        copyBtn?.addEventListener('click', async () => {
+          const selection = term.getSelection();
+          if (!selection) {
+            U.toast('Nothing selected', 'info', { description: 'Drag across text in the terminal first.' });
+            return;
+          }
+          await api.app.copy(selection);
+          U.toast('Copied selection', 'success', { description: `${selection.length} characters` });
+        });
+
+        const unsubscribeData = api.events.k8sExecData((payload) => {
+          if (!payload) return;
+          if (!sessionId) { pending.push({ type: 'data', payload }); return; }
+          if (payload.sessionId === sessionId) write(payload.data);
+        });
+        const unsubscribeExit = api.events.k8sExecExit((payload) => {
+          if (!payload) return;
+          if (!sessionId) { pending.push({ type: 'exit', payload }); return; }
+          if (payload.sessionId === sessionId) handleExit(payload);
+        });
+
+        onClose(() => {
+          closed = true;
+          observer.disconnect();
+          unsubscribeData();
+          unsubscribeExit();
+          document.body.classList.remove('exec-fullscreen');
+          if (sessionId && !ended) api.kubernetes.shellStop({ sessionId });
+          setTimeout(() => { try { term.dispose(); } catch { /* already gone */ } }, 220);
+        });
+
+        (async () => {
+          const res = await api.kubernetes.shellStart({
+            context,
+            namespace,
+            name: pod.name,
+            container: pod.container || '',
+            pty: true,
+            cols: term.cols,
+            rows: term.rows,
+          });
+          if (closed) {
+            if (res?.ok) api.kubernetes.shellStop({ sessionId: res.sessionId });
+            return;
+          }
+          if (!res?.ok) {
+            ended = true;
+            stateEl.textContent = 'unavailable';
+            write(`\x1b[31m${res?.error || 'Could not open a shell in this pod.'}\x1b[0m\r\n`);
+            return;
+          }
+          sessionId = res.sessionId;
+          shell.dataset.execSession = sessionId;
+          shell.dataset.execMode = res.mode || 'pipe';
+          titleEl.textContent = `${pod.name} · ${res.shellLabel || res.shell}`;
+          stateEl.textContent = 'connected';
+          for (const entry of pending.splice(0)) {
+            if (entry.type === 'data') write(entry.payload.data);
+            else handleExit(entry.payload);
+          }
+          if (!ended) {
+            refit();
+            term.focus();
+          }
+        })();
+      },
+    });
+  }
+
+  async function runMinikubeAction(button, action) {
+    const verb = action === 'stop' ? 'Stop' : 'Start';
+    const ok = await U.confirm({
+      title: `${verb} Minikube?`,
+      message: action === 'stop'
+        ? 'OpsDeck runs minikube stop. Workloads on the Minikube profile are stopped; the cluster configuration stays on disk.'
+        : 'OpsDeck runs minikube start. This can take a minute while the profile boots and writes its kubeconfig entry.',
+      confirmLabel: `${verb} Minikube`,
+      tone: action === 'stop' ? 'red' : 'accent',
+      icon: action === 'stop' ? 'square' : 'play',
+    });
+    if (!ok) return;
+    busy(button, true, action === 'stop' ? 'Stopping…' : 'Starting…');
+    try {
+      const res = await api.kubernetes.minikubeAction({ action });
+      if (!res?.ok) {
+        U.toast(`Could not ${action} Minikube`, 'error', { description: res?.error || 'Check the output and try again.' });
+        return;
+      }
+      U.toast(`Minikube ${action === 'stop' ? 'stopped' : 'started'}`, 'success', { description: res.message || res.status?.detail || '' });
+      rerender();
+    } catch (error) {
+      U.toast(`Could not ${action} Minikube`, 'error', { description: error.message || 'Try again.' });
+    } finally {
+      busy(button, false);
+    }
+  }
+
   async function openResourceDrawer(section, name, namespace) {
     if (!api?.kubernetes?.resourceDetail || !name) return;
     let detail;
@@ -626,41 +1123,76 @@
     }
 
     const bodies = {
-      overview: detailOverview(detail),
+      overview: detailSummary(detail),
+      events: eventsBody(detail.events, detail.eventsError),
+      commands: commandListBody(detail.commands),
       manifest: U.codeBlock({ code: JSON.stringify(detail.manifest, null, 2), lang: 'json', title: 'JSON manifest' }),
       describe: detail.describe
         ? U.codeBlock({ code: detail.describe, lang: 'text', title: 'kubectl describe' })
         : U.infoBanner('Describe output unavailable', detail.describeError || 'kubectl returned no describe output.', 'warning'),
     };
+    const isPod = section === 'pods';
+    const tabs = [
+      { id: 'overview', label: 'Summary', icon: 'info' },
+      { id: 'events', label: 'Events', icon: 'activity', count: detail.events?.length || 0 },
+      ...(isPod ? [{ id: 'logs', label: 'Logs', icon: 'file' }] : []),
+      { id: 'commands', label: 'Commands', icon: 'terminal', count: detail.commands?.length || 0 },
+      { id: 'manifest', label: 'Manifest', icon: 'code' },
+      { id: 'describe', label: 'Describe', icon: 'list' },
+    ];
 
     U.drawer({
       eyebrow: detail.title || PAGES[section] || 'Kubernetes object',
       title: detail.name,
       subtitle: [detail.kind, detail.namespace, detail.context].filter(Boolean).join(' · '),
       icon: SECTION_ICONS[section] || 'box',
-      tabs: U.tabs([
-        { id: 'overview', label: 'Overview', icon: 'info' },
-        { id: 'manifest', label: 'Manifest', icon: 'code' },
-        { id: 'describe', label: 'Describe', icon: 'terminal' },
-      ], 'overview', 'k8s-detail'),
+      tabs: U.tabs(tabs, 'overview', 'k8s-detail'),
       body: `<div data-k8s-detail-body>${bodies.overview}</div>`,
       footer: detailActions(detail),
-      width: '720px',
+      width: '820px',
       onMount: ({ root, close, body }) => {
+        let active = 'overview';
+        let logsPromise = null;
+        const show = (id) => {
+          active = id;
+          if (id === 'logs' && !bodies.logs) {
+            body.innerHTML = U.loader('Reading pod logs…');
+            if (!logsPromise) {
+              logsPromise = api.kubernetes.podLogs({ name: detail.name, namespace: detail.namespace || '', tailLines: 300 })
+                .catch((error) => ({ ok: false, error: error.message || 'Could not read pod logs.' }))
+                .then((logs) => {
+                  bodies.logs = logsBody(logs);
+                  return bodies.logs;
+                });
+            }
+            logsPromise.then((html) => { if (active === 'logs') body.innerHTML = html; });
+            return;
+          }
+          body.innerHTML = bodies[id] || bodies.overview;
+        };
         const tabButtons = [...root.querySelectorAll('[data-tabs="k8s-detail"] .tab')];
         for (const tab of tabButtons) {
           tab.addEventListener('click', () => {
             for (const item of tabButtons) {
-              const active = item === tab;
-              item.classList.toggle('active', active);
-              item.setAttribute('aria-selected', active ? 'true' : 'false');
+              const on = item === tab;
+              item.classList.toggle('active', on);
+              item.setAttribute('aria-selected', on ? 'true' : 'false');
             }
-            body.innerHTML = bodies[tab.dataset.tab] || bodies.overview;
+            show(tab.dataset.tab);
           });
         }
         for (const button of root.querySelectorAll('[data-k8s-action]')) {
           button.addEventListener('click', () => runResourceAction(button, detail, close));
         }
+        root.addEventListener('click', async (event) => {
+          const runBtn = event.target.closest('[data-k8s-run-command]');
+          if (!runBtn) return;
+          await runCommandFromUi(runBtn, runBtn.dataset.command || '', runBtn.dataset.tone || 'read');
+        });
+        root.querySelector('[data-k8s-action-shell]')?.addEventListener('click', () => {
+          close('shell');
+          showPodShell({ name: detail.name, namespace: detail.namespace || '', containers: detail.containers || [] });
+        });
       },
     });
   }
@@ -696,13 +1228,17 @@
           ? `<span class="faint text-xs">${icon('lock', 11)} Secret values are never read into this view. Only names, types and key counts are shown.</span>`
           : '',
       })}
+      <div class="mt-4">${commandsCard(section, data.commands, { allNamespaces })}</div>
     </div>`;
   }
 
   async function renderHelm(route) {
     if (!api?.kubernetes) return unavailable();
     const allNamespaces = allNamespacesFromHash();
-    const data = await api.kubernetes.helmReleases({ allNamespaces });
+    const [data, commands] = await Promise.all([
+      api.kubernetes.helmReleases({ allNamespaces }),
+      loadCommands('helm', { allNamespaces }),
+    ]);
     if (!data?.ok) throw new Error(data?.error || 'Could not read Helm releases.');
     if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
     if (!data.contexts?.length) return noContexts(await loadBootstrap());
@@ -720,14 +1256,17 @@
             ? dataTable(data.columns, data.rows)
             : U.empty({ compact: true, icon: 'rocket', title: 'No Helm releases', body: 'The selected context has no Helm releases.' }),
         })}
+      <div class="mt-4">${commandsCard('helm', commands)}</div>
     </div>`;
   }
 
   async function renderTools() {
     if (!api?.kubernetes) return unavailable();
-    const [data, status] = await Promise.all([
+    const [data, status, minikube, commands] = await Promise.all([
       api.kubernetes.tools(),
       api.kubernetes.installStatus ? api.kubernetes.installStatus() : Promise.resolve({ ok: false }),
+      minikubeStatusSafe(),
+      loadCommands('tools'),
     ]);
     const installed = status?.ok ? status.installed || {} : {};
     const rows = Object.entries(installed).map(([name, info]) => `<div class="row gap-2" style="justify-content:space-between;border-bottom:1px solid var(--border-soft);padding-bottom:7px">
@@ -737,12 +1276,14 @@
     return `<div class="page">
       ${pageHead({ title: PAGES.tools, sub: 'Real binaries from PATH and OpsDeck storage. No sudo and no system-wide changes.', actions: pageActions('tools') })}
       ${toolsCard(data?.tools || {})}
+      <div class="mt-4">${minikubeCard(minikube)}</div>
       ${U.card({
         title: 'Managed installs',
         icon: 'download',
         sub: status?.binDir || 'OpsDeck app storage',
         body: rows || U.empty({ compact: true, icon: 'download', title: 'No managed installs yet', body: 'Use “Install missing tools” above. Official releases are checksum-verified before they are written here.' }),
       })}
+      <div class="mt-4">${commandsCard('tools', commands)}</div>
       <div class="mt-4">${U.card({
         title: 'What OpsDeck will not touch',
         icon: 'shield-check',
@@ -751,15 +1292,47 @@
     </div>`;
   }
 
-  const RESOURCE_SECTIONS = ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'services', 'ingresses', 'networkpolicies', 'persistentvolumes', 'persistentvolumeclaims', 'storageclasses', 'configmaps', 'secrets', 'resourcequotas', 'limitranges', 'serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings', 'events'];
+  async function renderConsole() {
+    if (!api?.kubernetes) return unavailable();
+    const [data, commands] = await Promise.all([loadBootstrap(), loadCommands('console')]);
+    if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
+    if (!data.contexts?.length) return noContexts(data);
+    const suggestions = commands.slice(0, 4).map((item) => `<button type="button" class="k8s-suggest" data-k8s-suggest="${esc(item.command)}" title="${esc(item.description || '')}">${esc(item.label)}</button>`).join('');
+    return `<div class="page">
+      ${pageHead({
+        title: PAGES.console,
+        sub: 'Run real kubectl commands with the selected context enforced. No host shell, no pipes and no kubeconfig edits.',
+        actions: pageActions('console'),
+      })}
+      ${selectorBar(data)}
+      ${U.card({
+        title: 'Kubectl console',
+        icon: 'terminal',
+        sub: `Context ${data.selected || '—'} · namespace ${data.namespace || 'default'}`,
+        body: `<div class="k8s-console-wrap">
+          ${suggestions ? `<div class="k8s-console-suggest">${suggestions}</div>` : ''}
+          <form class="k8s-console" data-k8s-console-form autocomplete="off">
+            <span class="k8s-console-prompt">$</span>
+            <input class="input mono" data-k8s-console-input name="command" placeholder="kubectl get pods -o wide" autocomplete="off" spellcheck="false" aria-label="kubectl command" />
+            <button type="submit" class="btn btn-primary btn-sm" data-k8s-console-run>Run</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-k8s-console-clear>Clear</button>
+          </form>
+          <div class="k8s-console-output" data-k8s-console-output>${U.empty({ compact: true, icon: 'terminal', title: 'No commands yet', body: 'Type a kubectl command or pick a suggestion. Namespace and context are appended automatically when you leave them out.' })}</div>
+          <div class="faint text-xs">${icon('shield-check', 11)} Streaming flags, port-forward, proxy, attach, edit and kubeconfig mutations are rejected. Pod shells have their own interactive terminal.</div>
+        </div>`,
+      })}
+      <div class="mt-4">${commandsCard('console', commands)}</div>
+    </div>`;
+  }
+
+  const RESOURCE_SECTIONS = ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'nodes', 'namespaces', 'services', 'ingresses', 'networkpolicies', 'persistentvolumes', 'persistentvolumeclaims', 'storageclasses', 'configmaps', 'secrets', 'resourcequotas', 'limitranges', 'serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings', 'events'];
 
   const RENDERERS = {
     overview: renderOverview,
     contexts: renderContexts,
-    namespaces: renderNamespaces,
-    nodes: renderNodes,
     helm: renderHelm,
     tools: renderTools,
+    console: renderConsole,
     ...Object.fromEntries(RESOURCE_SECTIONS.map((section) => [section, (route) => renderResource(route, section)])),
   };
 
@@ -824,6 +1397,7 @@
 
   function mount(root) {
     root.addEventListener('click', async (event) => {
+      if (event.target.closest('[data-copy-text], .code-copy')) return;
       const installBtn = event.target.closest('[data-k8s-install-tools]');
       if (installBtn) {
         await startInstall(installBtn);
@@ -848,6 +1422,48 @@
       }
       if (event.target.closest('[data-k8s-refresh]')) {
         rerender();
+        return;
+      }
+      const runCmd = event.target.closest('[data-k8s-run-command]');
+      if (runCmd) {
+        await runCommandFromUi(runCmd, runCmd.dataset.command || '', runCmd.dataset.tone || 'read');
+        return;
+      }
+      const rowLogs = event.target.closest('[data-k8s-row-logs]');
+      if (rowLogs) {
+        await openPodLogs(rowLogs.dataset.k8sRowLogs, rowLogs.dataset.k8sRowNamespace || '');
+        return;
+      }
+      const rowShell = event.target.closest('[data-k8s-row-shell]');
+      if (rowShell) {
+        showPodShell({ name: rowShell.dataset.k8sRowShell, namespace: rowShell.dataset.k8sRowNamespace || '' });
+        return;
+      }
+      const rowOpen = event.target.closest('[data-k8s-row-open]');
+      if (rowOpen) {
+        await openResourceDrawer(rowOpen.dataset.k8sRowSection, rowOpen.dataset.k8sRowOpen, rowOpen.dataset.k8sRowNamespace || '');
+        return;
+      }
+      const minikubeBtn = event.target.closest('[data-minikube-action]');
+      if (minikubeBtn) {
+        await runMinikubeAction(minikubeBtn, minikubeBtn.dataset.minikubeAction);
+        return;
+      }
+      const suggest = event.target.closest('[data-k8s-suggest]');
+      if (suggest) {
+        const input = root.querySelector('[data-k8s-console-input]');
+        if (input) {
+          input.value = suggest.dataset.k8sSuggest || '';
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+        return;
+      }
+      if (event.target.closest('[data-k8s-console-clear]')) {
+        const output = root.querySelector('[data-k8s-console-output]');
+        if (output) {
+          output.innerHTML = U.empty({ compact: true, icon: 'terminal', title: 'Console cleared', body: 'Type a kubectl command or pick a suggestion to start again.' });
+        }
         return;
       }
       if (event.target.closest('[data-k8s-toggle-all]')) {
@@ -907,9 +1523,55 @@
       }
     });
 
+    const consoleHistory = [];
+    let consoleIndex = 0;
+    root.addEventListener('submit', async (event) => {
+      const form = event.target.closest('[data-k8s-console-form]');
+      if (!form) return;
+      event.preventDefault();
+      const input = form.querySelector('[data-k8s-console-input]');
+      const runBtn = form.querySelector('[data-k8s-console-run]');
+      const output = root.querySelector('[data-k8s-console-output]');
+      const command = String(input?.value || '').trim();
+      if (!command || !output) return;
+      consoleHistory.push(command);
+      consoleIndex = consoleHistory.length;
+      output.innerHTML = U.loader('Running kubectl…');
+      busy(runBtn, true, 'Running…');
+      try {
+        const result = await api.kubernetes.runCommand({ command });
+        output.innerHTML = consoleEntry(command, result);
+        if (!result?.ok) U.toast('Command failed', 'error', { description: result?.stderr || result?.error || 'Check the output.' });
+        if (input) {
+          input.value = '';
+          input.focus();
+        }
+      } catch (error) {
+        output.innerHTML = consoleEntry(command, { ok: false, error: error.message, code: 1 });
+        U.toast('Could not run the command', 'error', { description: error.message || 'Try again.' });
+      } finally {
+        busy(runBtn, false);
+      }
+    });
+
+    root.addEventListener('keydown', (event) => {
+      const input = event.target.closest('[data-k8s-console-input]');
+      if (!input || !consoleHistory.length) return;
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        consoleIndex = Math.max(0, consoleIndex - 1);
+        input.value = consoleHistory[consoleIndex] || '';
+        input.setSelectionRange(input.value.length, input.value.length);
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        consoleIndex = Math.min(consoleHistory.length, consoleIndex + 1);
+        input.value = consoleHistory[consoleIndex] || '';
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    });
+
     root.addEventListener('change', async (event) => {
-      if (event.target.matches('[data-k8s-context]')) {
-        const select = event.target;
+      if (event.target.matches('[data-k8s-context]')) {        const select = event.target;
         select.disabled = true;
         try {
           const res = await api.kubernetes.selectContext({ context: select.value });

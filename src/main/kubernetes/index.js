@@ -14,7 +14,10 @@ const crypto = require('node:crypto');
 const { run, runJson, scrub } = require('./exec');
 const { KubeRegistry } = require('./registry');
 const { TOOL_NAMES, labelFor, installTool, binDir, toolsPathEnv, readInstalled } = require('./install');
-const { RESOURCES, sanitizeManifest, validObjectName, actionsFor, actionArgs } = require('./resources');
+const { RESOURCES, sanitizeManifest, validObjectName, actionsFor, actionArgs, trimEvent, summaryFor } = require('./resources');
+const { sectionCommands, objectCommands } = require('./commands');
+const { runKubectl } = require('./kubectl-runner');
+const { start: shellStart, input: shellInput, resize: shellResize, stop: shellStop, disposeAll: shellDisposeAll } = require('./shell');
 
 const CONTEXT_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@/+=,-]{0,252}$/;
 const NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
@@ -24,6 +27,36 @@ const TOOLS_CACHE_MS = 15000;
 
 function validContext(value) {
   return typeof value === 'string' && CONTEXT_RE.test(value);
+}
+
+/**
+ * Minikube prints a JSON object with capitalised keys when a profile exists,
+ * and a lowercase JSON event when no profile exists. Both shapes are accepted.
+ */
+function parseMinikubeStatus(data, { ok = true, stderr = '' } = {}) {
+  const message = data?.message || data?.Message || scrub(stderr || '', 500);
+  const host = String(data?.host || data?.Host || '');
+  const kubelet = String(data?.kubelet || data?.Kubelet || '');
+  const apiserver = String(data?.apiserver || data?.APIServer || '');
+  const running = host === 'Running' && kubelet === 'Running' && apiserver === 'Running';
+  let state = running ? 'running' : 'stopped';
+  if (!host && /not found|does not exist|to start a cluster/i.test(message)) state = 'absent';
+  else if (!ok && !data) state = 'unknown';
+  const detailMessage = /^command failed/i.test(message) ? '' : message;
+  return {
+    running,
+    state,
+    host,
+    kubelet,
+    apiserver,
+    kubeconfig: String(data?.kubeconfig || data?.Kubeconfig || ''),
+    message: detailMessage,
+    detail: running
+      ? 'The default Minikube profile is running.'
+      : state === 'absent'
+        ? (detailMessage ? `No Minikube profile exists yet. ${detailMessage}` : 'No Minikube profile exists yet.')
+        : 'The default Minikube profile is stopped.',
+  };
 }
 
 function validNamespace(value) {
@@ -91,6 +124,11 @@ class KubernetesService {
     this.contextCache = null;
     this.toolsCache = null;
     this.installPromise = null;
+    this.minikubePromise = null;
+  }
+
+  dispose() {
+    shellDisposeAll();
   }
 
   invalidate() {
@@ -104,6 +142,135 @@ class KubernetesService {
   async installStatus() {
     return { ok: true, binDir: binDir(this.app), installed: readInstalled(this.app) };
   }
+
+  async minikubeStatus() {
+    const tools = await this.tools();
+    if (!tools.tools.minikube.installed) {
+      return { ok: true, installed: false, running: false, state: 'missing', profile: 'minikube', detail: 'Minikube is not installed yet.' };
+    }
+    const res = await run('minikube', ['status', '--output=json'], { timeout: 20000, env: this.env() });
+    let data = null;
+    for (const line of String(res.stdout || '').trim().split(/\r?\n/).filter(Boolean)) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.data && typeof parsed.data === 'object') data = { ...(data || {}), ...parsed.data };
+        else if (parsed && typeof parsed === 'object') data = { ...(data || {}), ...parsed };
+      } catch { /* status may print plain text */ }
+    }
+    if (!data) {
+      const text = String(res.stdout || res.stderr || '').trim();
+      if (text) data = { message: text.slice(0, 1000) };
+    }
+    const parsed = parseMinikubeStatus(data, { ok: res.ok, stderr: res.stderr });
+    return {
+      ok: true,
+      installed: true,
+      profile: 'minikube',
+      ...parsed,
+    };
+  }
+
+  async minikubeAction(action) {
+    if (action !== 'start' && action !== 'stop') return { ok: false, error: 'Minikube actions are limited to start and stop.' };
+    if (this.minikubePromise) return this.minikubePromise;
+    this.minikubePromise = (async () => {
+      const tools = await this.tools(true);
+      if (!tools.tools.minikube.installed) return { ok: false, error: 'Install Minikube from the tools card first.' };
+      const args = action === 'start' ? ['start', '--interactive=false'] : ['stop'];
+      const res = await run('minikube', args, {
+        timeout: action === 'start' ? 360000 : 120000,
+        env: this.env(),
+      });
+      this.invalidate();
+      const status = await this.minikubeStatus();
+      return {
+        ok: res.ok,
+        action,
+        running: status.running,
+        state: status.state,
+        status,
+        message: scrub(String(res.stdout || '').trim(), 2000),
+        error: res.ok ? '' : scrub(res.stderr || `minikube ${action} failed.`, 1000),
+      };
+    })().finally(() => { this.minikubePromise = null; });
+    return this.minikubePromise;
+  }
+
+  async commandList(section, { name = '', namespace = '', allNamespaces = false } = {}) {
+    const state = await this.contextState();
+    const ns = validNamespace(namespace) ? namespace : state.namespace;
+    const list = name
+      ? objectCommands(section, { context: state.selected, namespace: ns, name })
+      : sectionCommands(section, { context: state.selected, namespace: ns, allNamespaces });
+    return { ok: true, section, context: state.selected, namespace: ns, commands: list };
+  }
+
+  async runCommand(input) {
+    const state = await this.contextState();
+    return runKubectl(input, {
+      context: state.selected,
+      namespace: state.namespace,
+      env: this.env(),
+    });
+  }
+
+  async podLogs({ name, namespace, container = '', tailLines = 200, previous = false } = {}) {
+    if (!validObjectName(name)) return { ok: false, error: 'That pod name is not valid.' };
+    if (container && !/^[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?$/.test(container)) return { ok: false, error: 'That container name is not valid.' };
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    if (!tools.tools.kubectl.installed) return { ok: false, error: 'kubectl is not installed.' };
+    if (!state.selected) return { ok: false, error: 'Choose a context before reading logs.' };
+    const ns = validNamespace(namespace) ? namespace : state.namespace;
+    const tail = Math.min(2000, Math.max(10, Number.isFinite(Number(tailLines)) ? Math.round(Number(tailLines)) : 200));
+    const args = ['logs', name, '--tail', String(tail)];
+    if (container) args.push('--container', container);
+    if (previous) args.push('--previous');
+    const res = await this.kube(args, { timeout: 20000, context: state.selected, namespace: ns });
+    return {
+      ok: res.ok,
+      name,
+      namespace: ns,
+      container,
+      previous: previous === true,
+      lines: tail,
+      stdout: res.ok ? String(res.stdout || '').slice(0, 250000) : '',
+      error: res.ok ? '' : scrub(res.stderr || 'Could not read pod logs.', 2000),
+    };
+  }
+
+  async objectEvents(section, { name, namespace } = {}) {
+    const def = RESOURCES[section];
+    if (!def || !validObjectName(name)) return { ok: false, error: 'That object is not valid.' };
+    const state = await this.contextState();
+    if (!state.selected) return { ok: false, error: 'Choose a context before reading events.' };
+    const ns = validNamespace(namespace) ? namespace : state.namespace;
+    const args = ['get', 'events', '--field-selector', `involvedObject.name=${name}`, '-o', 'json'];
+    // Events are namespaced, but node and cluster-scoped objects can emit them
+    // into any namespace, so those lookups span every namespace.
+    if (!def.namespaced) args.push('--all-namespaces');
+    const res = await this.kubeJson(args, {
+      timeout: 15000,
+      context: state.selected,
+      namespace: def.namespaced ? ns : '',
+    });
+    if (!res.ok) return { ok: false, rows: [], error: scrub(res.stderr || 'Could not read events.', 600) };
+    const items = Array.isArray(res.data?.items) ? res.data.items : [];
+    const rows = items.map(trimEvent).sort((a, b) => (b.sortAt || 0) - (a.sortAt || 0)).slice(0, 100);
+    return { ok: true, rows, error: '' };
+  }
+
+  async shellStart(spec, sender, options = {}) {
+    return shellStart({
+      context: String(spec?.context || ''),
+      namespace: String(spec?.namespace || ''),
+      name: String(spec?.name || ''),
+      container: String(spec?.container || ''),
+    }, sender, { ...options, env: this.env(), run });
+  }
+
+  shellInput(sessionId, data, senderId) { return shellInput(sessionId, data, senderId); }
+  shellResize(sessionId, cols, rows, senderId) { return shellResize(sessionId, cols, rows, senderId); }
+  shellStop(sessionId, senderId) { return shellStop(sessionId, senderId); }
 
   async tools(force = false) {
     if (!force && this.toolsCache && Date.now() - this.toolsCache.at < TOOLS_CACHE_MS) return this.toolsCache.value;
@@ -456,18 +623,24 @@ class KubernetesService {
     const def = RESOURCES[section];
     if (!def) return { ok: false, error: 'Unknown Kubernetes resource.' };
     const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    const all = def.namespaced && allNamespaces === true;
     const base = {
       ok: true,
       section,
       title: def.label,
       columns: def.columns,
       namespaced: def.namespaced,
-      allNamespaces: def.namespaced ? allNamespaces === true : false,
+      allNamespaces: all,
       contexts: state.contexts,
       selected: state.selected,
       namespace: state.namespace,
       tools: tools.tools,
       checkedAt: tools.checkedAt,
+      commands: sectionCommands(section, {
+        context: state.selected,
+        namespace: state.namespace,
+        allNamespaces: all,
+      }),
       rows: [],
       total: 0,
       truncated: false,
@@ -476,7 +649,6 @@ class KubernetesService {
     if (!tools.tools.kubectl.installed) return { ...base, error: 'kubectl is not installed.' };
     if (!state.selected) return base;
 
-    const all = def.namespaced && allNamespaces === true;
     const args = ['get', def.resource, '-o', 'json'];
     if (all) args.push('--all-namespaces');
     const res = await this.kubeJson(args, {
@@ -512,12 +684,16 @@ class KubernetesService {
       return { ok: false, error: scrub(res.stderr || `Could not read this ${def.label.toLowerCase().replace(/s$/, '')}.`, 600) };
     }
 
+    const summary = summaryFor(section, res.data);
     const manifest = sanitizeManifest(res.data, section);
-    const describeResult = await this.kube(['describe', def.resource, name], {
-      timeout: 15000,
-      context: state.selected,
-      namespace: ns,
-    });
+    const [describeResult, eventsResult] = await Promise.all([
+      this.kube(['describe', def.resource, name], {
+        timeout: 15000,
+        context: state.selected,
+        namespace: ns,
+      }),
+      this.objectEvents(section, { name, namespace: ns }),
+    ]);
     const metadata = manifest.metadata || {};
     return {
       ok: true,
@@ -531,6 +707,11 @@ class KubernetesService {
       labels: metadata.labels && typeof metadata.labels === 'object' ? metadata.labels : {},
       annotations: metadata.annotations && typeof metadata.annotations === 'object' ? metadata.annotations : {},
       manifest,
+      summary: summary.sections || [],
+      containers: summary.containers || [],
+      commands: objectCommands(section, { context: state.selected, namespace: ns, name: String(metadata.name || name) }),
+      events: eventsResult.rows || [],
+      eventsError: eventsResult.error || '',
       describe: describeResult.ok ? String(describeResult.stdout || '').slice(0, 24000) : '',
       describeError: describeResult.ok ? '' : scrub(describeResult.stderr || 'Could not describe this object.', 400),
       actions: actionsFor(section),
@@ -724,4 +905,4 @@ class KubernetesService {
   }
 }
 
-module.exports = { KubernetesService, __test: { trimNode, trimNamespace, validContext, validNamespace, countLines } };
+module.exports = { KubernetesService, __test: { trimNode, trimNamespace, validContext, validNamespace, countLines, parseMinikubeStatus } };

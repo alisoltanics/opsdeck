@@ -59,6 +59,7 @@ const ROUTES = [
   ['kubernetes cluster bindings', '#/kubernetes/clusterrolebindings'],
   ['kubernetes helm', '#/kubernetes/helm'],
   ['kubernetes events', '#/kubernetes/events'],
+  ['kubernetes console', '#/kubernetes/console'],
   ['kubernetes tools', '#/kubernetes/tools'],
   ['academy', '#/academy'],
   ['courses', '#/academy/courses'],
@@ -172,11 +173,17 @@ function rendererScript(routes) {
     if (!document.querySelector('[data-k8s-install-panel]')) failures.push('kubernetes: tools installer panel is missing');
     if (!document.querySelector('[data-k8s-install-status]')) failures.push('kubernetes: tools installer status area is missing');
     if (!document.querySelector('#view [data-ai-ask="kubernetes"]')) failures.push('kubernetes: Ask AI button is missing');
+    if (!document.querySelector('[data-k8s-run-command]')) failures.push('kubernetes: ready-made command buttons are missing');
+    if (!document.querySelector('[data-minikube-action]')) failures.push('kubernetes: Minikube start/stop button is missing');
     const k8sAiContext = await window.opsdeck.ai.context({ kind: 'kubernetes', page: 'overview' });
     if (!k8sAiContext?.ok || !k8sAiContext.context?.text) failures.push('kubernetes: AI context was empty');
     else if (/## Docker engine/.test(k8sAiContext.context.text)) failures.push('kubernetes: AI context leaked Docker engine data');
     const installStatus = await window.opsdeck.kubernetes.installStatus();
     if (!installStatus?.ok || !installStatus.binDir) failures.push('kubernetes: install status bridge failed');
+    const k8sCommands = await window.opsdeck.kubernetes.commands({ section: 'pods' });
+    if (!k8sCommands?.ok || !Array.isArray(k8sCommands.commands) || !k8sCommands.commands.length) failures.push('kubernetes: command catalog bridge failed');
+    const mkStatus = await window.opsdeck.kubernetes.minikubeStatus();
+    if (!mkStatus?.ok || typeof mkStatus.running !== 'boolean') failures.push('kubernetes: Minikube status bridge failed');
     const k8sTools = await window.opsdeck.kubernetes.tools();
     const k8sContexts = await window.opsdeck.kubernetes.contexts();
     if (k8sContexts?.contexts?.length && k8sTools?.tools?.kubectl?.installed) {
