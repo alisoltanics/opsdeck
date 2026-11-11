@@ -61,7 +61,9 @@ function firstImage(item) {
 }
 
 function allImages(item) {
-  const containers = item?.spec?.template?.spec?.containers || [];
+  const containers = item?.spec?.template?.spec?.containers
+    || item?.spec?.containers
+    || [];
   return containers.map((container) => container.image).filter(Boolean);
 }
 

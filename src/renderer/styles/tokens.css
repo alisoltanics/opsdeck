@@ -16,26 +16,27 @@
 :root {
   color-scheme: dark;
 
-  /* Core background scale */
-  --bg: #070a11;
-  --bg-soft: #0a0e17;
-  --surface: #0d121c;
-  --surface-2: #111827;
-  --surface-3: #151e2e;
-  --surface-hover: #172033;
-  --overlay: #0b1019;
+  /* Core background scale — lifted off pure black so panels, cards and
+     dividers stay distinguishable on low-contrast displays. */
+  --bg: #0e141e;
+  --bg-soft: #121a25;
+  --surface: #18202d;
+  --surface-2: #1f2938;
+  --surface-3: #283547;
+  --surface-hover: #2e3d54;
+  --overlay: #141d29;
 
   /* Borders */
-  --border: #1b2537;
-  --border-soft: #141c2b;
-  --border-strong: #2a3850;
+  --border: #2f3c52;
+  --border-soft: #232e40;
+  --border-strong: #45587a;
   --border-focus: #2f8fe0;
 
   /* Text */
-  --text: #e9eefb;
-  --text-secondary: #b3c0d6;
-  --muted: #8593ac;
-  --faint: #5b6981;
+  --text: #f0f4fc;
+  --text-secondary: #ccd6e8;
+  --muted: #a1afc8;
+  --faint: #8595b0;
   --inverse: #08101c;
 
   /* Brand */

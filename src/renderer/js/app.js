@@ -14,7 +14,7 @@
   const WORKSPACES = [
     { id: 'docker', label: 'Docker', icon: 'box', tone: 'accent' },
     { id: 'kubernetes', label: 'Kubernetes', icon: 'cloud', tone: 'violet' },
-    { id: 'databases', label: 'Databases', icon: 'database', tone: 'orange', soon: true },
+    { id: 'databases', label: 'Databases', icon: 'database', tone: 'orange' },
     { id: 'observability', label: 'Observability', icon: 'activity', tone: 'cyan', soon: true },
   ];
 
@@ -126,11 +126,40 @@
     },
   ];
 
+  const DATABASES_NAV = [
+    {
+      label: 'Databases',
+      items: [
+        { id: 'databases', section: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: '#/databases/dashboard' },
+        { id: 'databases', section: 'connections', label: 'Connections', icon: 'plug', href: '#/databases/connections' },
+        { id: 'databases', section: 'explorer', label: 'Explorer', icon: 'folder-tree', href: '#/databases/explorer' },
+        { id: 'databases', section: 'editor', label: 'SQL editor', icon: 'terminal', href: '#/databases/editor' },
+        { id: 'databases', section: 'history', label: 'Query history', icon: 'history', href: '#/databases/history' },
+      ],
+    },
+    {
+      label: 'Where they run',
+      items: [
+        { id: 'databases', section: 'local', label: 'Local databases', icon: 'server', href: '#/databases/local' },
+        { id: 'databases', section: 'docker', label: 'Docker databases', icon: 'box', href: '#/databases/docker' },
+        { id: 'databases', section: 'kubernetes', label: 'Kubernetes databases', icon: 'cloud', href: '#/databases/kubernetes' },
+      ],
+    },
+    {
+      label: 'Operations',
+      items: [
+        { id: 'databases', section: 'performance', label: 'Performance', icon: 'activity', href: '#/databases/performance' },
+        { id: 'databases', section: 'diagnostics', label: 'Diagnostics', icon: 'stethoscope', href: '#/databases/diagnostics' },
+        { id: 'databases', section: 'activity', label: 'Activity log', icon: 'scroll-text', href: '#/databases/activity' },
+      ],
+    },
+  ];
+
   const PAGE_LABELS = {
     overview: 'Overview', containers: 'Containers', images: 'Images', compose: 'Compose',
     volumes: 'Volumes', networks: 'Networks', builds: 'Builds', registries: 'Registries',
     monitoring: 'Monitoring', events: 'Events', terminal: 'Terminal', settings: 'Settings',
-    academy: 'Academy', kubernetes: 'Kubernetes', notfound: 'Not found',
+    academy: 'Academy', kubernetes: 'Kubernetes', databases: 'Databases', notfound: 'Not found',
   };
 
   let currentView = null;
@@ -155,12 +184,17 @@
   }
 
   function workspaceIdForRoute(route) {
-    return route?.name === 'kubernetes' ? 'kubernetes' : 'docker';
+    if (route?.name === 'kubernetes') return 'kubernetes';
+    if (route?.name === 'databases') return 'databases';
+    return 'docker';
   }
 
   function routeLabel(route) {
     if (route.name === 'kubernetes') {
       return OD.views?.kubernetes?.label?.(route.parts[0] || 'overview') || titleCase(route.parts[0] || 'overview');
+    }
+    if (route.name === 'databases') {
+      return OD.views?.databases?.label?.(route.parts[0] || 'dashboard') || titleCase(route.parts[0] || 'dashboard');
     }
     if (route.name !== 'academy') return PAGE_LABELS[route.name] || titleCase(route.name);
     const section = route.parts[0];
@@ -179,6 +213,9 @@
     if (route.name === 'kubernetes') {
       const section = route.parts[0] || 'overview';
       return `<a class="crumb" href="#/kubernetes/overview">Kubernetes</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || titleCase(section))}</span>`;
+    }
+    if (route.name === 'databases') {
+      return `<a class="crumb" href="#/databases/dashboard">Databases</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || 'Dashboard')}</span>`;
     }
     if (route.name !== 'academy') {
       return `<span class="crumb">Docker</span>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route))}</span>`;
@@ -252,7 +289,7 @@
     }
     currentView = null;
 
-    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && !isDockerRoute(route.name)) {
+    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && !isDockerRoute(route.name)) {
       host.innerHTML = `<div class="page">${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no view for “${route.raw}”. Use the sidebar or the command palette to continue.`, action: `<a class="btn btn-primary btn-sm" href="#/overview">Open overview</a>` })}</div>`;
       applyChrome();
       return;
@@ -262,7 +299,9 @@
 
     currentView = route.name === 'academy'
       ? OD.views.academy
-      : route.name === 'kubernetes' ? OD.views.kubernetes : OD.views.docker;
+      : route.name === 'kubernetes' ? OD.views.kubernetes
+        : route.name === 'databases' ? OD.views.databases
+          : OD.views.docker;
     if (!currentView) {
       host.innerHTML = renderError(new Error('The view module did not load. Check the script order in index.html.'), route);
       applyChrome();
@@ -328,6 +367,19 @@
     </div>`;
   }
 
+  function databasesMini() {
+    const status = store.state.databases;
+    const total = status?.connections;
+    const connected = status?.connected || 0;
+    const label = total == null ? 'Databases' : total === 0 ? 'No connections' : `${connected}/${total} connected`;
+    const detail = total == null ? 'Open the Databases workspace' : `${total} saved profile${total === 1 ? '' : 's'} · ${connected} live session${connected === 1 ? '' : 's'}`;
+    return `<div class="engine-mini" role="status" title="${esc(detail)}">
+      <span class="dot ${connected ? 'ok' : 'bad'}"></span>
+      <span class="sidebar-footer-text">${esc(label)}</span>
+      <a class="icon-btn" href="#/databases/dashboard" title="Open database dashboard" aria-label="Open database dashboard">${icon('database', 12)}</a>
+    </div>`;
+  }
+
   function renderSidebar() {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
@@ -337,7 +389,7 @@
     document.getElementById('app').dataset.collapsed = collapsed ? 'true' : 'false';
     const workspaceId = workspaceIdForRoute(route);
     const workspace = WORKSPACES.find((w) => w.id === workspaceId) || WORKSPACES[0];
-    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : NAV;
+    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : workspaceId === 'databases' ? DATABASES_NAV : NAV;
     // The whole sidebar is repainted on every route change and store update.
     // Keep the reader exactly where they were instead of jumping to the top.
     const scroller = sidebar.querySelector('.sidebar-scroll');
@@ -377,14 +429,14 @@
               <span class="workspace-menu-name">${esc(w.label)}</span>
               ${w.id === workspaceId ? U.badge('active', 'green') : w.soon ? U.badge('planned', 'slate') : ''}
             </button>`).join('')}
-            <div class="workspace-menu-note">Docker and Kubernetes are live. The same shell, search and learning system will host databases and observability.</div>
+            <div class="workspace-menu-note">Docker, Kubernetes and Databases are live. The same shell, search and learning system will host observability.</div>
           </div>` : ''}
         </div>
       </div>
       <nav class="sidebar-scroll" aria-label="Primary">
         ${nav.map(navGroup).join('')}
       </nav>
-      ${workspaceId === 'kubernetes' ? kubernetesMini() : engineMini()}
+      ${workspaceId === 'kubernetes' ? kubernetesMini() : workspaceId === 'databases' ? databasesMini() : engineMini()}
       <div class="sidebar-footer">
         <a class="nav-item ${route.name === 'settings' ? 'active' : ''}" href="#/settings" title="Settings">
           ${icon('settings', 16)}<span class="nav-label">Settings</span>
@@ -626,7 +678,7 @@
     } else if (action === 'k8s-refresh') {
       renderRoute({ scroll: false });
     } else if (action === 'open-workspace') {
-      U.toast('That workspace is planned', 'info', { description: 'OpsDeck currently ships the Docker and Kubernetes workspaces plus the Academy. The shell is ready for databases and observability.' });
+      U.toast('That workspace is planned', 'info', { description: 'OpsDeck ships the Docker, Kubernetes and Databases workspaces plus the Academy. The shell is ready for observability.' });
     } else if (action === 'ai-ask') {
       if (OD.ai) OD.ai.openForCurrent();
       else U.toast('AI is unavailable in this build', 'warning');
@@ -687,6 +739,7 @@
       const target = WORKSPACES.find((w) => w.id === workspace.dataset.workspace);
       if (target?.id === 'docker') goto('#/overview');
       else if (target?.id === 'kubernetes') goto('#/kubernetes/overview');
+      else if (target?.id === 'databases') goto('#/databases/dashboard');
       else if (target) runGlobalAction('open-workspace');
       return;
     }

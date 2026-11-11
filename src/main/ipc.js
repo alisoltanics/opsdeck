@@ -12,10 +12,12 @@ const { AcademyStore } = require('./store');
 const { LabService } = require('./labs');
 const { AIService } = require('./ai');
 const { KubernetesService } = require('./kubernetes');
+const { DatabaseService } = require('./databases');
 
 function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
   const kubernetes = new KubernetesService({ app, dialog, getWindow });
+  const databases = new DatabaseService({ app, docker, kubernetes });
   const ai = new AIService({ app, content, kubernetes });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
@@ -245,6 +247,92 @@ function registerIpc({ getWindow, dialog, app }) {
     return store.setSetting(p.key, p.value);
   });
 
+  // ---------------- Database workspace ----------------
+  handle('db:bootstrap', () => databases.bootstrap());
+  handle('db:connections', () => ({ ok: true, connections: databases.listConnections(), stats: databases.store.stats() }));
+  handle('db:connection-save', (p) => databases.saveConnection(p || {}));
+  handle('db:connection-delete', (p) => databases.deleteConnection(p?.id));
+  handle('db:connection-duplicate', (p) => databases.duplicateConnection(p?.id));
+  handle('db:connection-favorite', (p) => databases.setFavorite(p?.id, p?.favorite === true));
+  handle('db:connection-test', (p) => databases.testConnection(p || {}));
+  handle('db:connection-connect', (p) => databases.openSession(p?.id).then((session) => ({ ok: true, status: databases.sessionStatus(p.id), info: session.info })));
+  handle('db:connection-disconnect', (p) => databases.disconnect(p?.id));
+  handle('db:connection-reconnect', (p) => databases.reconnect(p?.id));
+  handle('db:connections-export', () => databases.exportConnections());
+  handle('db:connections-import', (p) => databases.importConnections(p || {}));
+
+  handle('db:connections-export-file', async () => {
+    const payload = databases.exportConnections();
+    const chosen = await dialog.showSaveDialog(getWindow(), {
+      title: 'Export connection profiles',
+      defaultPath: 'opsdeck-databases.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(chosen.filePath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    return { ok: true, file: chosen.filePath, count: payload.connections.length };
+  });
+
+  handle('db:connections-import-file', async () => {
+    const chosen = await dialog.showOpenDialog(getWindow(), {
+      title: 'Import connection profiles',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (chosen.canceled || !chosen.filePaths?.[0]) return { ok: false, canceled: true };
+    const stat = fs.statSync(chosen.filePaths[0]);
+    if (stat.size > 4 * 1024 * 1024) return { ok: false, error: 'The import file is larger than 4 MB.' };
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(chosen.filePaths[0], 'utf8')); } catch { return { ok: false, error: 'The import file is not valid JSON.' }; }
+    return databases.importConnections(parsed);
+  });
+  handle('db:connection-diagnostics', (p) => databases.diagnostics(p?.id));
+  handle('db:connection-info', (p) => databases.serverInfo(p?.id));
+  handle('db:databases', (p) => databases.listDatabases(p?.id));
+  handle('db:explorer', (p) => databases.explorer(p || {}));
+  handle('db:table-data', (p) => databases.tableData(p || {}));
+  handle('db:query', (p) => databases.query(p || {}));
+  handle('db:explain', (p) => databases.explain(p || {}));
+  handle('db:cancel', (p) => databases.cancel(p || {}));
+  handle('db:metrics', (p) => databases.metrics(p?.id));
+  handle('db:discovery', (p) => databases.discover({ refresh: p?.refresh === true }));
+  handle('db:discovery-connect', (p) => databases.createFromDiscovery(p || {}));
+  handle('db:local-action', (p) => databases.localAction(p || {}));
+  handle('db:create-database', (p) => databases.createDatabase(p || {}));
+  handle('db:drop-database', (p) => databases.dropDatabase(p || {}));
+  handle('db:redis-scan', (p) => databases.redisScan(p || {}));
+  handle('db:redis-key', (p) => databases.redisKey(p || {}));
+  handle('db:redis-write', (p) => databases.redisWrite(p || {}));
+  handle('db:mongo-aggregate', (p) => databases.mongoAggregate(p || {}));
+  handle('db:history', (p) => databases.history(p || {}));
+  handle('db:history-clear', () => databases.clearHistory());
+  handle('db:activity', (p) => databases.activityList(p || {}));
+
+  handle('db:pick-sqlite', async () => {
+    const result = await dialog.showOpenDialog(getWindow(), {
+      title: 'Open SQLite database',
+      properties: ['openFile'],
+      filters: [{ name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3', 'db3'] }, { name: 'All files', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+    return { ok: true, file: result.filePaths[0] };
+  });
+
+  handle('db:export-result', async (p) => {
+    const format = ['csv', 'json', 'sql'].includes(p?.format) ? p.format : 'json';
+    let target = typeof p?.path === 'string' ? p.path : '';
+    if (!target) {
+      const chosen = await dialog.showSaveDialog(getWindow(), {
+        title: 'Export query results',
+        defaultPath: `query-results.${format === 'sql' ? 'sql' : format}`,
+        filters: [{ name: format.toUpperCase(), extensions: [format === 'sql' ? 'sql' : format] }],
+      });
+      if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+      target = chosen.filePath;
+    }
+    return databases.exportResult({ ...p, path: target, format });
+  });
+
   // ---------------- Labs ----------------
   handle('labs:status', () => labs.status());
   handle('labs:run', (p) => labs.run(p || {}));
@@ -259,6 +347,7 @@ function registerIpc({ getWindow, dialog, app }) {
     store.persistNow();
     exec.stopAll();
     ai.dispose();
+    databases.disposeAll().catch(() => {});
   });
 }
 

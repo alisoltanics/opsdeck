@@ -19,6 +19,10 @@
     "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
+    "ioredis": "^5.11.1",
+    "mongodb": "^6.22.0",
+    "mysql2": "^3.24.6",
+    "pg": "^8.23.1",
     "sql.js": "^1.13.0"
   },
   "devDependencies": {

@@ -62,6 +62,17 @@ const ROUTES = [
   ['kubernetes events', '#/kubernetes/events'],
   ['kubernetes console', '#/kubernetes/console'],
   ['kubernetes tools', '#/kubernetes/tools'],
+  ['databases dashboard', '#/databases/dashboard'],
+  ['databases connections', '#/databases/connections'],
+  ['databases explorer', '#/databases/explorer'],
+  ['databases editor', '#/databases/editor'],
+  ['databases history', '#/databases/history'],
+  ['databases local', '#/databases/local'],
+  ['databases docker', '#/databases/docker'],
+  ['databases kubernetes', '#/databases/kubernetes'],
+  ['databases performance', '#/databases/performance'],
+  ['databases diagnostics', '#/databases/diagnostics'],
+  ['databases activity', '#/databases/activity'],
   ['academy', '#/academy'],
   ['courses', '#/academy/courses'],
   ['course', '#/academy/course/docker-fundamentals'],
@@ -132,6 +143,40 @@ function rendererScript(routes) {
         if (text.includes(marker)) failures.push(name + ': ' + marker);
       }
       if (location.hash !== hash) failures.push(name + ': hash did not stay at ' + hash);
+    }
+
+    // Database workspace bridge: real service bootstrap, no credentials in IPC.
+    const dbBridge = window.opsdeck.databases;
+    if (!dbBridge) failures.push('databases: bridge is missing');
+    else {
+      const boot = await dbBridge.bootstrap();
+      if (!boot?.ok) failures.push('databases: bootstrap failed :: ' + (boot?.error || 'no result'));
+      else {
+        if (!Array.isArray(boot.engines) || boot.engines.length < 6) failures.push('databases: engine registry is missing engines');
+        if (boot.engines.some((engine) => engine.planned && engine.supported)) failures.push('databases: a planned engine is advertised as supported');
+        if (!boot.limits?.maxRows) failures.push('databases: row limit is missing');
+        if (!['os-keyring', 'aes-256-gcm'].includes(boot.vault?.backend)) failures.push('databases: vault backend is unknown');
+        if ((boot.connections || []).some((connection) => connection.secrets || 'password' in connection)) failures.push('databases: connection payload exposed credentials');
+      }
+      const discovery = await dbBridge.discovery(false);
+      if (!discovery?.ok) failures.push('databases: discovery failed :: ' + (discovery?.error || 'no result'));
+      else if (!discovery.docker || !discovery.local || !discovery.kubernetes) failures.push('databases: discovery is missing a source section');
+      const dbHistory = await dbBridge.history({ limit: 5 });
+      if (!dbHistory?.ok || !Array.isArray(dbHistory.items)) failures.push('databases: history bridge failed');
+      const dbActivity = await dbBridge.activity({ limit: 5 });
+      if (!dbActivity?.ok || !Array.isArray(dbActivity.items)) failures.push('databases: activity bridge failed');
+    }
+
+    // The workspace switcher must reach the Databases workspace.
+    document.querySelector('#workspace-btn')?.click();
+    if (!(await waitFor(() => !!document.querySelector('[data-workspace="databases"]'), 2500))) {
+      failures.push('workspace: Databases entry is missing');
+    } else {
+      document.querySelector('[data-workspace="databases"]')?.click();
+      const dbOpen = await waitFor(() => location.hash === '#/databases/dashboard'
+        && !!document.querySelector('#sidebar a[href="#/databases/dashboard"].active')
+        && document.querySelector('#view .page'), 8000);
+      if (!dbOpen) failures.push('workspace: Databases did not open');
     }
 
     // Reference live help should resolve (or explain why it cannot).
