@@ -968,6 +968,21 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 .drawer.drawer-fullscreen .drawer-foot { display: none; }
 .drawer.drawer-fullscreen .exec-pty { height: 100%; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
 
+/* Fullscreen command output and logs keep the footer so the exit control is reachable. */
+.drawer.drawer-fullscreen.output-fullscreen .drawer-foot { display: flex; }
+.drawer.drawer-fullscreen.output-fullscreen .drawer-body {
+  display: flex; flex-direction: column; overflow: hidden; min-height: 0;
+}
+.drawer.drawer-fullscreen.output-fullscreen .drawer-body > * { min-height: 0; }
+.drawer.drawer-fullscreen.output-fullscreen .drawer-body > .stack-2 { flex: 1 1 auto; }
+.drawer.drawer-fullscreen.output-fullscreen [data-k8s-logs-body] {
+  flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0;
+}
+.drawer.drawer-fullscreen.output-fullscreen .k8s-output {
+  flex: 1 1 auto; max-height: none; min-height: 0;
+  border: 0; border-radius: 0; background: transparent;
+}
+
 
 .log-view-wrap { position: relative; }
 .log-view {

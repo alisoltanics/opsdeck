@@ -492,12 +492,65 @@
     return `<div class="k8s-console-entry">
       <div class="k8s-console-entry-head">
         <code><span class="faint">$</span> ${esc(result?.command || command)}</code>
-        ${badge}
+        <span class="row gap-2" style="align-items:center;flex:0 0 auto">
+          ${badge}
+          ${U.iconButton({ icon: 'maximize', size: 13, label: 'View output fullscreen', attrs: 'data-k8s-console-expand' })}
+        </span>
       </div>
       ${body
         ? `<pre class="k8s-output">${esc(body)}</pre>`
         : `<div class="faint text-xs">${esc(result?.error || 'The command produced no output.')}</div>`}
     </div>`;
+  }
+
+  /**
+   * Let a drawer expand to the whole window so long command output and logs
+   * stay readable. Escape restores the side panel without closing the drawer.
+   */
+  function mountDrawerFullscreen(root) {
+    const panel = root.querySelector('.overlay-panel.drawer');
+    const button = root.querySelector('[data-drawer-expand]');
+    if (!panel) return;
+    let fullscreen = false;
+    const apply = () => {
+      panel.classList.toggle('drawer-fullscreen', fullscreen);
+      panel.classList.toggle('output-fullscreen', fullscreen);
+      if (button) {
+        button.innerHTML = `${icon(fullscreen ? 'shrink' : 'maximize', 12)}<span>${fullscreen ? 'Exit fullscreen' : 'Fullscreen'}</span>`;
+        button.title = fullscreen ? 'Exit fullscreen (Esc)' : 'View the output fullscreen';
+        button.setAttribute('aria-pressed', fullscreen ? 'true' : 'false');
+      }
+    };
+    button?.addEventListener('click', () => {
+      fullscreen = !fullscreen;
+      apply();
+    });
+    root.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && fullscreen) {
+        event.preventDefault();
+        event.stopPropagation();
+        fullscreen = false;
+        apply();
+      }
+    }, true);
+  }
+
+  function openCommandOutput(result = {}) {
+    const text = [result.stdout, result.stderr].filter((value) => String(value || '').trim()).join('\n');
+    U.drawer({
+      eyebrow: 'kubectl',
+      title: 'Command output',
+      subtitle: result.ok ? 'Completed' : 'Failed',
+      icon: 'terminal',
+      width: '860px',
+      body: commandOutputBody(result),
+      footer: `<div class="row gap-2">
+        ${U.button({ label: 'Fullscreen', icon: 'maximize', size: 'sm', attrs: 'data-drawer-expand', title: 'View the output fullscreen' })}
+        ${U.button({ label: 'Copy output', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(text)}"` })}
+        ${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}
+      </div>`,
+      onMount: ({ root }) => mountDrawerFullscreen(root),
+    });
   }
 
   async function runCommandFromUi(button, command, tone = 'read') {
@@ -515,15 +568,7 @@
     busy(button, true, 'Running…');
     try {
       const result = await api.kubernetes.runCommand({ command });
-      U.drawer({
-        eyebrow: 'kubectl',
-        title: 'Command output',
-        subtitle: result?.ok ? 'Completed' : 'Failed',
-        icon: 'terminal',
-        width: '860px',
-        body: commandOutputBody(result),
-        footer: `<div class="row gap-2">${U.button({ label: 'Copy output', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc([result?.stdout, result?.stderr].filter((text) => String(text || '').trim()).join('\n'))}"` })}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
-      });
+      openCommandOutput(result);
       if (result?.ok) U.toast('Command finished', 'success', { description: result.command });
       else U.toast('Command failed', 'error', { description: result?.stderr || result?.error || 'Check the output.' });
     } catch (error) {
@@ -871,11 +916,13 @@
       footer: `<div class="row gap-2" style="width:100%">
         ${OD.ai ? OD.ai.button({ kind: 'k8s-resource', section: 'pods', name, namespace }, { label: 'Ask AI', size: 'sm' }) : ''}
         <span class="toolbar-spacer"></span>
+        ${U.button({ label: 'Fullscreen', icon: 'maximize', size: 'sm', attrs: 'data-drawer-expand', title: 'View the logs fullscreen' })}
         ${U.button({ label: 'Open shell', icon: 'terminal', size: 'sm', attrs: 'data-k8s-logs-shell' })}
         ${U.button({ label: 'Previous instance', icon: 'history', size: 'sm', attrs: 'data-k8s-logs-previous' })}
         ${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}
       </div>`,
       onMount: ({ root, close, body }) => {
+        mountDrawerFullscreen(root);
         root.querySelector('[data-k8s-logs-shell]')?.addEventListener('click', () => {
           close('shell');
           showPodShell({ name, namespace });
@@ -1426,6 +1473,7 @@
   }
 
   function mount(root) {
+    let consoleResult = null;
     if (OD.kubernetesTopology && root.querySelector('[data-topo-map]')) {
       OD.kubernetesTopology.mount(root, {
         openResourceDrawer,
@@ -1435,6 +1483,10 @@
     }
     root.addEventListener('click', async (event) => {
       if (event.target.closest('[data-copy-text], .code-copy')) return;
+      if (event.target.closest('[data-k8s-console-expand]') && consoleResult) {
+        openCommandOutput(consoleResult);
+        return;
+      }
       const installBtn = event.target.closest('[data-k8s-install-tools]');
       if (installBtn) {
         await startInstall(installBtn);
@@ -1577,6 +1629,7 @@
       busy(runBtn, true, 'Running…');
       try {
         const result = await api.kubernetes.runCommand({ command });
+        consoleResult = result;
         output.innerHTML = consoleEntry(command, result);
         if (!result?.ok) U.toast('Command failed', 'error', { description: result?.stderr || result?.error || 'Check the output.' });
         if (input) {

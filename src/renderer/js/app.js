@@ -338,6 +338,12 @@
     const workspaceId = workspaceIdForRoute(route);
     const workspace = WORKSPACES.find((w) => w.id === workspaceId) || WORKSPACES[0];
     const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : NAV;
+    // The whole sidebar is repainted on every route change and store update.
+    // Keep the reader exactly where they were instead of jumping to the top.
+    const scroller = sidebar.querySelector('.sidebar-scroll');
+    const scrollTop = scroller ? scroller.scrollTop : 0;
+    const switchedWorkspace = Boolean(sidebar.dataset.navWorkspace) && sidebar.dataset.navWorkspace !== workspaceId;
+    sidebar.dataset.navWorkspace = workspaceId;
 
     const navGroup = (group) => `<div class="sidebar-section">
       <div class="sidebar-section-label">${esc(group.label)}</div>
@@ -385,6 +391,11 @@
         </a>
         <div class="sidebar-footer-text" style="padding:8px 10px 0;font-size:9.5px;color:var(--faint)">v${esc(store.state.info?.version || '1.0.0')} · local-first</div>
       </div>`;
+
+    if (scrollTop && !switchedWorkspace) {
+      const nextScroller = sidebar.querySelector('.sidebar-scroll');
+      if (nextScroller) nextScroller.scrollTop = scrollTop;
+    }
   }
 
   function renderTopbar() {
