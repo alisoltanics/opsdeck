@@ -1457,14 +1457,17 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 }
 .ai-answer a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
 .ai-answer[dir="rtl"], .ai-bubble[dir="rtl"], .ai-answer [dir="rtl"] { text-align: right; }
-.ai-answer[dir="rtl"] ul, .ai-answer[dir="rtl"] ol { padding-left: 0; padding-right: 19px; }
-.ai-answer[dir="rtl"] blockquote {
+.ai-answer ul, .ai-answer ol { padding-left: 0; padding-inline-start: 19px; }
+.ai-answer li[dir="rtl"] { text-align: right; }
+.ai-answer ul[dir="rtl"], .ai-answer ol[dir="rtl"] { padding-inline-start: 19px; padding-inline-end: 0; }
+.ai-input, .ai-choice-model input { unicode-bidi: plaintext; text-align: start; }
+.ai-answer[dir="rtl"] blockquote, .ai-answer blockquote[dir="rtl"] {
   border-left: 0;
   border-right: 2px solid var(--violet);
   border-radius: var(--r-sm) 0 0 var(--r-sm);
 }
 .ai-answer[dir="rtl"] code, .ai-answer[dir="rtl"] pre { direction: ltr; unicode-bidi: isolate; }
-.ai-answer[dir="rtl"] pre { text-align: left; }
+.ai-answer[dir="rtl"] pre, .ai-answer pre { text-align: left; direction: ltr; }
 .ai-msg-meta {
   display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
   margin-top: 7px;

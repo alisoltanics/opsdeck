@@ -30,6 +30,7 @@ linux:
   target:
     - dir
     - AppImage
+    - deb
   executableName: opsdeck
   # Allow launching from the desktop shell on distributions where Chrome's
   # setuid sandbox helper cannot be installed root-owned/4755 (e.g. per-user
@@ -54,6 +55,10 @@ linux:
       StartupNotify: "true"
       Terminal: "false"
       Type: Application
+
+deb:
+  artifactName: opsdeck_${version}_${arch}.${ext}
+  afterInstall: build/deb-postinst.sh
 
 appImage:
   artifactName: OpsDeck-${version}-${arch}.${ext}

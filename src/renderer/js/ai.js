@@ -16,7 +16,7 @@
 
   const MAX_SESSIONS = 12;
   const MAX_MESSAGES = 40;
-  const KINDS = new Set(['container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource']);
+  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource']);
 
   const state = {
     config: null,
@@ -38,6 +38,9 @@
     if (route.name === 'kubernetes') {
       return { kind: 'kubernetes', page: route.parts?.[0] || 'overview' };
     }
+    if (route.name === 'databases') {
+      return { kind: 'database', page: route.parts?.[0] || 'dashboard', id: route.query?.get?.('connection') || '' };
+    }
     return { kind: 'page', page: route.name || 'overview' };
   }
 
@@ -52,6 +55,8 @@
   function targetTitle(target) {
     if (!target) return 'OpsDeck AI';
     if (target.kind === 'kubernetes') return `Kubernetes · ${titleCase(target.page || 'overview')}`;
+    if (target.kind === 'database') return `Databases · ${titleCase(target.page || 'dashboard')}`;
+    if (target.kind === 'db-object') return target.name || 'Database object';
     if (target.kind === 'k8s-resource') return target.name || 'Kubernetes object';
     if (target.name) return target.name;
     if (target.kind === 'container') return `Container ${shortId(target.id || '', 12)}`;
@@ -99,7 +104,9 @@
     if (!ask) return null;
     if (ask === 'current') return routeTarget(currentRoute());
     if (!KINDS.has(ask)) return null;
+    const extra = (ask === 'database' || ask === 'db-object') ? (OD.views?.databases?.aiTarget?.() || {}) : {};
     return {
+      ...extra,
       kind: ask,
       id: el.dataset.aiId || '',
       name: el.dataset.aiName || '',
@@ -235,6 +242,42 @@
       ${tool.installed && tool.authenticated === false ? signedOutHint : ''}`;
   }
 
+  let settingsModelsSeq = 0;
+
+  // Fill the settings model suggestions as soon as a provider is chosen, so the
+  // list is there without pressing "Detect models".
+  async function loadSettingsModels(form, transport) {
+    const datalist = form.querySelector('#ai-model-options');
+    if (!datalist || !api?.ai?.models) return;
+    const seq = ++settingsModelsSeq;
+    const base = form.querySelector('#ai-set-base');
+    const key = form.querySelector('#ai-set-key');
+    try {
+      const res = await api.ai.models({
+        transport,
+        baseUrl: transport === 'api' ? (base?.value.trim() || undefined) : undefined,
+        apiKey: transport === 'api' ? (key?.value || undefined) : undefined,
+      });
+      if (seq !== settingsModelsSeq || !res?.ok || !datalist.isConnected) return;
+      datalist.innerHTML = (res.models || []).map((item) => `<option value="${esc(item)}"></option>`).join('');
+    } catch { /* suggestions are optional */ }
+  }
+
+  // A datalist only offers options matching the current text, so a prefilled
+  // model hides every other model. Clear it while the field has focus.
+  document.addEventListener('focusin', (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || !input.getAttribute('list') || !input.matches('[data-ai-model], [data-ai-chat-model]')) return;
+    input.dataset.prevValue = input.value;
+    input.value = '';
+  });
+  document.addEventListener('focusout', (event) => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && input.matches('[data-ai-model], [data-ai-chat-model]') && input.value === '' && input.dataset.prevValue) {
+      input.value = input.dataset.prevValue;
+    }
+  });
+
   function applyTransportForm(form, config) {
     const select = form.querySelector('[data-ai-transport]');
     const id = select?.value || config?.transport || 'api';
@@ -250,6 +293,7 @@
     const note = form.querySelector('[data-ai-transport-note]');
     if (note) note.textContent = transportNote(config, id);
     if (info.cli) paintCliStatus(form, id);
+    loadSettingsModels(form, id);
     return id;
   }
 
@@ -603,13 +647,13 @@
       const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
       if (bullet) {
         if (list !== 'ul') { closeList(); out.push(`<ul${dirAttr(bullet[1])}>`); list = 'ul'; }
-        out.push(`<li>${inline(bullet[1])}</li>`);
+        out.push(`<li${dirAttr(bullet[1])}>${inline(bullet[1])}</li>`);
         continue;
       }
       const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
       if (ordered) {
         if (list !== 'ol') { closeList(); out.push(`<ol${dirAttr(ordered[1])}>`); list = 'ol'; }
-        out.push(`<li>${inline(ordered[1])}</li>`);
+        out.push(`<li${dirAttr(ordered[1])}>${inline(ordered[1])}</li>`);
         continue;
       }
       closeList();
@@ -836,7 +880,7 @@
       </div>`,
       footer: `<form class="ai-composer" id="ai-form" autocomplete="off">
         <div class="ai-composer-box">
-          <textarea class="ai-input" id="ai-question" rows="2" placeholder="Ask about this resource…" aria-label="Ask OpsDeck AI about this resource"></textarea>
+          <textarea class="ai-input" id="ai-question" dir="auto" rows="2" placeholder="Ask about this resource…" aria-label="Ask OpsDeck AI about this resource"></textarea>
           <div class="ai-composer-actions">
             <span class="ai-composer-hint">Enter to send · Shift+Enter for a new line</span>
             <button type="button" class="btn btn-sm btn-ghost" data-ai-stop hidden>${icon('square', 12)}<span>Stop</span></button>

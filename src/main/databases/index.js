@@ -14,7 +14,7 @@ const registry = require('./registry');
 const { SecretVault } = require('./vault');
 const { DatabaseStore, sanitizeMessage } = require('./store');
 const { createAdapter } = require('./adapters');
-const { isReadOnlySql, splitStatements, safeError, boundedLimit, boundedOffset } = require('./adapters/util');
+const { isReadOnlySql, splitStatements, safeError, explainConnectionError, boundedLimit, boundedOffset } = require('./adapters/util');
 const discovery = require('./discovery');
 const { startKubernetesTunnel } = require('./tunnel');
 
@@ -373,7 +373,7 @@ class DatabaseService {
     } catch (error) {
       try { await adapter.dispose(); } catch { /* ignore */ }
       if (tunnel) tunnel.stop();
-      const message = safeError(error, 'Could not connect.');
+      const message = explainConnectionError(error, effective);
       this.store.markConnected(id, { ok: false, error: message, at: new Date().toISOString() });
       if (!quiet) {
         this.activity({
@@ -482,7 +482,7 @@ class DatabaseService {
       }
       return result;
     } catch (error) {
-      const message = safeError(error, 'The connection test failed.');
+      const message = explainConnectionError(error, profile);
       if (payload.id) {
         this.store.markConnected(payload.id, { ok: false, error: message, at: new Date().toISOString() });
         this.activity({
@@ -625,6 +625,54 @@ class DatabaseService {
     }
     const data = await adapter.explorer(database);
     return { ok: true, engine: engine.id, ...data };
+  }
+
+  /**
+   * Compact schema digest for AI query generation. Only table/column names and
+   * types leave the main process — never credentials, connection strings or rows.
+   */
+  async aiSchema(payload = {}) {
+    const session = await this.openSession(payload.id);
+    const engine = registry.get(session.profile.engine);
+    if (!engine.capabilities?.sql) {
+      return {
+        ok: false,
+        error: `${engine.label} does not use SQL. AI query generation is available for PostgreSQL, MySQL, MariaDB and SQLite.`,
+      };
+    }
+    const database = clean(payload.database, 128) || session.profile.database || '';
+    const data = await session.adapter.explorer(database);
+    const relations = (data.relations || []).filter((relation) => relation && relation.name);
+    const columns = data.columns || [];
+    const lines = [];
+    for (const relation of relations.slice(0, 400)) {
+      const kind = String(relation.kind || 'table').toLowerCase();
+      if (!['table', 'base table', 'view', 'materialized view', 'foreign table'].includes(kind)) continue;
+      const cols = columns
+        .filter((column) => column.table === relation.name
+          && (!column.schema || !relation.schema || column.schema === relation.schema))
+        .map((column) => {
+          const type = column.type || column.data_type || '';
+          const bits = [column.name, type].filter(Boolean).join(' ');
+          return [
+            bits,
+            column.nullable === 'NO' ? 'not null' : '',
+            String(column.key || '').toUpperCase() === 'PRI' ? 'primary key' : '',
+          ].filter(Boolean).join(' ');
+        });
+      const label = relation.schema ? `${relation.schema}.${relation.name}` : relation.name;
+      const suffix = kind === 'table' || kind === 'base table' ? '' : ` (${kind})`;
+      lines.push(`- ${label}${suffix}${cols.length ? `: ${cols.join(', ')}` : ''}`);
+    }
+    return {
+      ok: true,
+      engine: engine.dialect || engine.id,
+      label: engine.label,
+      database: data.database || database,
+      connection: session.profile.name,
+      schema: lines.join('\n'),
+      tables: lines.length,
+    };
   }
 
   async tableData(payload = {}) {

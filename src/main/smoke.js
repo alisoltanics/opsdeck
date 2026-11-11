@@ -113,7 +113,7 @@ function rendererScript(routes) {
     }
     if (window.OD.store.state.bootError) failures.push('academy bootstrap: ' + window.OD.store.state.bootError);
 
-    await waitFor(() => document.querySelector('#view .page') && !document.getElementById('view').innerText.includes('Loading workspace'), 8000);
+    await waitFor(() => document.querySelector('#view .page') && !document.querySelector('#view [aria-busy="true"]'), 8000);
 
     const errorMarkers = [
       'This view could not be rendered',
@@ -130,12 +130,12 @@ function rendererScript(routes) {
         const view = document.getElementById('view');
         if (!view) return false;
         const text = view.innerText || '';
-        return text.length > 40 && !text.includes('Loading workspace');
+        return text.length > 40 && !document.querySelector('#view [aria-busy="true"]');
       }, 12000);
       await sleep(30);
       const view = document.getElementById('view');
       const text = view ? (view.innerText || '') : '';
-      const stillSettled = window.OD.store.state.route?.raw === expectedRaw && text.length > 40 && !text.includes('Loading workspace');
+      const stillSettled = window.OD.store.state.route?.raw === expectedRaw && text.length > 40 && !document.querySelector('#view [aria-busy="true"]');
       if (!settled || !stillSettled) failures.push(name + ': did not settle (' + text.slice(0, 120).replace(/\\s+/g, ' ') + ')');
       if (!view || !view.querySelector('.page')) failures.push(name + ': no .page rendered');
       if (text.trim().length < 40) failures.push(name + ': rendered an empty page (html ' + (view ? view.innerHTML.length : 0) + ' bytes)');

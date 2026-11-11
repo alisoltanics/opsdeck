@@ -172,6 +172,26 @@
 
   // ------------------------------------------------------------------ routing
 
+  // The last page is remembered so reopening the app lands on the same
+  // workspace (Docker, Kubernetes or Databases) instead of the overview.
+  const LAST_ROUTE_KEY = 'opsdeck:last-route';
+
+  function rememberRoute() {
+    try {
+      const hash = String(location.hash || '');
+      if (/^#\/[a-z][\w/-]*(\?[\w=&%.:-]*)?$/i.test(hash)) localStorage.setItem(LAST_ROUTE_KEY, hash);
+    } catch { /* storage may be unavailable; the app still works */ }
+  }
+
+  function savedRoute() {
+    try {
+      const hash = localStorage.getItem(LAST_ROUTE_KEY) || '';
+      return /^#\/[a-z][\w/-]*(\?[\w=&%.:-]*)?$/i.test(hash) ? hash : '';
+    } catch {
+      return '';
+    }
+  }
+
   function parseHash() {
     const raw = String(location.hash || '').replace(/^#\/?/, '');
     const [path, query = ''] = raw.split('?');
@@ -183,10 +203,26 @@
     return ['overview', 'containers', 'images', 'compose', 'volumes', 'networks', 'builds', 'registries', 'monitoring', 'events', 'terminal', 'settings'].includes(name);
   }
 
+  // Settings is shared by every workspace, so it keeps whichever workspace the
+  // user came from instead of falling back to Docker.
+  const WORKSPACE_KEY = 'opsdeck:last-workspace';
+  let currentWorkspace = (() => {
+    try {
+      const stored = localStorage.getItem(WORKSPACE_KEY);
+      return stored === 'kubernetes' || stored === 'databases' ? stored : 'docker';
+    } catch { return 'docker'; }
+  })();
+
   function workspaceIdForRoute(route) {
-    if (route?.name === 'kubernetes') return 'kubernetes';
-    if (route?.name === 'databases') return 'databases';
-    return 'docker';
+    let id = currentWorkspace;
+    if (route?.name === 'kubernetes') id = 'kubernetes';
+    else if (route?.name === 'databases') id = 'databases';
+    else if (route?.name !== 'settings') id = 'docker';
+    if (id !== currentWorkspace) {
+      currentWorkspace = id;
+      try { localStorage.setItem(WORKSPACE_KEY, id); } catch { /* optional */ }
+    }
+    return id;
   }
 
   function routeLabel(route) {
@@ -295,7 +331,17 @@
       return;
     }
 
-    host.innerHTML = `<div class="page" style="padding:30px 0">${U.loader('Loading workspace…')}</div>`;
+    // In-page refreshes keep the current content until the new render is ready,
+    // so a click never blanks the page. Real navigation shows a named loader.
+    if (options.scroll === false && previous && previous.childElementCount) {
+      host.innerHTML = previous.innerHTML;
+    } else {
+      const label = routeLabel(route) || titleCase(route.name);
+      host.innerHTML = `<div class="page" aria-busy="true" role="status">
+        <div class="page-head"><div class="page-head-left"><h1 class="page-title">${esc(label)}</h1></div></div>
+        ${U.loader(`Loading ${label}…`)}${U.skeleton({ lines: 5 })}
+      </div>`;
+    }
 
     currentView = route.name === 'academy'
       ? OD.views.academy
@@ -809,6 +855,7 @@
     window.addEventListener('hashchange', () => {
       closePalette();
       workspaceMenuOpen = false;
+      rememberRoute();
       renderRoute();
     });
 
@@ -880,7 +927,7 @@
       return;
     }
     applyChrome();
-    if (!location.hash) location.hash = '#/overview';
+    if (!location.hash) location.hash = savedRoute() || '#/overview';
     await renderRoute();
     setMaximizedState();
     startPolling();

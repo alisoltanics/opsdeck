@@ -42,11 +42,13 @@
     selected: { explorer: '', editor: '', performance: '', diagnostics: '' },
     explorer: {
       database: '', data: null, loading: false, error: '', filter: '',
-      detail: null, key: '', redis: { keys: [], cursor: '0', pattern: '*', loaded: false },
+      detail: null, key: '', expanded: {},
+      redis: { keys: [], cursor: '0', pattern: '*', loaded: false },
     },
     editor: {
       sql: '', result: null, error: '', running: false, token: '', explain: null,
       database: '', durationMs: null, view: 'table', page: 0, search: '', sort: null,
+      ai: { prompt: '', loading: false, error: '', text: '', sql: '', orm: '', variants: [], variant: 0, provider: '', model: '', unconfigured: false },
     },
     perf: { data: null, loading: false, error: '', interval: 0, history: [] },
     diag: { data: null, loading: false, error: '' },
@@ -56,6 +58,52 @@
 
   let perfTimer = null;
   let pendingSource = null;
+
+  // Selected connections, databases and tree expansion survive app restarts.
+  const STATE_KEY = 'opsdeck:databases:state';
+  const MAX_EXPANDED_KEYS = 400;
+
+  function readDbState() {
+    try {
+      const raw = localStorage.getItem(STATE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function persistDbState() {
+    try {
+      const expanded = Object.entries(S.explorer.expanded).slice(-MAX_EXPANDED_KEYS);
+      localStorage.setItem(STATE_KEY, JSON.stringify({
+        selected: S.selected,
+        explorerDatabase: S.explorer.database,
+        editorDatabase: S.editor.database,
+        expanded: Object.fromEntries(expanded),
+      }));
+    } catch {
+      /* localStorage can be unavailable; the workspace still works in memory. */
+    }
+  }
+
+  function applyPersistedDbState() {
+    const saved = readDbState();
+    if (!saved) return;
+    const ids = new Set(S.connections.map((connection) => connection.id));
+    for (const section of ['explorer', 'editor', 'performance', 'diagnostics']) {
+      const id = saved.selected?.[section];
+      if (id && ids.has(id)) S.selected[section] = id;
+    }
+    if (saved.explorerDatabase) S.explorer.database = String(saved.explorerDatabase);
+    if (saved.editorDatabase) S.editor.database = String(saved.editorDatabase);
+    if (saved.expanded && typeof saved.expanded === 'object') {
+      for (const [key, value] of Object.entries(saved.expanded)) {
+        if (value === true || value === false) S.explorer.expanded[key] = value;
+      }
+    }
+  }
 
   // ---------------------------------------------------------------- helpers
   function engineMeta(id) {
@@ -78,6 +126,14 @@
     return `${Math.floor(value / 60000)}m ${Math.round((value % 60000) / 1000)}s`;
   }
 
+  function aiPageButton() {
+    if (!OD.ai) return '';
+    const parts = (location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean)).slice(1);
+    const section = parts[0] || 'dashboard';
+    const id = S.selected[section] || S.selected.explorer || '';
+    return OD.ai.button({ kind: 'database', page: section, id }, { label: 'Ask AI', title: 'Ask AI about this database view with live context' });
+  }
+
   function pageHead(opts) {
     return `<div class="page-head">
       <div class="page-head-left">
@@ -85,7 +141,7 @@
         <h1 class="page-title">${esc(opts.title)}</h1>
         ${opts.sub ? `<p class="page-sub">${esc(opts.sub)}</p>` : ''}
       </div>
-      <div class="page-actions">${opts.actions || ''}</div>
+      <div class="page-actions">${opts.actions || ''}${aiPageButton()}</div>
     </div>`;
   }
 
@@ -182,6 +238,7 @@
     S.limits = res.limits || S.limits;
     S.booted = true;
     S.bootError = '';
+    applyPersistedDbState();
     for (const connection of S.connections) {
       if (!S.selected.explorer) S.selected.explorer = connection.id;
       if (!S.selected.editor) S.selected.editor = connection.id;
@@ -307,6 +364,7 @@
           await loadMetrics(connectionId);
         }
       }
+      persistDbState();
     }
   }
 
@@ -335,6 +393,7 @@
     S.perf.error = '';
     try {
       const res = await api.databases.metrics(connectionId);
+      if (res?.ok === false) throw new Error(res.error || 'The metrics could not be read.');
       S.perf.data = res;
       if (res?.available) {
         S.perf.history.push({
@@ -568,9 +627,31 @@
     return relationalTree(data, connection);
   }
 
+  // Expansion defaults mirror the explorer: schemas and their table list are
+  // open, everything else starts collapsed. A user toggle is remembered in
+  // S.explorer.expanded (and localStorage) so rerenders never reopen a group.
+  function nodeExpanded(key, fallback = false) {
+    if (!key) return fallback;
+    const stored = S.explorer.expanded[key];
+    return stored === undefined ? fallback : stored === true;
+  }
+
+  function objectActive(kind, schema, name) {
+    const detail = S.explorer.detail;
+    if (!detail || detail.loading) return false;
+    return detail.kind === kind
+      && detail.name === name
+      && String(detail.schema || '') === String(schema || '');
+  }
+
   function treeNode(opts) {
-    return `<div class="db-node ${opts.class || ''}">
-      <button type="button" class="db-node-main" ${opts.attrs || ''}>
+    const hasChildren = Boolean(opts.children);
+    const open = hasChildren && nodeExpanded(opts.key, opts.open === true);
+    const attrs = [opts.attrs || ''];
+    if (opts.key) attrs.push(`data-db-node-key="${esc(opts.key)}"`);
+    if (hasChildren) attrs.push(`aria-expanded="${open ? 'true' : 'false'}"`);
+    return `<div class="db-node${open ? ' open' : ''}">
+      <button type="button" class="db-node-main${opts.active ? ' active' : ''}" ${attrs.filter(Boolean).join(' ')}>
         ${icon(opts.icon || 'chevron-right', 12, 'db-node-chevron')}
         ${icon(opts.objectIcon || 'table', 13)}
         <span class="db-node-label" title="${esc(opts.title || opts.label || '')}">${esc(opts.label || '')}</span>
@@ -605,47 +686,50 @@
         label: schema,
         icon: 'folder',
         objectIcon: 'folder-tree',
-        class: 'open',
+        key: `schema:${schema}`,
+        open: true,
         badge: `${schemaRelations.length}`,
         children: [
           treeNode({
-            label: 'Tables', icon: 'chevron-down', objectIcon: 'table', class: 'open', badge: `${tables.length}`,
+            label: 'Tables', icon: 'chevron-down', objectIcon: 'table', key: `schema:${schema}:tables`, open: true, badge: `${tables.length}`,
             children: tables.map((table) => treeNode({
               label: table.name,
               icon: 'chevron-right',
               objectIcon: 'table',
+              active: objectActive('table', schema, table.name),
               badge: table.row_estimate != null ? fmtNumber(table.row_estimate) : '',
               attrs: `data-db-object="table" data-schema="${esc(schema)}" data-name="${esc(table.name)}"`,
             })).join('') || '<div class="db-node-empty">No tables</div>',
           }),
           views.length ? treeNode({
-            label: 'Views', icon: 'chevron-down', objectIcon: 'eye', class: 'open', badge: `${views.length}`,
+            label: 'Views', icon: 'chevron-down', objectIcon: 'eye', key: `schema:${schema}:views`, badge: `${views.length}`,
             children: views.map((view) => treeNode({
               label: view.name, icon: 'chevron-right', objectIcon: 'eye',
+              active: objectActive('view', schema, view.name),
               attrs: `data-db-object="view" data-schema="${esc(schema)}" data-name="${esc(view.name)}"`,
             })).join(''),
           }) : '',
           schemaIndexes.length ? treeNode({
-            label: 'Indexes', icon: 'chevron-down', objectIcon: 'list-tree', class: 'open', badge: `${schemaIndexes.length}`,
+            label: 'Indexes', icon: 'chevron-down', objectIcon: 'list-tree', key: `schema:${schema}:indexes`, badge: `${schemaIndexes.length}`,
             children: schemaIndexes.slice(0, 300).map((index) => treeNode({
               label: index.name, title: index.definition || '', icon: 'chevron-right', objectIcon: 'list-tree',
             })).join(''),
           }) : '',
           schemaRoutines.length ? treeNode({
-            label: 'Functions & procedures', icon: 'chevron-down', objectIcon: 'function-square', class: 'open', badge: `${schemaRoutines.length}`,
+            label: 'Functions & procedures', icon: 'chevron-down', objectIcon: 'function-square', key: `schema:${schema}:routines`, badge: `${schemaRoutines.length}`,
             children: schemaRoutines.slice(0, 200).map((routine) => treeNode({
               label: `${routine.name}${routine.arguments ? `(${routine.arguments})` : ''}`, icon: 'chevron-right',
               objectIcon: routine.kind === 'procedure' ? 'square-function' : 'function-square',
             })).join(''),
           }) : '',
           schemaTriggers.length ? treeNode({
-            label: 'Triggers', icon: 'chevron-down', objectIcon: 'zap', class: 'open', badge: `${schemaTriggers.length}`,
+            label: 'Triggers', icon: 'chevron-down', objectIcon: 'zap', key: `schema:${schema}:triggers`, badge: `${schemaTriggers.length}`,
             children: schemaTriggers.slice(0, 200).map((trigger) => treeNode({
               label: `${trigger.table || ''}${trigger.table ? ' · ' : ''}${trigger.name}`, icon: 'chevron-right', objectIcon: 'zap',
             })).join(''),
           }) : '',
           schemaSequences.length ? treeNode({
-            label: 'Sequences', icon: 'chevron-down', objectIcon: 'hash', class: 'open', badge: `${schemaSequences.length}`,
+            label: 'Sequences', icon: 'chevron-down', objectIcon: 'hash', key: `schema:${schema}:sequences`, badge: `${schemaSequences.length}`,
             children: schemaSequences.slice(0, 200).map((sequence) => treeNode({
               label: sequence.name, icon: 'chevron-right', objectIcon: 'hash',
             })).join(''),
@@ -656,14 +740,14 @@
 
     const databaseLevel = [
       users.length ? treeNode({
-        label: 'Users & roles', icon: 'chevron-right', objectIcon: 'users', badge: `${users.length}`,
+        label: 'Users & roles', icon: 'chevron-right', objectIcon: 'users', key: 'database:users', badge: `${users.length}`,
         children: users.slice(0, 200).map((user) => treeNode({
           label: `${user.name}${user.superuser ? ' · superuser' : ''}`, icon: 'chevron-right', objectIcon: 'user',
           title: roleMembers.filter((member) => member.member === user.name).map((member) => member.role).join(', '),
         })).join(''),
       }) : '',
       extensions.length ? treeNode({
-        label: 'Extensions', icon: 'chevron-right', objectIcon: 'puzzle', badge: `${extensions.length}`,
+        label: 'Extensions', icon: 'chevron-right', objectIcon: 'puzzle', key: 'database:extensions', badge: `${extensions.length}`,
         children: extensions.map((extension) => treeNode({ label: `${extension.name} ${extension.version || ''}`.trim(), icon: 'chevron-right', objectIcon: 'puzzle' })).join(''),
       }) : '',
     ].join('');
@@ -678,6 +762,7 @@
         label: collection.name,
         icon: 'chevron-right',
         objectIcon: collection.kind === 'view' ? 'eye' : 'box',
+        active: objectActive(collection.kind || 'collection', '', collection.name),
         badge: collection.count != null ? fmtNumber(collection.count) : '',
         attrs: `data-db-object="${esc(collection.kind || 'collection')}" data-name="${esc(collection.name)}"`,
       })).join('') || '<div class="db-node-empty">No collections</div>'}
@@ -692,6 +777,7 @@
         label: index.name,
         icon: 'chevron-right',
         objectIcon: 'layers',
+        active: objectActive('index', '', index.name),
         badge: index.documents != null ? fmtNumber(index.documents) : '',
         attrs: `data-db-object="index" data-name="${esc(index.name)}"`,
       })).join('') || '<div class="db-node-empty">No indices</div>'}
@@ -705,6 +791,7 @@
         label: key.key,
         icon: 'chevron-right',
         objectIcon: redisIcon(key.type),
+        active: objectActive('redis-key', '', key.key),
         badge: key.ttl > 0 ? `${key.ttl}s` : '',
         title: `${key.type} · ${fmtBytes(key.memoryBytes)}`,
         attrs: `data-db-object="redis-key" data-name="${esc(key.key)}"`,
@@ -729,7 +816,7 @@
     const columns = parseColumns(data);
     return `<div class="db-detail-head">
         <div><div class="eyebrow">${icon('table', 12)}${esc(titleCase(detail.kind))}</div><h2 class="db-detail-title">${esc(detail.schema ? `${detail.schema}.` : '')}${esc(detail.name)}</h2></div>
-        <div class="db-detail-actions">${U.button({ label: 'Query', icon: 'terminal', size: 'sm', attrs: `data-db-query-object="${esc(detail.kind)}" data-schema="${esc(detail.schema || '')}" data-name="${esc(detail.name)}"` })}${U.button({ label: 'Copy name', icon: 'copy', size: 'sm', attrs: `data-db-copy="${esc(detail.name)}"` })}</div>
+        <div class="db-detail-actions">${U.button({ label: 'Query', icon: 'terminal', size: 'sm', attrs: `data-db-query-object="${esc(detail.kind)}" data-schema="${esc(detail.schema || '')}" data-name="${esc(detail.name)}"` })}${U.button({ label: 'Copy name', icon: 'copy', size: 'sm', attrs: `data-db-copy="${esc(detail.name)}"` })}${OD.ai ? OD.ai.button({ kind: 'db-object', id: S.selected.explorer, section: detail.kind, name: detail.name, namespace: detail.schema || '' }, { label: 'Ask AI', size: 'sm' }) : ''}</div>
       </div>
       ${data.total != null || data.rowCount != null ? `<div class="db-detail-meta">${U.badge(`${fmtNumber(data.rowCount ?? 0)} rows shown`, 'slate')}${data.total != null ? U.badge(`${fmtNumber(data.total)} total`, 'slate') : ''}${data.truncated ? U.badge('bounded', 'amber') : ''}</div>` : ''}
       ${columns.length ? `<div class="table-wrap db-result"><table class="data-table"><thead><tr>${columns.map((name) => `<th>${esc(name)}</th>`).join('')}</tr></thead>
@@ -761,6 +848,100 @@
     <div class="db-detail-body">${body}</div>`;
   }
 
+  // ------------------------------------------------------------ AI assistant
+  function parseAiAnswer(text) {
+    const blocks = [];
+    const prose = String(text || '').replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      blocks.push({ lang: lang.toLowerCase(), code: code.trim() });
+      return '';
+    }).trim();
+    const isSql = (block) => ['sql', 'pgsql', 'mysql', 'sqlite', 'plsql', ''].includes(block.lang);
+    const isOrm = (block) => ['python', 'py', 'django'].includes(block.lang);
+    const sqls = blocks.filter(isSql);
+    const orms = blocks.filter(isOrm);
+    const variants = [];
+    const labels = ['Simple', 'Advanced'];
+    for (let i = 0; i < Math.max(sqls.length, orms.length) && i < 2; i += 1) {
+      variants.push({ label: labels[i], sql: sqls[i]?.code || '', orm: orms[i]?.code || '' });
+    }
+    return { prose, variants, variant: 0, sql: variants[0]?.sql || '', orm: variants[0]?.orm || '' };
+  }
+
+  function aiPanel(connection) {
+    const ai = S.editor.ai;
+    const sqlEngine = engineMeta(connection.engine).capabilities?.sql;
+    if (!sqlEngine) return '';
+    const codeBlock = (label, code, actions) => `<div class="db-ai-code">
+      <div class="db-ai-code-head"><span>${esc(label)}</span><div>${actions}</div></div>
+      <pre class="db-json">${esc(code)}</pre></div>`;
+    return `<div class="db-ai">
+      <label class="db-ai-label" for="db-ai-prompt">${icon('sparkles', 13)} Describe the data you need</label>
+      <div class="db-ai-box">
+        <textarea id="db-ai-prompt" class="db-ai-prompt" dir="auto" data-db-ai-prompt rows="2" maxlength="2000"
+          placeholder="e.g. orders created today with their customer name, newest first">${esc(ai.prompt)}</textarea>
+        <div class="db-ai-box-foot">
+          <span class="db-ai-note">${icon('shield-check', 11)} Only table and column names are sent — never credentials or rows.</span>
+          <span class="db-ai-box-actions">
+            <kbd>Ctrl</kbd><kbd>Enter</kbd>
+            ${U.button({ label: ai.loading ? 'Thinking…' : 'Generate query', icon: 'sparkles', size: 'sm', variant: 'primary', attrs: `data-db-ai-run ${ai.loading ? 'disabled aria-busy="true"' : ''}` })}
+          </span>
+        </div>
+      </div>
+      <div role="status" aria-live="polite">
+        ${ai.loading ? `<p class="db-ai-note">${icon('loader', 12)} Reading the schema and writing the query…</p>` : ''}
+        ${ai.error ? U.errorBanner(ai.unconfigured ? 'AI is not configured' : 'Could not generate a query', ai.error,
+          ai.unconfigured ? '<a class="btn btn-sm" href="#/settings">Open settings</a>' : '') : ''}
+        ${ai.text ? `<div class="db-ai-answer">
+          ${(ai.variants || []).length > 1 ? `<div class="db-ai-tabs" role="tablist" aria-label="Query version">${ai.variants.map((v, i) => `<button type="button" role="tab" aria-selected="${i === ai.variant}" class="db-ai-tab${i === ai.variant ? ' active' : ''}" data-db-ai-variant="${i}">${esc(v.label)}</button>`).join('')}</div>` : ''}
+          ${ai.prose ? `<div class="db-ai-prose" dir="auto">${esc(ai.prose)}</div>` : ''}
+          ${ai.sql ? codeBlock('SQL', ai.sql,
+            `${U.button({ label: 'Use in editor', icon: 'corner-down-left', size: 'sm', variant: 'primary', attrs: 'data-db-ai-use' })}${U.button({ label: 'Copy', icon: 'copy', size: 'sm', attrs: `data-db-copy="${esc(ai.sql)}"` })}`) : ''}
+          ${ai.orm ? codeBlock('Django ORM', ai.orm, U.button({ label: 'Copy', icon: 'copy', size: 'sm', attrs: `data-db-copy="${esc(ai.orm)}"` })) : ''}
+          <p class="db-ai-note">Generated by ${esc(ai.provider || 'AI')}${ai.model ? ` · ${esc(ai.model)}` : ''}. Review before running — nothing was executed.</p>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // A new run replaces the old context, so the previous AI suggestion goes away.
+  function resetAiAnswer() {
+    Object.assign(S.editor.ai, { text: '', prose: '', sql: '', orm: '', variants: [], variant: 0, error: '', unconfigured: false });
+  }
+
+  async function runAiQuery() {
+    const ai = S.editor.ai;
+    const field = document.querySelector('[data-db-ai-prompt]');
+    if (field) ai.prompt = field.value;
+    if (!ai.prompt.trim()) {
+      U.toast('Describe the data first', 'warning', { description: 'Write what you want to query in plain language.' });
+      return;
+    }
+    Object.assign(ai, { loading: true, error: '', unconfigured: false });
+    OD.app?.rerender?.();
+    try {
+      const res = await api.databases.aiQuery({
+        id: S.selected.editor, database: S.editor.database, question: ai.prompt.trim(),
+      });
+      if (!res?.ok) {
+        Object.assign(ai, { error: res?.cancelled ? '' : (res?.error || 'The AI request failed.'), unconfigured: res?.unconfigured === true, text: '', sql: '', orm: '' });
+      } else {
+        Object.assign(ai, parseAiAnswer(res.text), { text: res.text, provider: res.provider || '', model: res.model || '' });
+      }
+    } catch (error) {
+      Object.assign(ai, { error: error.message || 'The AI request failed.', text: '', sql: '', orm: '' });
+    } finally {
+      ai.loading = false;
+      OD.app?.rerender?.();
+    }
+  }
+
+  function useAiSql() {
+    if (!S.editor.ai.sql) return;
+    S.editor.sql = S.editor.ai.sql;
+    OD.app?.rerender?.();
+    U.toast('Query placed in the editor', 'success', { description: 'Review it, then press Run.' });
+  }
+
   function editorPage() {
     const connectionId = S.selected.editor;
     const connection = connById(connectionId);
@@ -778,6 +959,7 @@
         ${connection.engine === 'redis' || connection.engine === 'mongodb' || connection.engine === 'elasticsearch' || connection.engine === 'opensearch'
           ? U.infoBanner(`${engine.label} console`, connection.engine === 'redis' ? 'Enter Redis commands such as SCAN 0 MATCH user:* COUNT 100. KEYS with broad patterns and FLUSH commands are blocked.' : connection.engine === 'mongodb' ? 'Enter a MongoDB command object, for example {"count":"users"} or {"find":"users","filter":{},"limit":10}.' : 'Enter an Elasticsearch search body, for example {"query":{"match_all":{}},"size":10}.', 'info')
           : ''}
+        ${aiPanel(connection)}
         <div class="db-editor">
           <div class="db-editor-bar">
             <span class="db-editor-dialect">${U.badge(dialect, 'cyan', { mono: true })}</span>
@@ -1541,6 +1723,7 @@
     }
     S.editor.running = true;
     S.editor.error = '';
+    resetAiAnswer();
     S.editor.token = `q-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     OD.app?.rerender?.();
     try {
@@ -1637,6 +1820,161 @@
   }
 
   // -------------------------------------------------------------------- bind
+  // ------------------------------------------------------- SQL autocomplete
+  const SCHEMA_CACHE = { key: '', loading: '', tables: [] };
+  const AC = { items: [], index: 0, start: 0, end: 0, box: null };
+  const WORD_CHARS = /[A-Za-z0-9_$.]/;
+
+  async function ensureEditorSchema() {
+    const id = S.selected.editor;
+    const connection = connById(id);
+    if (!connection || !engineMeta(connection.engine).capabilities?.sql) return;
+    const database = S.editor.database || connection.database || '';
+    const key = `${id}|${database}`;
+    if (SCHEMA_CACHE.key === key || SCHEMA_CACHE.loading === key) return;
+    SCHEMA_CACHE.loading = key;
+    try {
+      const res = await api.databases.explorer({ id, database });
+      if (!res?.ok) return;
+      const columns = res.columns || [];
+      SCHEMA_CACHE.tables = (res.relations || [])
+        .filter((relation) => relation?.name && /table|view/i.test(String(relation.kind || 'table')))
+        .map((relation) => ({
+          name: relation.name,
+          schema: relation.schema || '',
+          columns: columns
+            .filter((column) => column.table === relation.name && (!column.schema || !relation.schema || column.schema === relation.schema))
+            .map((column) => column.name),
+        }));
+      SCHEMA_CACHE.key = key;
+    } catch {
+      /* Autocomplete is a convenience; a failed schema read must not interrupt typing. */
+    } finally {
+      if (SCHEMA_CACHE.loading === key) SCHEMA_CACHE.loading = '';
+    }
+  }
+
+  function caretCoords(textarea) {
+    const style = getComputedStyle(textarea);
+    const mirror = document.createElement('div');
+    for (const prop of ['fontFamily', 'fontSize', 'lineHeight', 'letterSpacing', 'tabSize', 'paddingTop', 'paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderTopWidth']) {
+      mirror.style[prop] = style[prop];
+    }
+    Object.assign(mirror.style, {
+      position: 'absolute', visibility: 'hidden', whiteSpace: 'pre-wrap', wordWrap: 'break-word',
+      width: `${textarea.clientWidth}px`, top: '0', left: '-9999px',
+    });
+    mirror.textContent = textarea.value.slice(0, textarea.selectionStart);
+    const marker = document.createElement('span');
+    marker.textContent = '\u200b';
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const top = marker.offsetTop - textarea.scrollTop;
+    const left = marker.offsetLeft - textarea.scrollLeft;
+    const lineHeight = parseFloat(style.lineHeight) || 20;
+    mirror.remove();
+    return { top: top + lineHeight, left };
+  }
+
+  function closeAutocomplete() {
+    AC.box?.remove();
+    AC.box = null;
+    AC.items = [];
+  }
+
+  function paintAutocomplete(textarea) {
+    if (!AC.items.length) { closeAutocomplete(); return; }
+    const host = textarea.parentElement;
+    if (!AC.box) {
+      AC.box = document.createElement('ul');
+      AC.box.className = 'db-ac';
+      AC.box.setAttribute('role', 'listbox');
+      AC.box.setAttribute('aria-label', 'Table suggestions');
+      AC.box.addEventListener('mousedown', (event) => {
+        const li = event.target.closest('[data-ac-index]');
+        if (!li) return;
+        event.preventDefault();
+        acceptAutocomplete(textarea, Number(li.dataset.acIndex));
+      });
+      host.appendChild(AC.box);
+    }
+    const pos = caretCoords(textarea);
+    AC.box.style.top = `${textarea.offsetTop + pos.top}px`;
+    AC.box.style.left = `${Math.min(textarea.offsetLeft + pos.left, Math.max(0, textarea.clientWidth - 240))}px`;
+    AC.box.innerHTML = AC.items.map((item, i) => `<li role="option" data-ac-index="${i}" aria-selected="${i === AC.index}" class="${i === AC.index ? 'active' : ''}">
+      <span class="db-ac-name">${esc(item.label)}</span><span class="db-ac-kind">${esc(item.detail)}</span></li>`).join('');
+    AC.box.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function updateAutocomplete(textarea) {
+    if (textarea.selectionStart !== textarea.selectionEnd) { closeAutocomplete(); return; }
+    const caret = textarea.selectionStart;
+    const text = textarea.value;
+    let start = caret;
+    while (start > 0 && WORD_CHARS.test(text[start - 1])) start -= 1;
+    const word = text.slice(start, caret);
+    if (!word || /^\d/.test(word) || SCHEMA_CACHE.key !== `${S.selected.editor}|${S.editor.database || connById(S.selected.editor)?.database || ''}`) {
+      closeAutocomplete();
+      ensureEditorSchema();
+      return;
+    }
+    const lower = word.toLowerCase();
+    const dot = lower.lastIndexOf('.');
+    let items = [];
+    if (dot >= 0) {
+      const owner = lower.slice(0, dot);
+      const prefix = lower.slice(dot + 1);
+      const table = SCHEMA_CACHE.tables.find((entry) => entry.name.toLowerCase() === owner);
+      if (table) {
+        items = table.columns.filter((name) => name.toLowerCase().startsWith(prefix))
+          .map((name) => ({ label: name, insert: name, detail: 'column' }));
+      } else {
+        items = SCHEMA_CACHE.tables
+          .filter((entry) => entry.schema.toLowerCase() === owner && entry.name.toLowerCase().startsWith(prefix))
+          .map((entry) => ({ label: entry.name, insert: entry.name, detail: 'table' }));
+      }
+      start += dot + 1;
+    } else {
+      items = SCHEMA_CACHE.tables
+        .filter((entry) => entry.name.toLowerCase().startsWith(lower))
+        .map((entry) => ({ label: entry.name, insert: entry.name, detail: entry.schema && entry.schema !== 'public' ? entry.schema : 'table' }));
+    }
+    items = items.filter((item) => item.label.toLowerCase() !== text.slice(start, caret).toLowerCase()).slice(0, 50);
+    AC.items = items;
+    AC.index = 0;
+    AC.start = start;
+    AC.end = caret;
+    paintAutocomplete(textarea);
+  }
+
+  function acceptAutocomplete(textarea, index = AC.index) {
+    const item = AC.items[index];
+    if (!item) return false;
+    const { value } = textarea;
+    textarea.value = `${value.slice(0, AC.start)}${item.insert}${value.slice(AC.end)}`;
+    const caret = AC.start + item.insert.length;
+    textarea.setSelectionRange(caret, caret);
+    S.editor.sql = textarea.value;
+    closeAutocomplete();
+    textarea.focus();
+    return true;
+  }
+
+  function handleAutocompleteKey(event) {
+    if (!AC.box || !AC.items.length) return false;
+    const textarea = event.target;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      AC.index = (AC.index + (event.key === 'ArrowDown' ? 1 : -1) + AC.items.length) % AC.items.length;
+      paintAutocomplete(textarea);
+      return true;
+    }
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey)) {
+      return acceptAutocomplete(textarea);
+    }
+    if (event.key === 'Escape') { closeAutocomplete(); return true; }
+    return false;
+  }
+
   function mount(root, route) {
     clearInterval(perfTimer);
     perfTimer = null;
@@ -1661,6 +1999,10 @@
       }
       if (event.target.matches('[data-db-sql]')) {
         S.editor.sql = event.target.value;
+        updateAutocomplete(event.target);
+      }
+      if (event.target.matches('[data-db-ai-prompt]')) {
+        S.editor.ai.prompt = event.target.value;
       }
       if (event.target.matches('[data-db-redis-pattern]')) {
         S.explorer.redis.pattern = event.target.value;
@@ -1669,10 +2011,22 @@
         filterRows(event.target);
       }
     });
+    root.addEventListener('focusout', (event) => {
+      if (event.target.matches('[data-db-sql]')) closeAutocomplete();
+    });
     root.addEventListener('keydown', (event) => {
+      if (event.target.matches('[data-db-sql]') && handleAutocompleteKey(event)) {
+        event.preventDefault();
+        return;
+      }
       if (event.target.matches('[data-db-sql]') && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         runQuery(event.shiftKey);
+      }
+      if (event.target.matches('[data-db-ai-prompt]') && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        runAiQuery();
+        return;
       }
       if (event.target.matches('[data-db-redis-pattern]') && event.key === 'Enter') {
         event.preventDefault();
@@ -1709,6 +2063,7 @@
       S.explorer.key = '';
       S.explorer.database = '';
       S.explorer.detail = null;
+      persistDbState();
       OD.app?.rerender?.();
       return;
     }
@@ -1716,6 +2071,7 @@
       S.explorer.database = target.value;
       S.explorer.key = '';
       S.explorer.detail = null;
+      persistDbState();
       await loadExplorer(S.selected.explorer, S.explorer.database);
       OD.app?.rerender?.();
       return;
@@ -1730,17 +2086,21 @@
           ? connection.database
           : (S.dbs[connection.id] || [])[0]?.name || '';
       }
+      persistDbState();
       OD.app?.rerender?.();
       return;
     }
     if (target.matches('[data-db-role="editor-database"]')) {
       S.editor.database = target.value;
+      SCHEMA_CACHE.key = '';
+      persistDbState();
       return;
     }
     if (target.matches('[data-db-role="performance-connection"]')) {
       S.selected.performance = target.value;
       S.perf.data = null;
       S.perf.history = [];
+      persistDbState();
       if (target.value) await loadMetrics(target.value);
       OD.app?.rerender?.();
       return;
@@ -1761,6 +2121,13 @@
     const target = event.target.closest('button, a, [data-db-goto]');
     if (!target) return;
 
+    if (target.matches('[data-db-perf-refresh]')) {
+      event.preventDefault();
+      if (S.perf.loading || !S.selected.performance) return;
+      await loadMetrics(S.selected.performance);
+      OD.app?.rerender?.();
+      return;
+    }
     if (target.matches('[data-db-copy]')) {
       event.preventDefault();
       copyText(target.dataset.dbCopy || '', 'Copied');
@@ -1886,6 +2253,17 @@
       OD.app?.goto?.(`#/databases/editor?connection=${encodeURIComponent(entry.connectionId || '')}`);
       return;
     }
+    if (target.matches('[data-db-ai-variant]')) {
+      event.preventDefault();
+      const ai = S.editor.ai;
+      const index = Number(target.dataset.dbAiVariant) || 0;
+      const picked = ai.variants?.[index];
+      if (picked) Object.assign(ai, { variant: index, sql: picked.sql, orm: picked.orm });
+      OD.app?.rerender?.();
+      return;
+    }
+    if (target.matches('[data-db-ai-run]')) { event.preventDefault(); await runAiQuery(); return; }
+    if (target.matches('[data-db-ai-use]')) { event.preventDefault(); useAiSql(); return; }
     if (target.matches('[data-db-run]')) { event.preventDefault(); await runQuery(false); return; }
     if (target.matches('[data-db-run-selection]')) { event.preventDefault(); await runQuery(true); return; }
     if (target.matches('[data-db-explain]')) { event.preventDefault(); await runExplain(); return; }
@@ -2054,7 +2432,14 @@
       const node = target.closest('.db-node');
       if (node?.querySelector(':scope > .db-node-children')) {
         event.preventDefault();
-        node.classList.toggle('open');
+        const open = !node.classList.contains('open');
+        node.classList.toggle('open', open);
+        target.setAttribute('aria-expanded', open ? 'true' : 'false');
+        const key = target.dataset.dbNodeKey;
+        if (key) {
+          S.explorer.expanded[key] = open;
+          persistDbState();
+        }
       }
       return;
     }
@@ -2082,6 +2467,15 @@
     },
     status() {
       return OD.store?.state?.databases || null;
+    },
+    // Extra, non-secret context the AI button needs: the active database and,
+    // on the editor page, the query being written.
+    aiTarget() {
+      const editor = document.querySelector('[data-db-sql]');
+      return {
+        database: S.explorer.database || S.editor.database || '',
+        sql: editor ? String(editor.value || '').slice(0, 6000) : '',
+      };
     },
   };
 })();

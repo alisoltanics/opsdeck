@@ -56,6 +56,37 @@ function safeError(error, fallback = 'The database operation failed.') {
   return message || fallback;
 }
 
+/**
+ * Turn a raw driver/network failure into "what happened + what to check".
+ * The original (credential-stripped) driver text is kept after the hint.
+ */
+function explainConnectionError(error, profile = {}) {
+  const raw = safeError(error, '');
+  const code = String(error?.code || '');
+  const text = `${code} ${raw}`;
+  const target = profile.host ? `${profile.host}${profile.port ? `:${profile.port}` : ''}` : (profile.engine === 'sqlite' ? 'the database file' : 'the server');
+  const rules = [
+    [/ECONNREFUSED|connection refused/i, `Connection refused by ${target}. The server is not running or is not listening on that port. Check the host and port, and that the database service is started.`],
+    [/ENOTFOUND|EAI_AGAIN|getaddrinfo/i, `The host name could not be resolved (${target}). Check the host for typos and your DNS/network or VPN.`],
+    [/ETIMEDOUT|ESOCKETTIMEDOUT|timed out|timeout/i, `Connecting to ${target} timed out. A firewall, VPN, security group or a wrong host/port is likely blocking it.`],
+    [/EHOSTUNREACH|ENETUNREACH/i, `${target} is unreachable from this machine. Check your network, VPN or routing.`],
+    [/ECONNRESET|EPIPE|socket hang up|terminated unexpectedly/i, `The server closed the connection (${target}). Check TLS/SSL settings, the server's allowed hosts (pg_hba.conf / bind-address) and that the port belongs to this engine.`],
+    [/password authentication failed|access denied for user|authentication failed|invalid password|ER_ACCESS_DENIED|28P01|WRONGPASS|NOAUTH|unauthorized|AuthenticationFailed/i, 'Authentication failed. The username or password is wrong, or this user is not allowed to connect from this host.'],
+    [/database ".*" does not exist|unknown database|ER_BAD_DB_ERROR|3D000/i, 'The database does not exist on this server. Check the database name.'],
+    [/no pg_hba\.conf entry/i, 'The server rejected this client (no matching pg_hba.conf entry). Allow this host/user, or enable SSL if the server requires it.'],
+    [/does not support SSL|SSL (?:connection )?is required|server does not support|ssl.*required/i, 'SSL/TLS mismatch. The server and this connection disagree about encryption; change the SSL mode.'],
+    [/self[- ]signed|certificate|CERT_|UNABLE_TO_VERIFY|ERR_TLS|wrong version number|ssl3_get_record|tlsv1 alert/i, 'TLS/certificate problem. The certificate is not trusted or the SSL mode is wrong; provide the CA certificate or adjust the SSL mode.'],
+    [/SQLITE_CANTOPEN|unable to open database file|ENOENT/i, 'The database file could not be opened. Check that the path exists.'],
+    [/SQLITE_NOTADB|not a database/i, 'This file is not a valid SQLite database.'],
+    [/EACCES|EPERM|permission denied/i, 'Permission denied while opening the connection. Check file or socket permissions.'],
+    [/too many connections|connection slots|ER_CON_COUNT_ERROR/i, 'The server has no free connections. Close idle clients or raise max_connections.'],
+  ];
+  for (const [pattern, hint] of rules) {
+    if (pattern.test(text)) return raw && !hint.includes(raw) ? `${hint}  Driver message: ${raw}` : hint;
+  }
+  return raw || 'Could not connect. Check the host, port and credentials.';
+}
+
 function isReadOnlySql(sql) {
   const text = String(sql || '')
     .replace(/--[^\n]*/g, ' ')
@@ -186,7 +217,7 @@ function safeDriverOptions(options) {
 }
 
 module.exports = {
-  serializeValue, serializeRows, safeError, isReadOnlySql, splitStatements,
+  serializeValue, serializeRows, safeError, explainConnectionError, isReadOnlySql, splitStatements,
   quoteIdent, boundedLimit, boundedOffset,
   tlsMode, usesTls, allowsTlsFallback, isTlsHandshakeError,
   safeDriverOptions, RESERVED_OPTION_KEY,

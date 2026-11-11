@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "OpsDeck — Operations Studio: a premium desktop control plane for Docker with a complete interactive Docker Academy, built to host Kubernetes, databases and observability workspaces.",
-  "author": "OpsDeck",
+  "author": {
+    "name": "Ali Soltani",
+    "email": "alisoltanics@gmail.com"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -30,5 +33,6 @@
     "@xterm/xterm": "^6.0.0",
     "electron": "^31.7.7",
     "electron-builder": "^26.18.0"
-  }
+  },
+  "homepage": "https://github.com/alisoltanics/opsdeck"
 }

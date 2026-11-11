@@ -18,7 +18,7 @@ function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
   const kubernetes = new KubernetesService({ app, dialog, getWindow });
   const databases = new DatabaseService({ app, docker, kubernetes });
-  const ai = new AIService({ app, content, kubernetes });
+  const ai = new AIService({ app, content, kubernetes, databases });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
     console.error('Academy store failed to initialise:', error);
@@ -294,6 +294,17 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('db:query', (p) => databases.query(p || {}));
   handle('db:explain', (p) => databases.explain(p || {}));
   handle('db:cancel', (p) => databases.cancel(p || {}));
+  handle('db:ai-query', async (p, event) => {
+    const payload = p || {};
+    let schema;
+    try {
+      schema = await databases.aiSchema(payload);
+    } catch (error) {
+      return { ok: false, error: error.message || String(error) };
+    }
+    if (!schema.ok) return schema;
+    return ai.askSql(event.sender.id, { ...schema, question: payload.question });
+  });
   handle('db:metrics', (p) => databases.metrics(p?.id));
   handle('db:discovery', (p) => databases.discover({ refresh: p?.refresh === true }));
   handle('db:discovery-connect', (p) => databases.createFromDiscovery(p || {}));

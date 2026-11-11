@@ -106,6 +106,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     query: (payload) => invoke('db:query', payload),
     explain: (payload) => invoke('db:explain', payload),
     cancel: (payload) => invoke('db:cancel', payload),
+    aiQuery: (payload) => invoke('db:ai-query', payload),
     metrics: (id) => invoke('db:metrics', { id }),
     discovery: (refresh) => invoke('db:discovery', { refresh: refresh === true }),
     discoveryConnect: (payload) => invoke('db:discovery-connect', payload),
