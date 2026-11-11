@@ -37,15 +37,7 @@ renderer. Docker and kubectl commands go through `execFile` with argument arrays
 <td><img src="docs/screenshots/kubernetes-topology.png" alt="Kubernetes cluster map" /><br /><sub><b>Cluster map</b> — Ingress → Service → Workload → Pod</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/kubernetes-overview.png" alt="Kubernetes overview" /><br /><sub><b>Kubernetes overview</b> — contexts, nodes and health</sub></td>
-<td><img src="docs/screenshots/databases-dashboard.png" alt="Databases dashboard" /><br /><sub><b>Databases</b> — discovery and connections</sub></td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/databases-editor.png" alt="SQL editor" /><br /><sub><b>SQL editor</b> — autocomplete, read-only guard, AI query generator</sub></td>
-<td><img src="docs/screenshots/databases-explorer.png" alt="Database explorer" /><br /><sub><b>Explorer</b> — browse schemas, tables and rows</sub></td>
-</tr>
-<tr>
-<td colspan="2"><img src="docs/screenshots/databases-performance.png" alt="Database performance" /><br /><sub><b>Performance</b> — live diagnostics per connection</sub></td>
+<td colspan="2"><img src="docs/screenshots/kubernetes-overview.png" alt="Kubernetes overview" /><br /><sub><b>Kubernetes overview</b> — contexts, nodes and health</sub></td>
 </tr>
 </table>
 
