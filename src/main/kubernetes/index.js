@@ -211,6 +211,7 @@ class KubernetesService {
       context: state.selected,
       namespace: state.namespace,
       env: this.env(),
+      allowContext: state.selected,
     });
   }
 

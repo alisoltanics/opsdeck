@@ -11,7 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parseKubectl, tokenize } = require('../src/main/kubernetes/kubectl-runner');
 const { sectionCommands, objectCommands } = require('../src/main/kubernetes/commands');
-const { summaryFor } = require('../src/main/kubernetes/resources');
+const { summaryFor, RESOURCES } = require('../src/main/kubernetes/resources');
 const shell = require('../src/main/kubernetes/shell');
 const { __test: serviceTest } = require('../src/main/kubernetes');
 
@@ -47,6 +47,46 @@ test('the console enforces the selected context and namespace', () => {
   // Global flags stay before `--`, or kubectl would pass them to the remote command.
   const exec = parseKubectl('exec web -- env', base);
   assert.deepEqual(exec.args, ['exec', 'web', '--context', CTX, '--namespace', NS, '--', 'env']);
+
+  // OpsDeck's own copyable commands include the selected context. The Run
+  // button accepts that exact value and enforces it once, without duplication.
+  const generated = parseKubectl(`get pods --context ${CTX}`, { ...base, allowContext: CTX });
+  assert.deepEqual(generated.args, ['get', 'pods', '--context', CTX, '--namespace', NS]);
+  const generatedInline = parseKubectl(`get pods --context=${CTX}`, { ...base, allowContext: CTX });
+  assert.deepEqual(generatedInline.args, ['get', 'pods', '--context', CTX, '--namespace', NS]);
+  assert.throws(() => parseKubectl(`get pods --context ${CTX}`, base), /controlled by OpsDeck/);
+  assert.throws(() => parseKubectl('get pods --context evil', { ...base, allowContext: CTX }), /controlled by OpsDeck/);
+});
+
+test('every runnable catalog command can actually be run by the console', () => {
+  const sections = ['overview', 'contexts', 'namespaces', 'nodes', 'helm', 'tools', 'console', ...Object.keys(RESOURCES)];
+  for (const section of sections) {
+    const commands = sectionCommands(section, { context: CTX, namespace: NS });
+    for (const entry of commands.filter((item) => item.runnable !== false)) {
+      assert.doesNotThrow(
+        () => parseKubectl(entry.command, { context: CTX, namespace: NS, allowContext: CTX }),
+        `${section} command should parse: ${entry.command}`,
+      );
+    }
+  }
+
+  const names = {
+    pods: 'web-0', deployments: 'web', statefulsets: 'web', daemonsets: 'agent', jobs: 'job-1',
+    cronjobs: 'nightly', services: 'web', ingresses: 'web', networkpolicies: 'deny', nodes: 'node-a',
+    namespaces: 'default', persistentvolumes: 'pv-1', persistentvolumeclaims: 'data', storageclasses: 'standard',
+    configmaps: 'settings', secrets: 'db-password', resourcequotas: 'quota', limitranges: 'limits',
+    serviceaccounts: 'default', roles: 'reader', rolebindings: 'reader', clusterroles: 'reader',
+    clusterrolebindings: 'reader', events: 'event-1',
+  };
+  for (const [section, name] of Object.entries(names)) {
+    const commands = objectCommands(section, { context: CTX, namespace: NS, name });
+    for (const entry of commands.filter((item) => item.runnable !== false)) {
+      assert.doesNotThrow(
+        () => parseKubectl(entry.command, { context: CTX, namespace: NS, allowContext: CTX }),
+        `${section}/${name} command should parse: ${entry.command}`,
+      );
+    }
+  }
 });
 
 test('the console refuses kubeconfig overrides, credentials and interactive commands', () => {
