@@ -93,6 +93,19 @@ const ROUTES = [
   ['observability agents', '#/observability/agents'],
   ['observability remediation', '#/observability/remediation'],
   ['observability settings', '#/observability/settings'],
+  ['intelligence overview', '#/intelligence/overview'],
+  ['intelligence graph', '#/intelligence/graph'],
+  ['intelligence resources', '#/intelligence/resources'],
+  ['intelligence search', '#/intelligence/search'],
+  ['intelligence timeline', '#/intelligence/timeline'],
+  ['intelligence changes', '#/intelligence/changes'],
+  ['intelligence incidents', '#/intelligence/incidents'],
+  ['intelligence rca', '#/intelligence/rca'],
+  ['intelligence reports', '#/intelligence/reports'],
+  ['intelligence environments', '#/intelligence/environments'],
+  ['intelligence automation', '#/intelligence/automation'],
+  ['intelligence audit', '#/intelligence/audit'],
+  ['intelligence settings', '#/intelligence/settings'],
   ['academy', '#/academy'],
   ['courses', '#/academy/courses'],
   ['course', '#/academy/course/docker-fundamentals'],
@@ -241,6 +254,18 @@ function rendererScript(routes) {
         && !!document.querySelector('#view [data-obs-page="overview"]'), 10000);
       if (!obsOpen) failures.push('workspace: Observability did not open');
       if (!document.querySelector('#view [data-obs-ai]')) failures.push('observability: Ask AI button is missing');
+    }
+
+    // The workspace switcher must reach the Intelligence workspace.
+    document.querySelector('#workspace-btn')?.click();
+    if (!(await waitFor(() => !!document.querySelector('[data-workspace="intelligence"]'), 2500))) {
+      failures.push('workspace: Intelligence entry is missing');
+    } else {
+      document.querySelector('[data-workspace="intelligence"]')?.click();
+      const intelOpen = await waitFor(() => location.hash === '#/intelligence/overview'
+        && !!document.querySelector('#sidebar a[href="#/intelligence/overview"].active')
+        && !!document.querySelector('#view [data-intel-page="overview"]'), 10000);
+      if (!intelOpen) failures.push('workspace: Intelligence did not open');
     }
 
     // Reference live help should resolve (or explain why it cannot).

@@ -14,6 +14,7 @@ const { SecretVault } = require('../databases/vault');
 const { ObservabilityConfig, OVERVIEW_WIDGETS, clean, validHttpUrl, normalizeId } = require('./config');
 const { MetricsStore } = require('./storage');
 const { quantile } = require('./metrics');
+const { sanitizeText } = require('./util');
 const { LogManager } = require('./logs');
 const { TraceManager } = require('./traces');
 const { LocalCollector } = require('./collectors/local');
@@ -1005,6 +1006,64 @@ class ObservabilityService {
       alert: { name: 'OpsDeck test notification', severity: 'info', summary: 'If you can read this, the channel is configured correctly.', resource: 'local', value: null, threshold: null, startedAt: iso() },
     });
     return { ok: result.ok, result };
+  }
+
+  /**
+   * Deliver a free-form notification (used by intelligence automations) to the
+   * configured channels. Returns one result per channel so the caller can show
+   * exactly which delivery failed; it never throws for a single bad channel.
+   */
+  async sendNotification(input = {}) {
+    const channels = (this.config.get().notifications?.channels || []).filter((channel) => channel.enabled !== false);
+    const wanted = Array.isArray(input.channelIds) ? input.channelIds.filter(Boolean) : [];
+    const selected = wanted.length ? channels.filter((channel) => wanted.includes(channel.id)) : channels;
+    if (!selected.length) {
+      return { ok: false, error: wanted.length ? 'None of the selected channels exist or are enabled.' : 'No notification channel is enabled.', results: [] };
+    }
+    const { sendChannel } = require('./notify');
+    const severity = ['info', 'warning', 'error', 'critical'].includes(input.severity) ? input.severity : 'info';
+    const payload = {
+      type: input.type || 'automation',
+      at: iso(),
+      alert: {
+        name: sanitizeText(input.title || 'OpsDeck notification', 200),
+        severity,
+        summary: sanitizeText(input.message || '', 2000),
+        resource: sanitizeText(input.resource || 'intelligence', 200),
+        value: null,
+        threshold: null,
+        startedAt: iso(),
+      },
+    };
+    const results = [];
+    for (const channel of selected.slice(0, 10)) {
+      try {
+        const secret = {
+          token: this.config.getSecret('channel', channel.id, 'token'),
+          password: this.config.getSecret('channel', channel.id, 'password'),
+          secret: this.config.getSecret('channel', channel.id, 'secret'),
+        };
+        const result = await sendChannel({ ...channel, secret }, payload);
+        results.push({
+          id: channel.id,
+          name: channel.name || channel.type,
+          type: channel.type,
+          ok: result?.ok === true,
+          error: result?.ok === true ? '' : sanitizeText(result?.error || 'Delivery failed.', 300),
+        });
+      } catch (error) {
+        results.push({ id: channel.id, name: channel.name || channel.type, type: channel.type, ok: false, error: sanitizeText(error.message || String(error), 300) });
+      }
+    }
+    const delivered = results.filter((entry) => entry.ok).length;
+    this.emit('obs:event', { type: 'notification:sent', delivered, total: results.length, at: iso() });
+    return {
+      ok: delivered > 0,
+      delivered,
+      total: results.length,
+      results,
+      error: delivered ? '' : 'Every channel rejected the notification.',
+    };
   }
 
   // ---------------------------------------------------------------- settings

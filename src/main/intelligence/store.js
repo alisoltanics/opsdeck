@@ -1,0 +1,311 @@
+'use strict';
+
+/**
+ * Persistence for the intelligence layer.
+ *
+ * One JSON document (mode 0600, atomic replace) holds environments, automation
+ * definitions, run history, the audit trail, favourites and saved views. Lists
+ * are bounded so a long-running install cannot grow without limit, and a
+ * corrupt file degrades to defaults instead of breaking startup.
+ */
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { writePrivate } = require('../databases/vault');
+const { clean, clamp } = require('./util');
+
+const LIMITS = {
+  automations: 200,
+  runs: 500,
+  audit: 2000,
+  changes: 2000,
+  favorites: 500,
+  savedSearches: 100,
+  savedQueries: 500,
+  workspaces: 100,
+  notes: 500,
+  assignments: 2000,
+};
+
+const DEFAULT_ENVIRONMENTS = [
+  { id: 'local', name: 'Local', tone: 'slate', kind: 'local', description: 'This workstation and the services running on it.' },
+  { id: 'development', name: 'Development', tone: 'green', kind: 'development', description: 'Shared development resources.' },
+  { id: 'testing', name: 'Testing', tone: 'cyan', kind: 'testing', description: 'Test and QA resources.' },
+  { id: 'staging', name: 'Staging', tone: 'amber', kind: 'staging', description: 'Pre-production validation.' },
+  { id: 'production', name: 'Production', tone: 'red', kind: 'production', description: 'Live customer-facing resources.' },
+];
+
+function defaults() {
+  return {
+    version: 1,
+    environments: DEFAULT_ENVIRONMENTS.map((entry) => ({ ...entry, custom: false })),
+    environmentRules: [],
+    assignments: {},
+    automations: [],
+    runs: [],
+    audit: [],
+    favorites: [],
+    savedSearches: [],
+    savedQueries: [],
+    workspaces: [],
+    notes: [],
+    changes: [],
+    resourceState: {},
+    settings: {
+      environmentMatch: true,
+      automationEnabled: true,
+      automationIntervalSec: 15,
+    },
+  };
+}
+
+function array(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function trimList(list, max) {
+  if (list.length > max) list.splice(0, list.length - max);
+  return list;
+}
+
+class IntelligenceStore {
+  constructor(app) {
+    this.file = path.join(app.getPath('userData'), 'intelligence.json');
+    this.data = defaults();
+    this.loaded = false;
+    this.dirty = false;
+    this.timer = null;
+    this.load();
+  }
+
+  load() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      const base = defaults();
+      this.data = {
+        ...base,
+        ...raw,
+        settings: { ...base.settings, ...(raw.settings || {}) },
+        assignments: raw.assignments && typeof raw.assignments === 'object' ? raw.assignments : {},
+        environments: array(raw.environments).length ? raw.environments : base.environments,
+      };
+    } catch {
+      this.data = defaults();
+    }
+    this.normalize();
+    this.loaded = true;
+    return this;
+  }
+
+  normalize() {
+    const data = this.data;
+    data.version = 1;
+    data.environments = array(data.environments)
+      .filter((entry) => entry && typeof entry === 'object' && clean(entry.id, 60))
+      .map((entry) => ({
+        id: clean(entry.id, 60),
+        name: clean(entry.name, 80) || clean(entry.id, 60),
+        tone: clean(entry.tone, 20) || 'slate',
+        kind: clean(entry.kind, 40) || 'custom',
+        description: clean(entry.description, 300),
+        custom: entry.custom === true,
+        createdAt: entry.createdAt || new Date().toISOString(),
+      }));
+    if (!data.environments.length) data.environments = DEFAULT_ENVIRONMENTS.map((entry) => ({ ...entry, custom: false }));
+    data.environmentRules = array(data.environmentRules)
+      .filter((rule) => rule && typeof rule === 'object')
+      .slice(0, 100)
+      .map((rule) => ({
+        id: String(rule.id || '').slice(0, 80) || `rule-${Math.random().toString(36).slice(2, 10)}`,
+        pattern: clean(rule.pattern, 200),
+        environment: clean(rule.environment, 60),
+        field: ['name', 'label', 'namespace', 'host', 'image', 'module'].includes(rule.field) ? rule.field : 'name',
+        mode: rule.mode === 'regex' ? 'regex' : 'contains',
+        enabled: rule.enabled !== false,
+      }));
+    for (const key of ['automations', 'runs', 'audit', 'favorites', 'savedSearches', 'savedQueries', 'workspaces', 'notes', 'changes']) {
+      data[key] = array(data[key]);
+    }
+    trimList(data.automations, LIMITS.automations);
+    trimList(data.runs, LIMITS.runs);
+    trimList(data.audit, LIMITS.audit);
+    trimList(data.favorites, LIMITS.favorites);
+    trimList(data.savedSearches, LIMITS.savedSearches);
+    trimList(data.savedQueries, LIMITS.savedQueries);
+    trimList(data.workspaces, LIMITS.workspaces);
+    trimList(data.notes, LIMITS.notes);
+    trimList(data.changes, LIMITS.changes);
+    const state = {};
+    let stateCount = 0;
+    for (const [key, value] of Object.entries(data.resourceState || {})) {
+      if (stateCount >= 3000) break;
+      if (!value || typeof value !== 'object') continue;
+      state[String(key).slice(0, 360)] = {
+        status: clean(value.status, 30),
+        name: clean(value.name, 240),
+        image: clean(value.image, 240),
+        images: clean(value.images, 400),
+        namespace: clean(value.namespace, 200),
+        at: clean(value.at, 40),
+      };
+      stateCount += 1;
+    }
+    data.resourceState = state;
+    const assignments = {};
+    let count = 0;
+    for (const [key, value] of Object.entries(data.assignments || {})) {
+      if (count >= LIMITS.assignments) break;
+      if (typeof value !== 'string' || !value) continue;
+      assignments[String(key).slice(0, 360)] = value.slice(0, 60);
+      count += 1;
+    }
+    data.assignments = assignments;
+    data.settings.automationIntervalSec = clamp(data.settings.automationIntervalSec || 15, 5, 3600);
+  }
+
+  get() {
+    return this.data;
+  }
+
+  schedule() {
+    this.dirty = true;
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.dirty) this.persist();
+    }, 800);
+    this.timer.unref?.();
+  }
+
+  persist() {
+    if (!this.loaded) return false;
+    this.dirty = false;
+    try {
+      if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+      writePrivate(this.file, JSON.stringify(this.data, null, 2));
+      return true;
+    } catch (error) {
+      console.error('Could not save intelligence data:', error.message);
+      return false;
+    }
+  }
+
+  // ------------------------------------------------------------------- audit
+
+  audit(entry = {}) {
+    const record = {
+      id: `audit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      actor: clean(entry.actor, 120) || 'local-user',
+      action: clean(entry.action, 120) || 'unknown',
+      module: clean(entry.module, 40) || 'intelligence',
+      resource: clean(entry.resource, 400),
+      outcome: ['success', 'failure', 'pending', 'denied'].includes(entry.outcome) ? entry.outcome : 'success',
+      detail: clean(entry.detail, 1000),
+      meta: entry.meta && typeof entry.meta === 'object' ? entry.meta : undefined,
+    };
+    this.data.audit.push(record);
+    trimList(this.data.audit, LIMITS.audit);
+    this.schedule();
+    return record;
+  }
+
+  auditList(options = {}) {
+    const limit = clamp(options.limit || 200, 1, 1000);
+    let items = this.data.audit.slice().reverse();
+    if (options.module) items = items.filter((entry) => entry.module === options.module);
+    if (options.action) items = items.filter((entry) => entry.action === options.action);
+    if (options.resource) items = items.filter((entry) => entry.resource === options.resource);
+    if (options.outcome) items = items.filter((entry) => entry.outcome === options.outcome);
+    return items.slice(0, limit);
+  }
+
+  // -------------------------------------------------------------- favourites
+
+  favorite(input = {}) {
+    const id = clean(input.id, 400);
+    if (!id) throw new Error('A resource id is required.');
+    const existing = this.data.favorites.find((entry) => entry.id === id);
+    if (input.remove === true || existing) {
+      this.data.favorites = this.data.favorites.filter((entry) => entry.id !== id);
+      this.schedule();
+      return { ok: true, favorite: false, id };
+    }
+    this.data.favorites.push({
+      id,
+      module: clean(input.module, 40),
+      kind: clean(input.kind, 60),
+      name: clean(input.name, 200),
+      href: /^#\/[A-Za-z0-9/_?&=.#%-]*$/.test(String(input.href || '')) ? clean(input.href, 400) : '',
+      at: new Date().toISOString(),
+    });
+    trimList(this.data.favorites, LIMITS.favorites);
+    this.schedule();
+    return { ok: true, favorite: true, id };
+  }
+
+  favorites() {
+    return { ok: true, items: this.data.favorites.slice().reverse() };
+  }
+
+  // ---------------------------------------------------------- saved searches
+
+  saveSearch(input = {}) {
+    const name = clean(input.name, 120) || 'Saved search';
+    const query = clean(input.query, 300);
+    const filters = input.filters && typeof input.filters === 'object' ? input.filters : {};
+    const item = {
+      id: clean(input.id, 80) || `search-${Date.now().toString(36)}`,
+      name, query, filters,
+      at: new Date().toISOString(),
+    };
+    const index = this.data.savedSearches.findIndex((entry) => entry.id === item.id);
+    if (index >= 0) this.data.savedSearches[index] = item;
+    else this.data.savedSearches.push(item);
+    trimList(this.data.savedSearches, LIMITS.savedSearches);
+    this.schedule();
+    return { ok: true, item };
+  }
+
+  savedSearches() {
+    return { ok: true, items: this.data.savedSearches.slice().reverse() };
+  }
+
+  removeSaved(id) {
+    this.data.savedSearches = this.data.savedSearches.filter((entry) => entry.id !== id);
+    this.schedule();
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------- saved views
+
+  saveWorkspace(input = {}) {
+    const item = {
+      id: clean(input.id, 80) || `workspace-${Date.now().toString(36)}`,
+      name: clean(input.name, 160) || 'Investigation',
+      description: clean(input.description, 400),
+      modules: Array.isArray(input.modules) ? input.modules.slice(0, 8).map((m) => clean(m, 40)) : [],
+      query: clean(input.query, 300),
+      filters: input.filters && typeof input.filters === 'object' ? input.filters : {},
+      at: new Date().toISOString(),
+    };
+    const index = this.data.workspaces.findIndex((entry) => entry.id === item.id);
+    if (index >= 0) this.data.workspaces[index] = item;
+    else this.data.workspaces.push(item);
+    trimList(this.data.workspaces, LIMITS.workspaces);
+    this.schedule();
+    return { ok: true, item };
+  }
+
+  workspaces() {
+    return { ok: true, items: this.data.workspaces.slice().reverse() };
+  }
+
+  removeWorkspace(id) {
+    this.data.workspaces = this.data.workspaces.filter((entry) => entry.id !== id);
+    this.schedule();
+    return { ok: true };
+  }
+}
+
+module.exports = { IntelligenceStore, LIMITS, DEFAULT_ENVIRONMENTS };

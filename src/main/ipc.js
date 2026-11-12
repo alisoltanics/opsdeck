@@ -14,12 +14,14 @@ const { AIService } = require('./ai');
 const { KubernetesService } = require('./kubernetes');
 const { DatabaseService } = require('./databases');
 const { ObservabilityService } = require('./observability');
+const { IntelligenceService } = require('./intelligence');
 
 function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
   const kubernetes = new KubernetesService({ app, dialog, getWindow });
   const databases = new DatabaseService({ app, docker, kubernetes });
   const observability = new ObservabilityService({ app, docker, kubernetes, databases, getWindow });
+  const intelligence = new IntelligenceService({ app, docker, kubernetes, databases, observability, getWindow });
   const ai = new AIService({ app, content, kubernetes, databases, observability });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
@@ -481,9 +483,61 @@ function registerIpc({ getWindow, dialog, app }) {
     return { ok: true, file: chosen.filePath, bytes: Buffer.byteLength(content, encoding) };
   });
 
+  // ---------------- Cross-module intelligence ----------------
+  handle('intel:bootstrap', () => intelligence.bootstrap());
+  handle('intel:status', () => intelligence.status());
+  handle('intel:refresh', () => intelligence.refresh({ force: true }));
+  handle('intel:resources', (p) => intelligence.resources(p || {}));
+  handle('intel:search', (p) => intelligence.search(p || {}));
+  handle('intel:graph', (p) => intelligence.graph(p || {}));
+  handle('intel:timeline', (p) => intelligence.timeline(p || {}));
+  handle('intel:changes', (p) => intelligence.changesHistory(p || {}));
+  handle('intel:changes-detect', () => intelligence.detectChanges());
+
+  handle('intel:environments', () => intelligence.environmentsList());
+  handle('intel:environments-summary', () => intelligence.environmentsSummary());
+  handle('intel:environment-assign', (p) => intelligence.environmentAssign(p?.resourceId, p?.environment));
+  handle('intel:environment-save', (p) => intelligence.environmentSave(p || {}));
+  handle('intel:environment-delete', (p) => intelligence.environmentDelete(p?.id));
+  handle('intel:environment-rule-save', (p) => intelligence.environmentRuleSave(p || {}));
+  handle('intel:environment-rule-delete', (p) => intelligence.environmentRuleDelete(p?.id));
+
+  handle('intel:incidents', (p) => intelligence.listIncidents(p || {}));
+  handle('intel:incident-get', (p) => intelligence.incidentGet(p?.id));
+  handle('intel:incident-create', (p) => intelligence.incidentCreate(p || {}));
+  handle('intel:alerts', (p) => intelligence.listAlerts(p || {}));
+  handle('intel:reports', () => intelligence.reportTypes());
+  handle('intel:report-generate', (p) => intelligence.reportGenerate(p || {}));
+  handle('intel:investigate', (p) => intelligence.investigate(p || {}));
+
+  handle('intel:automations', () => intelligence.automations());
+  handle('intel:automation-save', (p) => intelligence.automationSave(p || {}));
+  handle('intel:automation-delete', (p) => intelligence.automationDelete(p?.id));
+  handle('intel:automation-enable', (p) => intelligence.automationSetEnabled(p?.id, p?.enabled === true));
+  handle('intel:automation-run', (p) => intelligence.automationRun(p?.id, { dryRun: p?.dryRun === true }));
+  handle('intel:automation-approve', (p) => intelligence.automationApprove(p?.runId));
+  handle('intel:automation-reject', (p) => intelligence.automationReject(p?.runId, p?.reason));
+  handle('intel:automation-cancel', (p) => intelligence.automationCancel(p?.runId));
+  handle('intel:automation-runs', (p) => intelligence.automationRuns(p || {}));
+  handle('intel:automation-tick', () => intelligence.automationTick());
+
+  handle('intel:audit', (p) => intelligence.auditList(p || {}));
+  handle('intel:favorite', (p) => intelligence.favorite(p || {}));
+  handle('intel:favorites', () => intelligence.favorites());
+  handle('intel:search-save', (p) => intelligence.saveSearch(p || {}));
+  handle('intel:searches', () => intelligence.savedSearches());
+  handle('intel:search-remove', (p) => intelligence.removeSaved(p?.id));
+  handle('intel:workspace-save', (p) => intelligence.saveWorkspace(p || {}));
+  handle('intel:workspaces', () => intelligence.workspaces());
+  handle('intel:workspace-remove', (p) => intelligence.removeWorkspace(p?.id));
+  handle('intel:settings-update', (p) => intelligence.updateSettings(p || {}));
+  handle('intel:diagnostics', (p) => intelligence.diagnostics(p || {}));
+  handle('intel:notify', (p) => intelligence.notify(p || {}));
+
   observability.start().catch((error) => {
     console.error('Observability service failed to start:', error);
   });
+  intelligence.start();
 
   // ---------------- Labs ----------------
   handle('labs:status', () => labs.status());
@@ -500,6 +554,7 @@ function registerIpc({ getWindow, dialog, app }) {
     exec.stopAll();
     ai.dispose();
     observability.dispose().catch(() => {});
+    intelligence.dispose();
     databases.disposeAll().catch(() => {});
   });
 }

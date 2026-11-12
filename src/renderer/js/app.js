@@ -5,7 +5,7 @@
  * keyboard shortcuts, theme application and global event delegation.
  */
 (function () {
-  const { esc, debounce, fmtNumber, titleCase } = OD.utils;
+  const { esc, debounce, fmtNumber, titleCase, timeAgo } = OD.utils;
   const { icon } = OD.icons;
   const U = OD.ui;
   const store = OD.store;
@@ -16,6 +16,7 @@
     { id: 'kubernetes', label: 'Kubernetes', icon: 'cloud', tone: 'violet' },
     { id: 'databases', label: 'Databases', icon: 'database', tone: 'orange' },
     { id: 'observability', label: 'Observability', icon: 'activity', tone: 'cyan' },
+    { id: 'intelligence', label: 'Intelligence', icon: 'git-branch', tone: 'violet' },
   ];
 
   const NAV = [
@@ -126,6 +127,37 @@
     },
   ];
 
+  const INTELLIGENCE_NAV = [
+    {
+      label: 'Intelligence',
+      items: [
+        { id: 'intelligence', section: 'overview', label: 'Overview', icon: 'layout-dashboard', href: '#/intelligence/overview' },
+        { id: 'intelligence', section: 'graph', label: 'Infrastructure graph', icon: 'git-branch', href: '#/intelligence/graph' },
+        { id: 'intelligence', section: 'resources', label: 'Resources', icon: 'server', href: '#/intelligence/resources' },
+        { id: 'intelligence', section: 'search', label: 'Global search', icon: 'search', href: '#/intelligence/search' },
+      ],
+    },
+    {
+      label: 'Investigate',
+      items: [
+        { id: 'intelligence', section: 'timeline', label: 'Unified timeline', icon: 'history', href: '#/intelligence/timeline' },
+        { id: 'intelligence', section: 'changes', label: 'Changes', icon: 'repeat', href: '#/intelligence/changes' },
+        { id: 'intelligence', section: 'incidents', label: 'Incidents', icon: 'alert-triangle', href: '#/intelligence/incidents' },
+        { id: 'intelligence', section: 'rca', label: 'Root cause', icon: 'stethoscope', href: '#/intelligence/rca' },
+        { id: 'intelligence', section: 'reports', label: 'Reports', icon: 'file', href: '#/intelligence/reports' },
+      ],
+    },
+    {
+      label: 'Operate',
+      items: [
+        { id: 'intelligence', section: 'environments', label: 'Environments', icon: 'layers', href: '#/intelligence/environments' },
+        { id: 'intelligence', section: 'automation', label: 'Automation', icon: 'zap', href: '#/intelligence/automation' },
+        { id: 'intelligence', section: 'audit', label: 'Audit trail', icon: 'shield-check', href: '#/intelligence/audit' },
+        { id: 'intelligence', section: 'settings', label: 'Settings', icon: 'settings', href: '#/intelligence/settings' },
+      ],
+    },
+  ];
+
   const DATABASES_NAV = [
     {
       label: 'Databases',
@@ -212,7 +244,7 @@
     overview: 'Overview', containers: 'Containers', images: 'Images', compose: 'Compose',
     volumes: 'Volumes', networks: 'Networks', builds: 'Builds', registries: 'Registries',
     monitoring: 'Monitoring', events: 'Events', terminal: 'Terminal', settings: 'Settings',
-    academy: 'Academy', kubernetes: 'Kubernetes', databases: 'Databases', observability: 'Observability', notfound: 'Not found',
+    academy: 'Academy', kubernetes: 'Kubernetes', databases: 'Databases', observability: 'Observability', intelligence: 'Intelligence', notfound: 'Not found',
   };
 
   let currentView = null;
@@ -262,7 +294,7 @@
   let currentWorkspace = (() => {
     try {
       const stored = localStorage.getItem(WORKSPACE_KEY);
-      return stored === 'kubernetes' || stored === 'databases' || stored === 'observability' ? stored : 'docker';
+      return ['kubernetes', 'databases', 'observability', 'intelligence'].includes(stored) ? stored : 'docker';
     } catch { return 'docker'; }
   })();
 
@@ -271,6 +303,7 @@
     if (route?.name === 'kubernetes') id = 'kubernetes';
     else if (route?.name === 'databases') id = 'databases';
     else if (route?.name === 'observability') id = 'observability';
+    else if (route?.name === 'intelligence') id = 'intelligence';
     else if (route?.name !== 'settings') id = 'docker';
     if (id !== currentWorkspace) {
       currentWorkspace = id;
@@ -288,6 +321,9 @@
     }
     if (route.name === 'observability') {
       return OD.views?.observability?.label?.(route.parts[0] || 'overview') || titleCase(route.parts[0] || 'overview');
+    }
+    if (route.name === 'intelligence') {
+      return OD.views?.intelligence?.label?.(route.parts[0] || 'overview') || titleCase(route.parts[0] || 'overview');
     }
     if (route.name !== 'academy') return PAGE_LABELS[route.name] || titleCase(route.name);
     const section = route.parts[0];
@@ -312,6 +348,9 @@
     }
     if (route.name === 'observability') {
       return `<a class="crumb" href="#/observability/overview">Observability</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || 'Overview')}</span>`;
+    }
+    if (route.name === 'intelligence') {
+      return `<a class="crumb" href="#/intelligence/overview">Intelligence</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || 'Overview')}</span>`;
     }
     if (route.name !== 'academy') {
       return `<span class="crumb">Docker</span>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route))}</span>`;
@@ -385,7 +424,7 @@
     }
     currentView = null;
 
-    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && route.name !== 'observability' && !isDockerRoute(route.name)) {
+    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && route.name !== 'observability' && route.name !== 'intelligence' && !isDockerRoute(route.name)) {
       host.innerHTML = `<div class="page">${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no view for “${route.raw}”. Use the sidebar or the command palette to continue.`, action: `<a class="btn btn-primary btn-sm" href="#/overview">Open overview</a>` })}</div>`;
       applyChrome();
       return;
@@ -408,7 +447,8 @@
       : route.name === 'kubernetes' ? OD.views.kubernetes
         : route.name === 'databases' ? OD.views.databases
           : route.name === 'observability' ? OD.views.observability
-            : OD.views.docker;
+            : route.name === 'intelligence' ? OD.views.intelligence
+              : OD.views.docker;
     if (!currentView) {
       host.innerHTML = renderError(new Error('The view module did not load. Check the script order in index.html.'), route);
       applyChrome();
@@ -510,6 +550,19 @@
     </div>`;
   }
 
+  function intelligenceMini() {
+    const status = store.state.intelligence;
+    const resources = status?.resources;
+    const changes = status?.changes;
+    const label = !status ? 'Intelligence' : resources == null ? 'Collecting…' : `${resources} resource${resources === 1 ? '' : 's'}`;
+    const detail = !status ? 'Open the intelligence workspace' : `${changes || 0} change(s) in the last cycle${status.at ? ` · ${timeAgo(status.at)}` : ''}`;
+    return `<div class="engine-mini" role="status" title="${esc(detail)}">
+      <span class="dot ${!status ? '' : changes ? 'bad' : 'ok'}"></span>
+      <span class="sidebar-footer-text">${esc(label)}</span>
+      <a class="icon-btn" href="#/intelligence/overview" title="Open intelligence overview" aria-label="Open intelligence overview">${icon('git-branch', 12)}</a>
+    </div>`;
+  }
+
   function renderSidebar() {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
@@ -519,7 +572,7 @@
     document.getElementById('app').dataset.collapsed = collapsed ? 'true' : 'false';
     const workspaceId = workspaceIdForRoute(route);
     const workspace = WORKSPACES.find((w) => w.id === workspaceId) || WORKSPACES[0];
-    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : workspaceId === 'databases' ? DATABASES_NAV : workspaceId === 'observability' ? OBSERVABILITY_NAV : NAV;
+    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : workspaceId === 'databases' ? DATABASES_NAV : workspaceId === 'observability' ? OBSERVABILITY_NAV : workspaceId === 'intelligence' ? INTELLIGENCE_NAV : NAV;
     // The whole sidebar is repainted on every route change and store update.
     // Keep the reader exactly where they were instead of jumping to the top.
     const scroller = sidebar.querySelector('.sidebar-scroll');
@@ -559,14 +612,14 @@
               <span class="workspace-menu-name">${esc(w.label)}</span>
               ${w.id === workspaceId ? U.badge('active', 'green') : w.soon ? U.badge('planned', 'slate') : ''}
             </button>`).join('')}
-            <div class="workspace-menu-note">Docker, Kubernetes, Databases and Observability are live. Monitoring data is stored separately from the Academy database.</div>
+            <div class="workspace-menu-note">Docker, Kubernetes, Databases, Observability and Intelligence are live. Monitoring and intelligence data are stored separately from the Academy database.</div>
           </div>` : ''}
         </div>
       </div>
       <nav class="sidebar-scroll" aria-label="Primary">
         ${nav.map(navGroup).join('')}
       </nav>
-      ${workspaceId === 'kubernetes' ? kubernetesMini() : workspaceId === 'databases' ? databasesMini() : workspaceId === 'observability' ? observabilityMini() : engineMini()}
+      ${workspaceId === 'kubernetes' ? kubernetesMini() : workspaceId === 'databases' ? databasesMini() : workspaceId === 'observability' ? observabilityMini() : workspaceId === 'intelligence' ? intelligenceMini() : engineMini()}
       <div class="sidebar-footer">
         <a class="nav-item ${route.name === 'settings' ? 'active' : ''}" href="#/settings" title="Settings">
           ${icon('settings', 16)}<span class="nav-label">Settings</span>
@@ -673,6 +726,16 @@
       { title: 'Observability traces', sub: 'OTLP traces grouped by service', type: 'Navigate', icon: 'git-branch', href: '#/observability/traces' },
       { title: 'Observability dashboards', sub: 'Prebuilt and custom metric dashboards', type: 'Navigate', icon: 'layout-dashboard', href: '#/observability/dashboards' },
       { title: 'Observability settings', sub: 'Collectors, retention and ingest receiver', type: 'Navigate', icon: 'settings', href: '#/observability/settings' },
+      { title: 'Intelligence overview', sub: 'Cross-module health, coverage and changes', type: 'Navigate', icon: 'git-branch', href: '#/intelligence/overview' },
+      { title: 'Infrastructure graph', sub: 'Observed and inferred relationships', type: 'Navigate', icon: 'git-branch', href: '#/intelligence/graph' },
+      { title: 'Unified resources', sub: 'Every resource from every module', type: 'Navigate', icon: 'server', href: '#/intelligence/resources' },
+      { title: 'Global search', sub: 'Search resources, events and changes', type: 'Navigate', icon: 'search', href: '#/intelligence/search' },
+      { title: 'Unified timeline', sub: 'One chronological event stream', type: 'Navigate', icon: 'history', href: '#/intelligence/timeline' },
+      { title: 'Change detection', sub: 'What changed since the last snapshot', type: 'Navigate', icon: 'repeat', href: '#/intelligence/changes' },
+      { title: 'Root cause investigation', sub: 'Evidence-based incident analysis', type: 'Navigate', icon: 'stethoscope', href: '#/intelligence/rca' },
+      { title: 'Automation', sub: 'Dry-run, approval-gated workflows', type: 'Navigate', icon: 'zap', href: '#/intelligence/automation' },
+      { title: 'Environments', sub: 'Map resources to local, staging and production', type: 'Navigate', icon: 'layers', href: '#/intelligence/environments' },
+      { title: 'Audit trail', sub: 'Sensitive actions recorded by OpsDeck', type: 'Navigate', icon: 'shield-check', href: '#/intelligence/audit' },
       { title: 'Academy search', sub: 'Search every lesson, command and guide', type: 'Navigate', icon: 'search', href: '#/academy/search' },
       { title: 'Settings', sub: 'Appearance, goals and security', type: 'Navigate', icon: 'settings', href: '#/settings' },
       { title: 'Ask AI about this page', sub: 'Open the assistant with live context  (Ctrl+Shift+A)', type: 'Action', icon: 'sparkles', action: 'ai-ask' },
@@ -878,6 +941,7 @@
       else if (target?.id === 'kubernetes') goto('#/kubernetes/overview');
       else if (target?.id === 'databases') goto('#/databases/dashboard');
       else if (target?.id === 'observability') goto('#/observability/overview');
+      else if (target?.id === 'intelligence') goto('#/intelligence/overview');
       else if (target) runGlobalAction('open-workspace');
       return;
     }
