@@ -59,6 +59,25 @@ jobs:
         env:
           # Unsigned builds: no Developer ID certificate or SignPath secrets yet.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke test the packaged app
+        id: smoke
+        continue-on-error: true
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -o pipefail
+          case "$RUNNER_OS" in
+            Linux)
+              xvfb-run --auto-servernum ./release/linux-unpacked/opsdeck --smoke-test --no-sandbox
+              ;;
+            macOS)
+              app="$(ls -d release/mac*/OpsDeck.app | head -n 1)"
+              "$app/Contents/MacOS/OpsDeck" --smoke-test
+              ;;
+            Windows)
+              ./release/win-unpacked/OpsDeck.exe --smoke-test
+              ;;
+          esac
       - name: Attach artefacts to the release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
