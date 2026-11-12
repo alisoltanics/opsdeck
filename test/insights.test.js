@@ -17,6 +17,7 @@ const {
   analyzeKubernetesHealth, analyzeKubernetesSecurity, analyzeKubernetesStorage,
   analyzeKubernetesNetwork, analyzeKubernetesOptimization, analyzeKubernetesCost,
   analyzeKubernetesGitOps, analyzeKubernetesTroubleshooting, kubernetesInsights,
+  analyzeMultiCluster,
   observabilityAnomalies, observabilityCapacity, observabilitySlos,
   observabilityDependencies, observabilityProfiles,
   __test,
@@ -458,6 +459,46 @@ test('kubernetes: combined report deduplicates and carries limitations', () => {
 });
 
 // ------------------------------------------------------------- observability
+
+test('kubernetes: multi-cluster comparison isolates unreachable contexts', () => {
+  const result = analyzeMultiCluster({
+    selected: 'prod',
+    checkedAt: '2026-01-01T10:00:00.000Z',
+    contexts: [
+      {
+        name: 'prod', cluster: 'eks', ok: true,
+        nodes: { ok: true, total: 3, ready: 2 },
+        pods: { ok: true, total: 10, running: 8, problem: 2 },
+        deployments: { ok: true, total: 4, available: 3 },
+        warningEvents: { ok: true, count: 5 },
+      },
+      { name: 'dev', cluster: 'kind', ok: false, error: 'connection refused' },
+      {
+        name: 'stage', cluster: '', ok: true,
+        nodes: { ok: false, error: 'forbidden' },
+        pods: { ok: false, error: 'forbidden' },
+        deployments: { ok: false, error: 'forbidden' },
+        warningEvents: { ok: false, error: 'forbidden' },
+      },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.available, true);
+  assert.equal(result.selected, 'prod');
+  assert.equal(result.totals.contexts, 3);
+  assert.equal(result.totals.reachable, 2);
+  assert.equal(result.totals.nodes, 3);
+  assert.equal(result.totals.nodesReady, 2);
+  assert.equal(result.totals.podsProblem, 2);
+  assert.equal(result.contexts.find((entry) => entry.name === 'dev').ok, false);
+  const stage = result.contexts.find((entry) => entry.name === 'stage');
+  assert.equal(stage.nodesTotal, null, 'a failed request is not rendered as zero nodes');
+  assert.ok(result.findings.some((entry) => /unreachable/i.test(entry.title) && entry.resource === 'dev'));
+  assert.ok(result.findings.some((entry) => /unready nodes/i.test(entry.title) && entry.resource === 'prod'));
+  assert.ok(result.findings.some((entry) => /unhealthy pods/i.test(entry.title)));
+  assert.ok(result.findings.some((entry) => /unavailable deployments/i.test(entry.title)));
+  assert.ok(result.limitations.some((entry) => /stage: node counts are unavailable/i.test(entry)));
+});
 
 test('observability: SLO error budgets are computed from real samples', async () => {
   const now = Date.now();

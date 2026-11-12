@@ -30,6 +30,12 @@ function validContext(value) {
   return typeof value === 'string' && CONTEXT_RE.test(value);
 }
 
+function clampLimit(value, fallback = 8, max = 12) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.max(Math.round(n), 1), max);
+}
+
 /**
  * Minikube prints a JSON object with capitalised keys when a profile exists,
  * and a lowercase JSON event when no profile exists. Both shapes are accepted.
@@ -689,6 +695,67 @@ class KubernetesService {
       else base.errors[key] = value.error;
     }
     return base;
+  }
+
+  /**
+   * Read-only counts across every configured context.
+   *
+   * Contexts are read concurrently but independently: an unreachable cluster
+   * returns its own error and never removes data from the others. Secrets are
+   * not requested.
+   */
+  async multiClusterSnapshot({ limit = 8 } = {}) {
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    if (!tools.tools.kubectl.installed) return { ok: false, error: 'kubectl is not installed.' };
+    const contexts = (state.contexts || []).slice(0, clampLimit(limit));
+    if (!contexts.length) return { ok: true, contexts: [], selected: state.selected, checkedAt: new Date().toISOString() };
+    const parse = (result) => {
+      if (!result.ok) return { ok: false, error: scrub(result.stderr || 'The request failed.', 300), items: [] };
+      try {
+        const parsed = JSON.parse(result.stdout);
+        return { ok: true, error: '', items: Array.isArray(parsed?.items) ? parsed.items.slice(0, 5000) : [] };
+      } catch {
+        return { ok: false, error: 'The response could not be parsed.', items: [] };
+      }
+    };
+    const results = await Promise.all(contexts.map(async (entry) => {
+      const name = entry.name;
+      try {
+        const [nodes, pods, deployments, events] = await Promise.all([
+          this.kube(['get', 'nodes', '-o', 'json'], { timeout: 15000, context: name }),
+          this.kube(['get', 'pods', '--all-namespaces', '-o', 'json'], { timeout: 15000, context: name }),
+          this.kube(['get', 'deployments.apps', '--all-namespaces', '-o', 'json'], { timeout: 15000, context: name }),
+          this.kube(['get', 'events', '--all-namespaces', '--field-selector', 'type=Warning', '-o', 'json'], { timeout: 15000, context: name }),
+        ]);
+        const nodeList = parse(nodes);
+        const podList = parse(pods);
+        const deploymentList = parse(deployments);
+        const eventList = parse(events);
+        const readyNodes = nodeList.items.filter((node) => (node.status?.conditions || [])
+          .some((condition) => condition.type === 'Ready' && condition.status === 'True')).length;
+        const runningPods = podList.items.filter((pod) => pod.status?.phase === 'Running').length;
+        const problemPods = podList.items.filter((pod) => ['Failed', 'Pending', 'Unknown'].includes(pod.status?.phase)
+          || (pod.status?.containerStatuses || []).some((status) => status.ready === false && status.state?.waiting)).length;
+        const availableDeployments = deploymentList.items.filter((deployment) => {
+          const desired = Number(deployment.spec?.replicas) || 0;
+          const available = Number(deployment.status?.availableReplicas) || 0;
+          return desired > 0 && available >= desired;
+        }).length;
+        return {
+          name,
+          cluster: entry.cluster || '',
+          ok: true,
+          error: '',
+          nodes: { ok: nodeList.ok, total: nodeList.items.length, ready: readyNodes, error: nodeList.error },
+          pods: { ok: podList.ok, total: podList.items.length, running: runningPods, problem: problemPods, error: podList.error },
+          deployments: { ok: deploymentList.ok, total: deploymentList.items.length, available: availableDeployments, error: deploymentList.error },
+          warningEvents: { ok: eventList.ok, count: eventList.items.length, error: eventList.error },
+        };
+      } catch (error) {
+        return { name, cluster: entry.cluster || '', ok: false, error: scrub(error.message || String(error), 300) };
+      }
+    }));
+    return { ok: true, selected: state.selected, contexts: results, checkedAt: new Date().toISOString() };
   }
 
   async resources(section, { allNamespaces = false } = {}) {

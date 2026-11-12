@@ -202,6 +202,41 @@ test('service: kubernetes insights pass configured prices and never list secrets
   }
 });
 
+test('service: multi-cluster comparison forwards its bounded limit', async () => {
+  let requested = null;
+  const kubernetes = {
+    multiClusterSnapshot: async (options) => {
+      requested = options;
+      return {
+        ok: true,
+        selected: 'prod',
+        checkedAt: new Date().toISOString(),
+        contexts: [{
+          name: 'prod', cluster: 'eks', ok: true,
+          nodes: { ok: true, total: 2, ready: 2 },
+          pods: { ok: true, total: 4, running: 4, problem: 0 },
+          deployments: { ok: true, total: 2, available: 2 },
+          warningEvents: { ok: true, count: 0 },
+        }],
+      };
+    },
+  };
+  const { instance } = service({ kubernetes });
+  try {
+    const result = await instance.kubernetesMultiCluster({ limit: 4 });
+    assert.equal(result.ok, true);
+    assert.equal(result.totals.reachable, 1);
+    assert.equal(result.totals.nodesReady, 2);
+    assert.deepEqual(requested, { limit: 4 });
+
+    instance.kubernetes = null;
+    const missing = await instance.kubernetesMultiCluster({});
+    assert.equal(missing.ok, false);
+  } finally {
+    instance.dispose();
+  }
+});
+
 test('service: observability insights evaluate stored objectives against retained metrics', async () => {
   const now = Date.now();
   const up = Array.from({ length: 20 }, (_, i) => [now - 20 * 60e3 + i * 60e3, i < 2 ? 0 : 1]);

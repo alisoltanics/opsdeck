@@ -536,6 +536,7 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('intel:database-insights', (p) => intelligence.databaseInsights(p || {}));
   handle('intel:docker-insights', () => intelligence.dockerInsights());
   handle('intel:kubernetes-insights', (p) => intelligence.kubernetesInsights(p || {}));
+  handle('intel:kubernetes-multicluster', (p) => intelligence.kubernetesMultiCluster(p || {}));
   handle('intel:observability-insights', () => intelligence.observabilityInsights());
 
   observability.start().catch((error) => {

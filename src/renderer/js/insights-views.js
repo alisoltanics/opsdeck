@@ -48,6 +48,9 @@
     settingsError: '',
     dbConnection: '',
     k8sScope: 'all',
+    multiCluster: null,
+    multiClusterLoading: false,
+    multiClusterError: '',
     sloForm: { name: '', metric: 'synthetic.up', comparison: 'gte', threshold: '1', target: '99.9', windowHours: '24', aggregation: 'avg' },
   };
 
@@ -486,6 +489,43 @@
 
   // ------------------------------------------------------------- kubernetes
 
+  function multiClusterBody() {
+    if (S.multiClusterLoading) return U.loader('Reading every configured context…');
+    if (S.multiClusterError) return U.errorBanner('The multi-cluster comparison failed', S.multiClusterError);
+    const data = S.multiCluster;
+    if (!data) {
+      return U.empty({
+        compact: true,
+        icon: 'cloud',
+        title: 'Compare contexts on demand',
+        body: 'Each context is read separately with read-only kubectl calls. Unreachable contexts are reported instead of being hidden or counted as healthy.',
+        action: BTN('Compare contexts', 'layers', 'data-insight-multicluster', 'primary'),
+      });
+    }
+    if (!data.available) {
+      return U.empty({
+        compact: true, icon: 'cloud', title: 'No context configured',
+        body: (data.limitations || [])[0] || 'Add a kubeconfig context before comparing clusters.',
+        action: LINK('Open contexts', 'cloud', '#/kubernetes/contexts', 'primary'),
+      });
+    }
+    const rows = (data.contexts || []).map((entry) => `<tr>
+      <td><strong>${esc(entry.name)}</strong>${entry.name === data.selected ? `<span class="intel-muted"> · selected</span>` : ''}${entry.cluster ? `<div class="intel-muted">${esc(entry.cluster)}</div>` : ''}</td>
+      <td>${entry.ok ? badge('Reachable', 'green') : badge('Unreachable', 'red')}</td>
+      <td class="intel-nowrap">${entry.nodesTotal == null ? '—' : `${fmtNumber(entry.nodesReady)} / ${fmtNumber(entry.nodesTotal)}`}</td>
+      <td class="intel-nowrap">${entry.podsTotal == null ? '—' : `${fmtNumber(entry.podsRunning)} / ${fmtNumber(entry.podsTotal)}`}</td>
+      <td class="intel-nowrap">${entry.podsProblem == null ? '—' : fmtNumber(entry.podsProblem)}</td>
+      <td class="intel-nowrap">${entry.deploymentsTotal == null ? '—' : `${fmtNumber(entry.deploymentsAvailable)} / ${fmtNumber(entry.deploymentsTotal)}`}</td>
+      <td class="intel-nowrap">${entry.warningEvents == null ? '—' : fmtNumber(entry.warningEvents)}</td>
+    </tr>`).join('');
+    return `${table(['Context', 'State', 'Nodes ready', 'Pods running', 'Pods with problems', 'Deployments available', 'Warning events'], rows, {
+      emptyTitle: 'No contexts', emptyBody: 'No kubeconfig context was returned.', icon: 'cloud',
+    })}
+    ${(data.findings || []).length ? `<div class="insight-subhead">Comparison findings</div>${findingsList(data.findings, { limit: 20 })}` : ''}
+    ${(data.limitations || []).length ? `<div class="insight-subhead">Limitations</div><ul class="insight-limits">${data.limitations.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}
+    <p class="intel-muted">${BTN('Refresh comparison', 'refresh', 'data-insight-multicluster', 'secondary', 'xs')} Last read ${esc(timeAgo(data.checkedAt))}.</p>`;
+  }
+
   function kubernetesBody(data) {
     const health = data.health || {};
     const security = data.security || {};
@@ -602,6 +642,13 @@
         ['Flux', gitops.flux ? badge('Detected', 'green') : badge('Not visible', 'slate')],
         ['Managed workloads', fmtNumber((gitops.managedWorkloads || []).length)],
       ])}${managedRows ? table(['Workload'], managedRows) : ''}<p class="intel-muted">Direct kubectl edits to managed objects may be reverted by the controller.</p>` : U.empty({ compact: true, icon: 'git-branch', title: 'No GitOps controller detected', body: (gitops.limitations || [])[0] || '' }) })}
+      ${U.card({
+        title: 'Multi-cluster comparison',
+        icon: 'cloud',
+        sub: 'Read-only counts read separately for every configured context',
+        actions: BTN(S.multiCluster ? 'Refresh' : 'Compare', 'layers', 'data-insight-multicluster', 'secondary', 'xs'),
+        body: multiClusterBody(),
+      })}
       ${limitationsList(data.limitations)}`;
   }
 
@@ -774,12 +821,33 @@
     OD.app?.rerender?.();
   }
 
+  async function loadMultiCluster() {
+    if (S.multiClusterLoading) return;
+    S.multiClusterLoading = true;
+    S.multiClusterError = '';
+    try {
+      const result = await api.intelligence.kubernetesMultiCluster({ limit: 8 });
+      if (!result || result.ok === false) throw new Error(result?.error || 'The contexts could not be read.');
+      S.multiCluster = result;
+    } catch (error) {
+      S.multiClusterError = error.message || String(error);
+    } finally {
+      S.multiClusterLoading = false;
+    }
+    refresh();
+  }
+
   async function onClick(event) {
     if (event.target.closest('[data-insight-refresh]')) {
       event.preventDefault();
       await load(S.module, { force: true });
       if (S.module === 'observability') await bootSettings(true);
       refresh();
+      return;
+    }
+    if (event.target.closest('[data-insight-multicluster]')) {
+      event.preventDefault();
+      await loadMultiCluster();
       return;
     }
     const del = event.target.closest('[data-insight-slo-delete]');

@@ -1491,6 +1491,107 @@ function analyzeKubernetesTroubleshooting({ events = [], pods = [] } = {}) {
   };
 }
 
+/**
+ * Aggregate a read-only health snapshot across configured contexts.
+ *
+ * One unreachable context never hides the others. Absent counts stay null so a
+ * failed request is not rendered as zero objects.
+ */
+function analyzeMultiCluster(snapshot = {}) {
+  const contexts = Array.isArray(snapshot.contexts) ? snapshot.contexts : [];
+  const findings = [];
+  const rows = [];
+  const limitations = [];
+  const totals = {
+    contexts: contexts.length, reachable: 0, nodes: 0, nodesReady: 0,
+    pods: 0, podsRunning: 0, podsProblem: 0,
+    deployments: 0, deploymentsAvailable: 0, warningEvents: 0,
+  };
+  for (const entry of contexts) {
+    const name = clean(entry.name || 'context', 200);
+    const cluster = clean(entry.cluster || '', 200);
+    if (entry.ok === false) {
+      findings.push(finding('multicluster', 'warning', 'Cluster context is unreachable', name, {
+        id: `mc-unreachable-${name}`, resource: name,
+        evidence: clean(entry.error || 'kubectl did not answer.', 300),
+        action: 'Check the kubeconfig entry and network access before comparing this context.',
+      }));
+      rows.push({
+        name, cluster, ok: false, error: clean(entry.error || 'Unreachable', 300),
+        nodesTotal: null, nodesReady: null, podsTotal: null, podsRunning: null, podsProblem: null,
+        deploymentsTotal: null, deploymentsAvailable: null, warningEvents: null,
+      });
+      limitations.push(`${name}: ${clean(entry.error || 'unreachable', 200)}`);
+      continue;
+    }
+    totals.reachable += 1;
+    const nodes = entry.nodes || {};
+    const pods = entry.pods || {};
+    const deployments = entry.deployments || {};
+    const events = entry.warningEvents || {};
+    const nodeTotal = nodes.ok === false ? null : num(nodes.total);
+    const nodeReady = nodes.ok === false ? null : num(nodes.ready);
+    const podTotal = pods.ok === false ? null : num(pods.total);
+    const podRunning = pods.ok === false ? null : num(pods.running);
+    const podProblem = pods.ok === false ? null : num(pods.problem);
+    const deploymentTotal = deployments.ok === false ? null : num(deployments.total);
+    const deploymentAvailable = deployments.ok === false ? null : num(deployments.available);
+    const warningEvents = events.ok === false ? null : num(events.count);
+    if (nodeTotal == null) limitations.push(`${name}: node counts are unavailable.`);
+    if (podTotal == null) limitations.push(`${name}: pod counts are unavailable.`);
+    if (deploymentTotal == null) limitations.push(`${name}: deployment counts are unavailable.`);
+    totals.nodes += nodeTotal || 0;
+    totals.nodesReady += nodeReady || 0;
+    totals.pods += podTotal || 0;
+    totals.podsRunning += podRunning || 0;
+    totals.podsProblem += podProblem || 0;
+    totals.deployments += deploymentTotal || 0;
+    totals.deploymentsAvailable += deploymentAvailable || 0;
+    totals.warningEvents += warningEvents || 0;
+    if (nodeTotal != null && nodeReady != null && nodeReady < nodeTotal) {
+      findings.push(finding('multicluster', 'critical', 'A cluster has unready nodes', name, {
+        id: `mc-nodes-${name}`, resource: name,
+        evidence: `${nodeReady} of ${nodeTotal} node(s) ready`,
+      }));
+    }
+    if (podProblem) {
+      findings.push(finding('multicluster', 'warning', 'A cluster has unhealthy pods', name, {
+        id: `mc-pods-${name}`, resource: name,
+        evidence: `${podProblem} pod(s) pending, failed or waiting`,
+      }));
+    }
+    if (deploymentTotal != null && deploymentAvailable != null && deploymentAvailable < deploymentTotal) {
+      findings.push(finding('multicluster', 'warning', 'A cluster has unavailable deployments', name, {
+        id: `mc-deploy-${name}`, resource: name,
+        evidence: `${deploymentAvailable} of ${deploymentTotal} deployment(s) fully available`,
+      }));
+    }
+    if (warningEvents) {
+      findings.push(finding('multicluster', 'info', 'A cluster reports warning events', name, {
+        id: `mc-events-${name}`, resource: name, evidence: `${warningEvents} Warning event(s) retained`,
+      }));
+    }
+    rows.push({
+      name, cluster, ok: true, error: '',
+      nodesTotal: nodeTotal, nodesReady: nodeReady,
+      podsTotal: podTotal, podsRunning: podRunning, podsProblem: podProblem,
+      deploymentsTotal: deploymentTotal, deploymentsAvailable: deploymentAvailable,
+      warningEvents,
+    });
+  }
+  if (!contexts.length) limitations.push('No kubeconfig context is configured.');
+  return {
+    ok: true,
+    available: contexts.length > 0,
+    selected: clean(snapshot.selected || '', 200),
+    checkedAt: snapshot.checkedAt || new Date().toISOString(),
+    contexts: rows.slice(0, 30),
+    totals,
+    findings: sortFindings(findings).slice(0, 80),
+    limitations: limitations.slice(0, 20),
+  };
+}
+
 function kubernetesInsights(data = {}, cost = {}) {
   const items = data.items || {};
   const health = analyzeKubernetesHealth(items);
@@ -1814,6 +1915,7 @@ module.exports = {
   analyzeKubernetesGitOps,
   analyzeKubernetesTroubleshooting,
   kubernetesInsights,
+  analyzeMultiCluster,
   observabilityAnomalies,
   observabilityCapacity,
   observabilityDependencies,

@@ -286,6 +286,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     databaseInsights: (payload) => invoke('intel:database-insights', payload),
     dockerInsights: () => invoke('intel:docker-insights'),
     kubernetesInsights: (payload) => invoke('intel:kubernetes-insights', payload),
+    kubernetesMultiCluster: (payload) => invoke('intel:kubernetes-multicluster', payload),
     observabilityInsights: () => invoke('intel:observability-insights'),
   },
   events: {

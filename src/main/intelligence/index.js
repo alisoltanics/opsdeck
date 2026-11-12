@@ -28,6 +28,7 @@ const {
   analyzeDockerSecurity, analyzeDockerImages, analyzeDockerResources, analyzeDockerCompose,
   analyzeDockerOptimizer, compareDockerEnvironments,
   kubernetesInsights: kubernetesInsightsReport,
+  analyzeMultiCluster,
   observabilityInsights: observabilityInsightsModule,
   sortFindings, summarize,
 } = require('./insights');
@@ -801,6 +802,16 @@ class IntelligenceService {
     if (data.ok === false) return { ok: false, error: data.error || 'The cluster could not be read.', limitations: Object.values(data.errors || {}) };
     const result = kubernetesInsightsReport(data, this.store.get().settings.cost || {});
     return { ...result, tools: data.tools, contexts: data.contexts, durationMs: 0 };
+  }
+
+  /** Read-only health comparison across every configured Kubernetes context. */
+  async kubernetesMultiCluster(payload = {}) {
+    if (!this.kubernetes || typeof this.kubernetes.multiClusterSnapshot !== 'function') {
+      return { ok: false, error: 'The Kubernetes bridge is not available in this build.' };
+    }
+    const snapshot = await this.kubernetes.multiClusterSnapshot({ limit: payload.limit });
+    if (snapshot.ok === false) return { ok: false, error: snapshot.error || 'The contexts could not be read.' };
+    return analyzeMultiCluster(snapshot);
   }
 
   /** Observability SLOs, anomaly detection, capacity forecasts, dependency map and profiles. */
