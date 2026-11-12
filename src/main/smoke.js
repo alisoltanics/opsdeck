@@ -137,6 +137,8 @@ function rendererScript(routes) {
     // machine must still pass the shell, routing and observability checks.
     const dockerStatus = await window.opsdeck.docker.status();
     const dockerUp = dockerStatus?.available === true;
+    const dockerImages = dockerUp ? await window.opsdeck.docker.images() : null;
+    const hasImages = Boolean(dockerImages?.ok) && (dockerImages?.items || []).length > 0;
 
     await waitFor(() => document.querySelector('#view .page') && !document.querySelector('#view [aria-busy="true"]'), 8000);
 
@@ -499,7 +501,7 @@ function rendererScript(routes) {
     await waitFor(() => !!document.querySelector('#image-tbody'), 8000);
     const runFromImage = document.querySelector('#image-tbody [data-iact="run"]');
     if (!runFromImage) {
-      if (dockerUp) failures.push('images: create-and-start button is missing');
+      if (hasImages) failures.push('images: create-and-start button is missing');
     } else {
       const expectedRef = runFromImage.dataset.iref || '';
       runFromImage.click();
@@ -545,7 +547,7 @@ function rendererScript(routes) {
     // Image row -> containers filtered by that exact image, with a removable chip.
     const containersForImage = document.querySelector('#image-tbody [data-iact="containers"]');
     if (!containersForImage) {
-      if (dockerUp) failures.push('images: show-containers button is missing');
+      if (hasImages) failures.push('images: show-containers button is missing');
     } else {
       const imageName = containersForImage.dataset.iname || '';
       const row = containersForImage.closest('tr');
