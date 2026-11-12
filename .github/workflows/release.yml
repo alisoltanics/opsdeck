@@ -42,12 +42,9 @@ jobs:
           - runner: windows-latest
             name: windows-x64
             command: npx electron-builder --win nsis portable --x64 --publish never
-          - runner: macos-13
-            name: macos-x64
-            command: npx electron-builder --mac dmg zip --x64 --publish never
-          - runner: macos-14
-            name: macos-arm64
-            command: npx electron-builder --mac dmg zip --arm64 --publish never
+          - runner: macos-latest
+            name: macos-universal
+            command: npx electron-builder --mac dmg zip --x64 --arm64 --publish never
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.name }}
     steps:
