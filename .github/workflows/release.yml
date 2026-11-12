@@ -21,10 +21,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: node --test test/
@@ -48,10 +48,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - name: Package
@@ -76,7 +76,7 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
       - name: Keep artefacts for manual download
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opsdeck-${{ matrix.name }}
           path: |
