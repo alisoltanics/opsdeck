@@ -167,9 +167,10 @@
   }
 
   function pageHead(page, actions = '') {
+    const ai = OD.ai?.button ? OD.ai.button({ kind: 'intelligence', page }, { label: 'Ask AI' }) : '';
     return `<div class="page-head intel-page-head">
       <div class="page-head-left"><h1 class="page-title">${esc(PAGES[page] || 'Intelligence')}</h1><p class="page-sub">${esc(subtitle(page))}</p></div>
-      <div class="intel-head-actions">${actions}${BTN('Refresh', 'refresh', 'data-intel-refresh', 'secondary')}</div>
+      <div class="intel-head-actions">${actions}${ai}${BTN('Refresh', 'refresh', 'data-intel-refresh', 'secondary')}</div>
     </div>`;
   }
 
@@ -576,7 +577,7 @@
       <td>${statusBadge(item.status)}</td>
       <td>${envSelect(item)}</td>
       <td class="intel-muted">${esc(item.namespace || item.host || item.cluster || '—')}</td>
-      <td class="intel-row-actions">${BTN('', 'star', `data-intel-favorite="${esc(item.id)}" data-name="${esc(item.name)}" data-module="${esc(item.module)}" data-kind="${esc(item.kind)}" data-href="${esc(item.href || '')}" title="Add to favourites"`, 'ghost', 'xs')}</td>
+      <td class="intel-row-actions">${OD.ai?.iconButton ? OD.ai.iconButton({ kind: 'intelligence', page: 'resources', id: item.id, name: item.name }, { label: 'Ask AI about this resource' }) : ''}${BTN('', 'star', `data-intel-favorite="${esc(item.id)}" data-name="${esc(item.name)}" data-module="${esc(item.module)}" data-kind="${esc(item.kind)}" data-href="${esc(item.href || '')}" title="Add to favourites"`, 'ghost', 'xs')}</td>
     </tr>`);
 
     return `<div class="intel-filter-bar">
@@ -708,7 +709,7 @@
       <td>${esc((incident.services || []).slice(0, 3).join(', ') || '—')}</td>
       <td>${esc((incident.resources || []).slice(0, 3).join(', ') || '—')}</td>
       <td class="intel-nowrap">${incident.updatedAt ? esc(timeAgo(incident.updatedAt)) : '—'}</td>
-      <td class="intel-row-actions">${BTN('Investigate', 'stethoscope', `data-intel-investigate-incident="${esc(incident.id)}"`, 'ghost', 'xs')}</td>
+      <td class="intel-row-actions">${OD.ai?.iconButton ? OD.ai.iconButton({ kind: 'intelligence', page: 'incidents', id: incident.id, name: incident.title }, { label: 'Ask AI about this incident' }) : ''}${BTN('Investigate', 'stethoscope', `data-intel-investigate-incident="${esc(incident.id)}"`, 'ghost', 'xs')}</td>
     </tr>`);
     return `<div class="intel-filter-bar"><span class="intel-muted">${fmtNumber(items.length)} incident(s) from the observability store.</span>${LINK('Open observability incidents', 'arrow-up-right', '#/observability/incidents')}${LINK('Investigate', 'stethoscope', '#/intelligence/rca', 'primary')}</div>
       ${U.card({ title: 'Cross-module incidents', icon: 'alert-triangle', sub: 'Related alerts, metrics, logs and traces are joined on demand', body: table(['Incident', 'Severity', 'Status', 'Services', 'Resources', 'Updated', ''], rows, { emptyTitle: 'No incidents', emptyBody: 'Incidents are created by alert rules or by an automation action. Nothing is generated for display.' }) })}`;

@@ -215,6 +215,13 @@ const SUGGESTIONS = {
     'Which read-only query should I run next to investigate?',
     'Explain what the connection status and recent activity tell you.',
   ],
+  intelligence: [
+    'Summarise the current health of the whole environment and the top three risks.',
+    'Which recent changes line up with the resources that are unhealthy?',
+    'Separate what is observed from what is only inferred in this evidence.',
+    'What read-only check should I run next, and what would it prove?',
+    'Explain this incident timeline and list the unanswered questions.',
+  ],
   'db-object': [
     'Explain this table: its purpose, keys and relationships.',
     'Which indexes or constraints are missing or redundant?',
@@ -987,12 +994,13 @@ function lessonText(lesson) {
 // ------------------------------------------------------------------ service
 
 class AIService {
-  constructor({ app, content, kubernetes = null, databases = null, observability = null }) {
+  constructor({ app, content, kubernetes = null, databases = null, observability = null, intelligence = null }) {
     this.app = app;
     this.databases = databases;
     this.content = content;
     this.kubernetes = kubernetes;
     this.observability = observability;
+    this.intelligence = intelligence;
     this.configPath = process.env.OPSDECK_AI_CONFIG_PATH || path.join(app.getPath('userData'), 'ai.json');
     this.config = this.loadConfig();
     this.contextCache = new Map();
@@ -1956,9 +1964,10 @@ class AIService {
     let suggestions = SUGGESTIONS[kind] || SUGGESTIONS.default;
     const kubernetesContext = kind === 'kubernetes' || kind === 'k8s-resource' || kind === 'database' || kind === 'db-object';
     const observabilityContext = kind === 'observability';
+    const crossModuleContext = kind === 'intelligence';
     let engine = null;
 
-    if (!kubernetesContext && !observabilityContext) {
+    if (!kubernetesContext && !observabilityContext && !crossModuleContext) {
       engine = await docker.status().catch((error) => ({ available: false, reason: error.message || String(error) }));
       if (kind !== 'lesson' && kind !== 'course' && kind !== 'academy') {
         builder.add('Docker engine', formatEngine(engine));
@@ -1986,6 +1995,11 @@ class AIService {
         title = out.title || title;
         subtitle = out.subtitle || subtitle;
         suggestions = SUGGESTIONS.observability;
+      } else if (kind === 'intelligence') {
+        const out = await this.intelligenceContext(target, builder);
+        title = out.title || title;
+        subtitle = out.subtitle || subtitle;
+        suggestions = out.suggestions || SUGGESTIONS.intelligence;
       } else if (kind === 'container') {
         const out = await this.containerContext(target, builder);
         title = out.title || title;
@@ -2481,6 +2495,144 @@ class AIService {
     if (pageKey && details[pageKey]) builder.add(`Page detail: ${page}`, pretty(details[pageKey]).slice(0, MAX_CONTEXT_CHARS / 3));
     builder.add('Rules', 'Use only the collected values above. If a metric is absent, say so explicitly. Never invent a sample, alert or container state.');
     return { title: `Observability · ${titleCase(page)}`, subtitle: 'Live monitoring context' };
+  }
+
+  /**
+   * Cross-module context for the Intelligence workspace.
+   *
+   * Every value comes from IntelligenceService collectors and stores. Observed
+   * and inferred relationships stay labelled, facts stay separate from
+   * hypotheses, and unavailable modules are reported rather than guessed.
+   */
+  async intelligenceContext(target, builder) {
+    const page = String(target.page || 'overview');
+    if (!this.intelligence) {
+      builder.add('Intelligence', 'The cross-module intelligence service is not available in this build.');
+      return { title: `Intelligence · ${titleCase(page)}`, subtitle: 'Service unavailable', suggestions: SUGGESTIONS.intelligence };
+    }
+    const service = this.intelligence;
+    builder.add('Workspace', `OpsDeck cross-module intelligence · page=${page}`);
+    builder.add('Evidence rules', [
+      'Only values returned by the main-process collectors appear below.',
+      'Relationship confidence is either observed or inferred; inferred edges must be described as inferences.',
+      'A missing value is unknown, not healthy. Do not invent resources, changes, alerts or metrics.',
+      'Recommend read-only checks first. Any disruptive action needs explicit human approval.',
+    ].join('\n'));
+
+    const safe = async (label, fn) => {
+      try { return await fn(); } catch (error) {
+        builder.add(`${label} warning`, redactSecrets(error.message || String(error)));
+        return null;
+      }
+    };
+
+    const boot = await safe('Workspace state', () => service.bootstrap());
+    if (boot) {
+      const modules = Object.entries(boot.modules || {}).map(([module, available]) => `${module}: ${available ? 'available' : 'not available'}`);
+      builder.add('Modules', modules.join('\n') || 'No module is connected.');
+      const settings = boot.settings || {};
+      builder.add('Automation settings', pretty({
+        enabled: settings.automationEnabled !== false,
+        intervalSec: settings.automationIntervalSec,
+        environmentMatch: settings.environmentMatch !== false,
+        objectives: (settings.slos || []).map((slo) => `${slo.name} · ${slo.metric} ${slo.comparison === 'lte' ? '<=' : '>='} ${slo.threshold} · target ${slo.target}%`),
+        prices: settings.cost || null,
+      }));
+      if ((boot.favorites || []).length) {
+        builder.add('Pinned resources', boot.favorites.slice(0, 20).map((entry) => `${entry.module}/${entry.kind} · ${entry.name}${entry.href ? ` · ${entry.href}` : ''}`).join('\n'));
+      }
+    }
+
+    const snapshot = await safe('Inventory', () => service.snapshot());
+    const items = snapshot?.items || [];
+    if (items.length) {
+      const totals = service.totals(items);
+      builder.add('Inventory', pretty({
+        total: totals.total,
+        byModule: totals.byModule,
+        byStatus: totals.byStatus,
+        byEnvironment: totals.byEnvironment,
+        sources: Object.fromEntries(Object.entries(snapshot.sources || {}).map(([key, value]) => [key, value?.ok === false ? `unavailable: ${value.error || 'unknown error'}` : 'ok'])),
+      }));
+      const attention = items.filter((item) => ['unhealthy', 'degraded', 'stopped'].includes(item.status)).slice(0, 30);
+      builder.add('Needs attention', attention.length ? pretty(attention.map((item) => ({
+        id: item.id, module: item.module, kind: item.kind, name: item.name,
+        namespace: item.namespace || '', status: item.status, environment: item.environment || '', href: item.href || '',
+      }))) : 'No collected resource is unhealthy, degraded or stopped.');
+      const needle = String(target.resourceId || target.id || '').trim();
+      let selected = null;
+      if (needle && page !== 'incidents') selected = items.find((item) => item.id === needle) || null;
+      if (!selected && target.name && page === 'resources') selected = items.find((item) => item.name === target.name) || null;
+      if (selected) {
+        builder.add('Selected resource', pretty({
+          id: selected.id, module: selected.module, kind: selected.kind, name: selected.name,
+          namespace: selected.namespace || '', cluster: selected.cluster || '', host: selected.host || '',
+          status: selected.status, environment: selected.environment || '', href: selected.href || '',
+          labels: selected.labels || {}, metadata: selected.metadata || {},
+        }));
+      }
+    } else if (snapshot) {
+      builder.add('Inventory', 'The collectors returned no resources. That is not evidence that the environment is empty; check each module.');
+    }
+
+    if (page === 'incidents') {
+      const incidents = await safe('Incidents', () => service.listIncidents({ limit: 20 }));
+      if (target.id) {
+        const one = await safe('Incident', () => service.incidentGet(target.id));
+        const incident = one?.incident || null;
+        if (incident) builder.add('Incident', pretty({ ...incident, timeline: (incident.timeline || []).slice(-20) }));
+        else builder.add('Incident', one?.error || 'That incident is not in the retention window.');
+      }
+      builder.add('Recent incidents', (incidents?.items || []).slice(0, 20).map((entry) => `${entry.severity} · ${entry.status} · ${entry.title} · alerts ${entry.alertCount ?? 0} · updated ${entry.updatedAt || ''}`).join('\n') || 'No incident is retained.');
+    } else if (page === 'changes') {
+      const history = await safe('Changes', () => service.changesHistory({ limit: 40, query: target.query || '' }));
+      builder.add('Recent changes', (history?.items || []).slice(0, 40).map((entry) => `${entry.at || ''} · ${entry.module}/${entry.kind} · ${entry.name || entry.resourceId || ''} · ${entry.type || entry.change || 'change'}`).join('\n') || 'No change has been recorded yet. A baseline is stored on the first refresh.');
+    } else if (page === 'timeline') {
+      const timeline = await safe('Timeline', () => service.timeline({ limit: 50 }));
+      builder.add('Unified timeline', (timeline?.items || []).slice(0, 50).map((entry) => `${entry.at || ''} · ${entry.module || entry.source || ''} · ${entry.severity || 'info'} · ${entry.title || entry.text || ''}`).join('\n') || 'No event was returned for the last 24 hours.');
+    } else if (page === 'graph') {
+      const graph = await safe('Graph', () => service.graph({ module: target.module || '' }));
+      if (graph?.stats) builder.add('Graph statistics', pretty(graph.stats));
+      if ((graph?.edges || []).length) {
+        builder.add('Sample relationships', (graph.edges || []).slice(0, 40).map((edge) => `${edge.from} → ${edge.to} · ${edge.kind || edge.type || 'relationship'} · ${edge.confidence || 'unknown'}${edge.evidence ? ` · ${edge.evidence}` : ''}`).join('\n'));
+      } else {
+        builder.add('Relationships', 'No edge was observed or inferred from the collected data.');
+      }
+    } else if (page === 'automation') {
+      const automations = await safe('Automations', () => service.automations());
+      builder.add('Automations', (automations?.items || []).slice(0, 20).map((entry) => `${entry.enabled === false ? 'disabled' : 'enabled'} · ${entry.name} · ${entry.trigger?.type || entry.triggerType || 'manual'} · last ${entry.lastStatus || 'never'} ${entry.lastRunAt || ''}`).join('\n') || 'No automation is defined.');
+      const runs = await safe('Automation runs', () => service.automationRuns({ limit: 10 }));
+      builder.add('Recent runs', (runs?.items || []).slice(0, 10).map((run) => `${run.startedAt || run.at || ''} · ${run.status}${run.dryRun ? ' (dry run)' : ''} · ${run.reason || ''}${(run.steps || []).length ? ` · steps ${run.steps.length}` : ''}`).join('\n') || 'No run has been recorded.');
+    } else if (page === 'environments') {
+      const environments = await safe('Environments', () => service.environmentsList());
+      builder.add('Environments', (environments?.items || []).map((entry) => `${entry.name} · ${entry.kind || 'custom'} · ${entry.resourceCount ?? 0} resource(s)${entry.description ? ` · ${entry.description}` : ''}`).join('\n') || 'No environment is defined.');
+    } else if (page === 'rca') {
+      const input = target.incidentId ? { incidentId: target.incidentId }
+        : target.alertId ? { alertId: target.alertId }
+          : (target.query || target.name) ? { scope: target.query || target.name } : null;
+      if (input) {
+        const result = await safe('Investigation', () => service.investigate(input));
+        if (result?.ok) {
+          builder.add('Facts', (result.facts || []).join('\n') || 'No fact could be established.');
+          builder.add('Hypotheses (not confirmed)', (result.hypotheses || []).map((entry) => `${entry.confidence || 'unknown'} · ${entry.title || entry.text || entry}`).join('\n') || 'No hypothesis was formed.');
+          builder.add('Limitations', (result.limitations || []).join('\n') || 'None reported.');
+        } else {
+          builder.add('Investigation', result?.error || 'The investigation could not run.');
+        }
+      } else {
+        builder.add('Investigation scope', 'No alert, incident or resource was selected on this page.');
+      }
+    } else if (page === 'reports') {
+      const types = await safe('Report types', () => service.reportTypes());
+      builder.add('Report types', pretty(types?.types || []));
+    } else if (page === 'audit') {
+      const audit = await safe('Audit trail', () => service.auditList({ limit: 30 }));
+      builder.add('Recent audit entries', (audit?.items || []).slice(0, 30).map((entry) => `${entry.at || ''} · ${entry.module || ''} · ${entry.action || ''} · ${entry.outcome || ''} · ${entry.detail || ''}`).join('\n') || 'No audited operation yet.');
+    } else if (page === 'settings') {
+      builder.add('Settings', pretty(boot?.settings || {}));
+    }
+
+    return { title: `Intelligence · ${titleCase(page)}`, subtitle: 'Cross-module live evidence', suggestions: SUGGESTIONS.intelligence };
   }
 
   async databaseContext(target, builder) {

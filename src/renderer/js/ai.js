@@ -16,7 +16,7 @@
 
   const MAX_SESSIONS = 12;
   const MAX_MESSAGES = 40;
-  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource', 'observability']);
+  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource', 'observability', 'intelligence']);
 
   const state = {
     config: null,
@@ -44,6 +44,9 @@
     if (route.name === 'observability') {
       return { kind: 'observability', page: route.parts?.[0] || 'overview' };
     }
+    if (route.name === 'intelligence') {
+      return { kind: 'intelligence', page: route.parts?.[0] || 'overview' };
+    }
     return { kind: 'page', page: route.name || 'overview' };
   }
 
@@ -60,6 +63,7 @@
     if (target.kind === 'kubernetes') return `Kubernetes · ${titleCase(target.page || 'overview')}`;
     if (target.kind === 'database') return `Databases · ${titleCase(target.page || 'dashboard')}`;
     if (target.kind === 'observability') return `Observability · ${titleCase(target.page || 'overview')}`;
+    if (target.kind === 'intelligence') return `Intelligence · ${titleCase(target.page || 'overview')}`;
     if (target.kind === 'db-object') return target.name || 'Database object';
     if (target.kind === 'k8s-resource') return target.name || 'Kubernetes object';
     if (target.name) return target.name;
@@ -87,6 +91,7 @@
       academy: 'Curriculum and progress',
       kubernetes: 'Kubernetes workspace · live cluster context',
       observability: 'Observability workspace · live monitoring context',
+      intelligence: 'Cross-module intelligence · live environment evidence',
       'k8s-resource': 'Kubernetes object · sanitized live context',
       page: 'Docker workspace · live page context',
     };

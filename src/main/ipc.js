@@ -22,7 +22,7 @@ function registerIpc({ getWindow, dialog, app }) {
   const databases = new DatabaseService({ app, docker, kubernetes });
   const observability = new ObservabilityService({ app, docker, kubernetes, databases, getWindow });
   const intelligence = new IntelligenceService({ app, docker, kubernetes, databases, observability, getWindow });
-  const ai = new AIService({ app, content, kubernetes, databases, observability });
+  const ai = new AIService({ app, content, kubernetes, databases, observability, intelligence });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
     console.error('Academy store failed to initialise:', error);
