@@ -1,0 +1,92 @@
+name: release
+
+# Builds OpsDeck for Linux, Windows and macOS, then attaches the installers to
+# the GitHub release for the pushed tag. Windows and macOS artefacts can only be
+# produced on their own operating systems, so each platform runs on its own
+# runner; every job runs the quality gates before packaging.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node --test test/
+      - run: npm run check
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            name: linux-x64
+            command: npx electron-builder --linux AppImage deb --x64 --publish never
+          - runner: windows-latest
+            name: windows-x64
+            command: npx electron-builder --win nsis portable --x64 --publish never
+          - runner: macos-13
+            name: macos-x64
+            command: npx electron-builder --mac dmg zip --x64 --publish never
+          - runner: macos-14
+            name: macos-arm64
+            command: npx electron-builder --mac dmg zip --arm64 --publish never
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Package
+        run: ${{ matrix.command }}
+        env:
+          # Unsigned builds: no Developer ID certificate or SignPath secrets yet.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Attach artefacts to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.AppImage release/*.deb release/*.exe release/*.dmg release/*.zip release/*.blockmap)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No packaged artefacts were produced." >&2
+            exit 1
+          fi
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "OpsDeck ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+      - name: Keep artefacts for manual download
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsdeck-${{ matrix.name }}
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+          if-no-files-found: warn

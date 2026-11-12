@@ -13,12 +13,14 @@ const { LabService } = require('./labs');
 const { AIService } = require('./ai');
 const { KubernetesService } = require('./kubernetes');
 const { DatabaseService } = require('./databases');
+const { ObservabilityService } = require('./observability');
 
 function registerIpc({ getWindow, dialog, app }) {
   const content = new ContentService(app);
   const kubernetes = new KubernetesService({ app, dialog, getWindow });
   const databases = new DatabaseService({ app, docker, kubernetes });
-  const ai = new AIService({ app, content, kubernetes, databases });
+  const observability = new ObservabilityService({ app, docker, kubernetes, databases, getWindow });
+  const ai = new AIService({ app, content, kubernetes, databases, observability });
   const store = new AcademyStore(path.join(app.getPath('userData'), 'academy.db'));
   const storeReady = store.init().catch((error) => {
     console.error('Academy store failed to initialise:', error);
@@ -344,6 +346,145 @@ function registerIpc({ getWindow, dialog, app }) {
     return databases.exportResult({ ...p, path: target, format });
   });
 
+  // ---------------- Observability ----------------
+  const obsDetail = (key) => {
+    const method = {
+      local: 'localDetail',
+      docker: 'dockerDetail',
+      kubernetes: 'kubernetesDetail',
+      databases: 'databaseDetail',
+      remote: 'remoteDetail',
+      synthetic: 'syntheticDetail',
+      network: 'networkDetail',
+      applications: 'applicationDetail',
+    }[key];
+    return method ? observability[method]() : { ok: false, error: 'Unknown collector.' };
+  };
+
+  handle('obs:bootstrap', () => observability.bootstrap());
+  handle('obs:overview', (p) => observability.overview(p || {}));
+  handle('obs:collector', (p) => obsDetail(p?.key));
+  handle('obs:settings-update', (p) => observability.updateSettings(p || {}));
+
+  handle('obs:metrics-query', (p) => observability.metricsQuery(p || {}));
+  handle('obs:metrics-catalog', (p) => observability.metricsCatalog(p || {}));
+  handle('obs:metrics-labels', (p) => observability.metricsLabels(p?.name, p?.label));
+  handle('obs:metrics-export', (p) => observability.metricsExport(p || {}));
+
+  handle('obs:dashboards', () => observability.dashboardList());
+  handle('obs:dashboard-get', (p) => observability.dashboardGet(p?.id));
+  handle('obs:dashboard-save', (p) => observability.dashboardSave(p || {}));
+  handle('obs:dashboard-delete', (p) => observability.dashboardDelete(p?.id));
+  handle('obs:dashboard-duplicate', (p) => observability.dashboardDuplicate(p?.id));
+  handle('obs:dashboard-favorite', (p) => observability.dashboardFavorite(p?.id));
+  handle('obs:dashboard-data', (p) => observability.dashboardData(p || {}));
+
+  handle('obs:servers', () => ({ ok: true, servers: observability.listServers() }));
+  handle('obs:server-save', (p) => observability.saveServer(p || {}));
+  handle('obs:server-delete', (p) => observability.deleteServer(p?.id));
+  handle('obs:server-test', (p) => observability.testServer(p?.id));
+
+  handle('obs:targets', () => ({ ok: true, targets: observability.listTargets() }));
+  handle('obs:target-save', (p) => observability.saveTarget(p || {}));
+  handle('obs:target-delete', (p) => observability.deleteTarget(p?.id));
+  handle('obs:target-test', (p) => observability.testTarget(p?.id));
+
+  handle('obs:network', () => ({ ok: true, checks: observability.listNetworkChecks(), devices: observability.listNetworkDevices() }));
+  handle('obs:network-check-save', (p) => observability.saveNetworkCheck(p || {}));
+  handle('obs:network-check-delete', (p) => observability.deleteNetworkCheck(p?.id));
+  handle('obs:network-device-save', (p) => observability.saveNetworkDevice(p || {}));
+  handle('obs:network-device-delete', (p) => observability.deleteNetworkDevice(p?.id));
+
+  handle('obs:logs-bootstrap', () => observability.logsBootstrap());
+  handle('obs:logs-query', (p) => observability.logsQuery(p || {}));
+  handle('obs:logs-collect', (p) => observability.logsCollect(p || {}));
+  handle('obs:logs-clear', () => observability.logsClear());
+  handle('obs:logs-export', (p) => observability.logsExport(p || {}));
+
+  handle('obs:traces-bootstrap', () => observability.tracesBootstrap());
+  handle('obs:traces-query', (p) => observability.tracesQuery(p || {}));
+  handle('obs:trace-get', (p) => observability.traceGet(p?.id));
+  handle('obs:traces-clear', () => observability.tracesClear());
+
+  handle('obs:alert-rules', () => observability.alertRules());
+  handle('obs:alert-rule-save', (p) => observability.alertRuleSave(p || {}));
+  handle('obs:alert-rule-delete', (p) => observability.alertRuleDelete(p?.id));
+  handle('obs:alerts', (p) => observability.alertsList(p || {}));
+  handle('obs:alert-acknowledge', (p) => observability.alertAcknowledge(p?.id, p?.by));
+  handle('obs:alert-resolve', (p) => observability.alertResolve(p?.id, p?.note));
+  handle('obs:silences', () => observability.silences());
+  handle('obs:silence-create', (p) => observability.silenceCreate(p || {}));
+  handle('obs:silence-delete', (p) => observability.silenceDelete(p?.id));
+
+  handle('obs:incidents', (p) => observability.incidentsList(p || {}));
+  handle('obs:incident-get', (p) => observability.incidentGet(p?.id));
+  handle('obs:incident-create', (p) => observability.incidentCreate(p || {}));
+  handle('obs:incident-update', (p) => observability.incidentUpdate(p?.id, p?.patch || {}));
+  handle('obs:incident-merge', (p) => observability.incidentMerge(Array.isArray(p?.ids) ? p.ids : []));
+
+  handle('obs:integrations', () => observability.integrationsList());
+  handle('obs:integration-save', (p) => observability.integrationSave(p || {}));
+  handle('obs:integration-delete', (p) => observability.integrationDelete(p?.id));
+  handle('obs:integration-test', (p) => observability.integrationTest(p?.id));
+  handle('obs:integration-discover', (p) => observability.integrationDiscover(p?.id));
+  handle('obs:integration-query', (p) => observability.integrationQuery(p?.id, p?.expression, p?.options || {}));
+
+  handle('obs:channels', () => ({ ok: true, channels: observability.listChannels() }));
+  handle('obs:channel-save', (p) => observability.saveChannel(p || {}));
+  handle('obs:channel-delete', (p) => observability.deleteChannel(p?.id));
+  handle('obs:channel-test', (p) => observability.testChannel(p?.id));
+
+  handle('obs:report-types', () => observability.reportTypes());
+  handle('obs:report-generate', (p) => observability.reportGenerate(p || {}));
+  handle('obs:report-export-file', async (p) => {
+    const report = observability.reportGenerate(p || {});
+    if (!report.ok) return report;
+    const ext = report.mime === 'application/pdf' ? 'pdf' : report.mime === 'text/csv' ? 'csv' : 'json';
+    const chosen = await dialog.showSaveDialog(getWindow(), {
+      title: 'Save observability report',
+      defaultPath: report.filename,
+      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+    const encoding = report.encoding === 'base64' ? 'base64' : 'utf8';
+    fs.writeFileSync(chosen.filePath, report.content, { mode: 0o600, encoding });
+    return { ok: true, file: chosen.filePath, bytes: Buffer.byteLength(report.content, encoding), filename: report.filename };
+  });
+
+  handle('obs:agents', () => observability.agentsStatus());
+  handle('obs:agent-create', (p) => observability.agentCreate(p || {}));
+  handle('obs:agent-revoke', (p) => observability.agentRevoke(p?.id));
+  handle('obs:agent-remove', (p) => observability.agentRemove(p?.id));
+  handle('obs:agents-restart', () => observability.agentsRestart());
+
+  handle('obs:remediation', () => observability.remediationStatus());
+  handle('obs:remediation-policy-save', (p) => observability.remediationPolicySave(p || {}));
+  handle('obs:remediation-policy-delete', (p) => observability.remediationPolicyDelete(p?.id));
+  handle('obs:remediation-enable', (p) => observability.remediationEnable(p?.enabled === true));
+  handle('obs:remediation-execute', (p) => observability.remediationExecute(p?.id, p?.options || {}));
+  handle('obs:export-config', () => observability.exportConfig());
+  handle('obs:ai-snapshot', () => observability.aiSnapshot());
+
+  handle('obs:export-file', async (p) => {
+    const payload = p || {};
+    const content = String(payload.content || '');
+    if (!content) return { ok: false, error: 'There is nothing to export.' };
+    const format = ['csv', 'json', 'pdf'].includes(payload.format) ? payload.format : 'json';
+    const chosen = await dialog.showSaveDialog(getWindow(), {
+      title: 'Export observability data',
+      defaultPath: payload.filename || `opsdeck-observability.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+    const encoding = payload.encoding === 'base64' ? 'base64' : 'utf8';
+    fs.writeFileSync(chosen.filePath, content, { mode: 0o600, encoding });
+    return { ok: true, file: chosen.filePath, bytes: Buffer.byteLength(content, encoding) };
+  });
+
+  observability.start().catch((error) => {
+    console.error('Observability service failed to start:', error);
+  });
+
   // ---------------- Labs ----------------
   handle('labs:status', () => labs.status());
   handle('labs:run', (p) => labs.run(p || {}));
@@ -358,6 +499,7 @@ function registerIpc({ getWindow, dialog, app }) {
     store.persistNow();
     exec.stopAll();
     ai.dispose();
+    observability.dispose().catch(() => {});
     databases.disposeAll().catch(() => {});
   });
 }

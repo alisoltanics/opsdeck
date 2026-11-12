@@ -16,7 +16,7 @@
 
   const MAX_SESSIONS = 12;
   const MAX_MESSAGES = 40;
-  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource']);
+  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource', 'observability']);
 
   const state = {
     config: null,
@@ -41,6 +41,9 @@
     if (route.name === 'databases') {
       return { kind: 'database', page: route.parts?.[0] || 'dashboard', id: route.query?.get?.('connection') || '' };
     }
+    if (route.name === 'observability') {
+      return { kind: 'observability', page: route.parts?.[0] || 'overview' };
+    }
     return { kind: 'page', page: route.name || 'overview' };
   }
 
@@ -56,6 +59,7 @@
     if (!target) return 'OpsDeck AI';
     if (target.kind === 'kubernetes') return `Kubernetes · ${titleCase(target.page || 'overview')}`;
     if (target.kind === 'database') return `Databases · ${titleCase(target.page || 'dashboard')}`;
+    if (target.kind === 'observability') return `Observability · ${titleCase(target.page || 'overview')}`;
     if (target.kind === 'db-object') return target.name || 'Database object';
     if (target.kind === 'k8s-resource') return target.name || 'Kubernetes object';
     if (target.name) return target.name;
@@ -82,6 +86,7 @@
       course: 'Academy course · live content',
       academy: 'Curriculum and progress',
       kubernetes: 'Kubernetes workspace · live cluster context',
+      observability: 'Observability workspace · live monitoring context',
       'k8s-resource': 'Kubernetes object · sanitized live context',
       page: 'Docker workspace · live page context',
     };

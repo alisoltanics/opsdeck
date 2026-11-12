@@ -227,6 +227,13 @@ const SUGGESTIONS = {
     'Review its resource requests, limits and scheduling risk.',
     'Which kubectl command should I run next to verify this object?',
   ],
+  observability: [
+    'What stands out in this monitoring snapshot, and what should I investigate first?',
+    'Explain the health score and which signals are missing.',
+    'Summarise active alerts and open incidents with the likely shared cause.',
+    'Which collector or target is failing, and how do I verify it without guessing?',
+    'Propose the next read-only diagnostic step for the worst signal.',
+  ],
   default: [
     'What stands out in this context?',
     'What should I check next?',
@@ -980,11 +987,12 @@ function lessonText(lesson) {
 // ------------------------------------------------------------------ service
 
 class AIService {
-  constructor({ app, content, kubernetes = null, databases = null }) {
+  constructor({ app, content, kubernetes = null, databases = null, observability = null }) {
     this.app = app;
     this.databases = databases;
     this.content = content;
     this.kubernetes = kubernetes;
+    this.observability = observability;
     this.configPath = process.env.OPSDECK_AI_CONFIG_PATH || path.join(app.getPath('userData'), 'ai.json');
     this.config = this.loadConfig();
     this.contextCache = new Map();
@@ -1947,9 +1955,10 @@ class AIService {
     let subtitle = '';
     let suggestions = SUGGESTIONS[kind] || SUGGESTIONS.default;
     const kubernetesContext = kind === 'kubernetes' || kind === 'k8s-resource' || kind === 'database' || kind === 'db-object';
+    const observabilityContext = kind === 'observability';
     let engine = null;
 
-    if (!kubernetesContext) {
+    if (!kubernetesContext && !observabilityContext) {
       engine = await docker.status().catch((error) => ({ available: false, reason: error.message || String(error) }));
       if (kind !== 'lesson' && kind !== 'course' && kind !== 'academy') {
         builder.add('Docker engine', formatEngine(engine));
@@ -1972,6 +1981,11 @@ class AIService {
         title = out.title || title;
         subtitle = out.subtitle || subtitle;
         suggestions = out.suggestions || SUGGESTIONS['k8s-resource'];
+      } else if (kind === 'observability') {
+        const out = await this.observabilityContext(target, builder);
+        title = out.title || title;
+        subtitle = out.subtitle || subtitle;
+        suggestions = SUGGESTIONS.observability;
       } else if (kind === 'container') {
         const out = await this.containerContext(target, builder);
         title = out.title || title;
@@ -2417,6 +2431,58 @@ class AIService {
    * names, aggregate metrics and the user's own SQL text are included — table
    * rows are never read.
    */
+  async observabilityContext(target, builder) {
+    const page = String(target.page || 'overview');
+    if (!this.observability) {
+      builder.add('Observability', 'The observability service is not available in this build.');
+      return { title: `Observability · ${titleCase(page)}`, subtitle: 'Service unavailable' };
+    }
+    let snapshot = null;
+    try {
+      snapshot = this.observability.aiSnapshot();
+      if (!snapshot?.overview) {
+        const overview = await this.observability.overview({ range: '1h' }).catch(() => null);
+        if (overview) {
+          this.observability.setLastOverview?.(overview);
+          snapshot = this.observability.aiSnapshot();
+        }
+      }
+    } catch (error) {
+      builder.add('Observability warning', `The snapshot could not be collected: ${redactSecrets(error.message || String(error))}`);
+    }
+    const overview = snapshot?.overview || null;
+    const details = snapshot?.details || {};
+    const pageKey = { infrastructure: 'remote', 'synthetic': 'synthetic', network: 'network', applications: 'applications', docker: 'docker', kubernetes: 'kubernetes', databases: 'databases', logs: 'local', traces: 'applications', alerts: 'local', incidents: 'local' }[page];
+    builder.add('Workspace', `OpsDeck observability · page=${page}`);
+    if (overview) {
+      builder.add('Health', pretty({
+        score: overview.score || null,
+        inventory: overview.inventory || null,
+        system: overview.system || null,
+        missing: overview.missing || [],
+        trends: overview.trends ? Object.fromEntries(Object.entries(overview.trends).map(([key, value]) => [key, `${(value || []).length} samples`])) : null,
+      }));
+      if (overview.problematic?.length) builder.add('Needs attention', pretty(overview.problematic.slice(0, 15)));
+      if (overview.topConsumers?.length) builder.add('Top consumers', pretty(overview.topConsumers.slice(0, 15)));
+    } else {
+      builder.add('Health', 'No overview snapshot is available yet. The collectors may still be starting.');
+    }
+    if (snapshot?.collectors?.length) {
+      builder.add('Collectors', pretty(snapshot.collectors.map((collector) => ({
+        key: collector.key, enabled: collector.enabled, available: collector.available,
+        ok: collector.ok, lastAt: collector.lastAt, reason: collector.reason || '', errors: collector.errors || [],
+      }))));
+    }
+    if (snapshot?.alerts?.length) builder.add('Active alerts', pretty(snapshot.alerts));
+    if (snapshot?.incidents?.length) builder.add('Open incidents', pretty(snapshot.incidents));
+    if (snapshot?.missing?.length) builder.add('Missing data', snapshot.missing.join('\n'));
+    if (snapshot?.logs) builder.add('Log store', pretty(snapshot.logs));
+    if (snapshot?.traces?.length) builder.add('Services from traces', pretty(snapshot.traces));
+    if (pageKey && details[pageKey]) builder.add(`Page detail: ${page}`, pretty(details[pageKey]).slice(0, MAX_CONTEXT_CHARS / 3));
+    builder.add('Rules', 'Use only the collected values above. If a metric is absent, say so explicitly. Never invent a sample, alert or container state.');
+    return { title: `Observability · ${titleCase(page)}`, subtitle: 'Live monitoring context' };
+  }
+
   async databaseContext(target, builder) {
     const page = String(target.page || 'dashboard');
     if (!this.databases) {

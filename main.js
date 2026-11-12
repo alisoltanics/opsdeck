@@ -2,6 +2,7 @@
 
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, nativeTheme, Menu } = require('electron');
 const path = require('node:path');
+const os = require('node:os');
 const fs = require('node:fs');
 const { registerIpc } = require('./src/main/ipc');
 const { watchSmokeTest, startSmokeAI, stopSmokeAI } = require('./src/main/smoke');
@@ -11,6 +12,16 @@ const smokeMode = process.argv.includes('--smoke-test');
 
 app.setName('OpsDeck');
 app.setAppUserModelId('com.opsdeck.studio');
+
+// The smoke test must never share userData with a running OpsDeck instance:
+// the single-instance lock would otherwise make `npm run smoke` exit silently
+// without exercising the renderer.
+if (smokeMode) {
+  const smokeUserData = path.join(os.tmpdir(), 'opsdeck-smoke-userdata');
+  try { fs.rmSync(smokeUserData, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(smokeUserData, { recursive: true }); } catch { /* ignore */ }
+  app.setPath('userData', smokeUserData);
+}
 
 let mainWindow = null;
 let splash = null;

@@ -15,7 +15,7 @@
     { id: 'docker', label: 'Docker', icon: 'box', tone: 'accent' },
     { id: 'kubernetes', label: 'Kubernetes', icon: 'cloud', tone: 'violet' },
     { id: 'databases', label: 'Databases', icon: 'database', tone: 'orange' },
-    { id: 'observability', label: 'Observability', icon: 'activity', tone: 'cyan', soon: true },
+    { id: 'observability', label: 'Observability', icon: 'activity', tone: 'cyan' },
   ];
 
   const NAV = [
@@ -155,11 +155,64 @@
     },
   ];
 
+  const OBSERVABILITY_NAV = [
+    {
+      label: 'Monitor',
+      items: [
+        { id: 'observability', section: 'overview', label: 'Health overview', icon: 'activity', href: '#/observability/overview' },
+        { id: 'observability', section: 'infrastructure', label: 'Infrastructure', icon: 'server', href: '#/observability/infrastructure' },
+        { id: 'observability', section: 'docker', label: 'Docker', icon: 'box', href: '#/observability/docker' },
+        { id: 'observability', section: 'kubernetes', label: 'Kubernetes', icon: 'cloud', href: '#/observability/kubernetes' },
+        { id: 'observability', section: 'databases', label: 'Databases', icon: 'database', href: '#/observability/databases' },
+        { id: 'observability', section: 'applications', label: 'Applications', icon: 'git-branch', href: '#/observability/applications' },
+      ],
+    },
+    {
+      label: 'Checks',
+      items: [
+        { id: 'observability', section: 'synthetic', label: 'Synthetic checks', icon: 'target', href: '#/observability/synthetic' },
+        { id: 'observability', section: 'network', label: 'Network', icon: 'network', href: '#/observability/network' },
+      ],
+    },
+    {
+      label: 'Telemetry',
+      items: [
+        { id: 'observability', section: 'logs', label: 'Logs', icon: 'scroll-text', href: '#/observability/logs' },
+        { id: 'observability', section: 'traces', label: 'Traces', icon: 'git-branch', href: '#/observability/traces' },
+      ],
+    },
+    {
+      label: 'Respond',
+      items: [
+        { id: 'observability', section: 'alerts', label: 'Alerts', icon: 'bell', href: '#/observability/alerts' },
+        { id: 'observability', section: 'incidents', label: 'Incidents', icon: 'alert-triangle', href: '#/observability/incidents' },
+        { id: 'observability', section: 'dashboards', label: 'Dashboards', icon: 'layout-dashboard', href: '#/observability/dashboards' },
+        { id: 'observability', section: 'metrics', label: 'Metrics explorer', icon: 'bar-chart', href: '#/observability/metrics' },
+      ],
+    },
+    {
+      label: 'Output',
+      items: [
+        { id: 'observability', section: 'reports', label: 'Reports', icon: 'file', href: '#/observability/reports' },
+        { id: 'observability', section: 'integrations', label: 'Integrations', icon: 'plug', href: '#/observability/integrations' },
+        { id: 'observability', section: 'notifications', label: 'Notifications', icon: 'send', href: '#/observability/notifications' },
+      ],
+    },
+    {
+      label: 'Operate',
+      items: [
+        { id: 'observability', section: 'agents', label: 'Agents & ingest', icon: 'bot', href: '#/observability/agents' },
+        { id: 'observability', section: 'remediation', label: 'Remediation', icon: 'wrench', href: '#/observability/remediation' },
+        { id: 'observability', section: 'settings', label: 'Settings', icon: 'settings', href: '#/observability/settings' },
+      ],
+    },
+  ];
+
   const PAGE_LABELS = {
     overview: 'Overview', containers: 'Containers', images: 'Images', compose: 'Compose',
     volumes: 'Volumes', networks: 'Networks', builds: 'Builds', registries: 'Registries',
     monitoring: 'Monitoring', events: 'Events', terminal: 'Terminal', settings: 'Settings',
-    academy: 'Academy', kubernetes: 'Kubernetes', databases: 'Databases', notfound: 'Not found',
+    academy: 'Academy', kubernetes: 'Kubernetes', databases: 'Databases', observability: 'Observability', notfound: 'Not found',
   };
 
   let currentView = null;
@@ -209,7 +262,7 @@
   let currentWorkspace = (() => {
     try {
       const stored = localStorage.getItem(WORKSPACE_KEY);
-      return stored === 'kubernetes' || stored === 'databases' ? stored : 'docker';
+      return stored === 'kubernetes' || stored === 'databases' || stored === 'observability' ? stored : 'docker';
     } catch { return 'docker'; }
   })();
 
@@ -217,6 +270,7 @@
     let id = currentWorkspace;
     if (route?.name === 'kubernetes') id = 'kubernetes';
     else if (route?.name === 'databases') id = 'databases';
+    else if (route?.name === 'observability') id = 'observability';
     else if (route?.name !== 'settings') id = 'docker';
     if (id !== currentWorkspace) {
       currentWorkspace = id;
@@ -231,6 +285,9 @@
     }
     if (route.name === 'databases') {
       return OD.views?.databases?.label?.(route.parts[0] || 'dashboard') || titleCase(route.parts[0] || 'dashboard');
+    }
+    if (route.name === 'observability') {
+      return OD.views?.observability?.label?.(route.parts[0] || 'overview') || titleCase(route.parts[0] || 'overview');
     }
     if (route.name !== 'academy') return PAGE_LABELS[route.name] || titleCase(route.name);
     const section = route.parts[0];
@@ -252,6 +309,9 @@
     }
     if (route.name === 'databases') {
       return `<a class="crumb" href="#/databases/dashboard">Databases</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || 'Dashboard')}</span>`;
+    }
+    if (route.name === 'observability') {
+      return `<a class="crumb" href="#/observability/overview">Observability</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || 'Overview')}</span>`;
     }
     if (route.name !== 'academy') {
       return `<span class="crumb">Docker</span>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route))}</span>`;
@@ -325,7 +385,7 @@
     }
     currentView = null;
 
-    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && !isDockerRoute(route.name)) {
+    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && route.name !== 'observability' && !isDockerRoute(route.name)) {
       host.innerHTML = `<div class="page">${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no view for “${route.raw}”. Use the sidebar or the command palette to continue.`, action: `<a class="btn btn-primary btn-sm" href="#/overview">Open overview</a>` })}</div>`;
       applyChrome();
       return;
@@ -347,7 +407,8 @@
       ? OD.views.academy
       : route.name === 'kubernetes' ? OD.views.kubernetes
         : route.name === 'databases' ? OD.views.databases
-          : OD.views.docker;
+          : route.name === 'observability' ? OD.views.observability
+            : OD.views.docker;
     if (!currentView) {
       host.innerHTML = renderError(new Error('The view module did not load. Check the script order in index.html.'), route);
       applyChrome();
@@ -426,6 +487,29 @@
     </div>`;
   }
 
+  function observabilityMini() {
+    const status = store.state.observability;
+    if (!status) {
+      return `<div class="engine-mini" role="status" title="Open the Observability workspace">
+        <span class="dot"></span>
+        <span class="sidebar-footer-text">Observability</span>
+        <a class="icon-btn" href="#/observability/overview" title="Open observability" aria-label="Open observability">${icon('activity', 12)}</a>
+      </div>`;
+    }
+    const alerts = status.alerts?.active || 0;
+    const hosts = status.hosts;
+    const enabled = status.enabled !== false;
+    const label = !enabled ? 'Monitoring off' : alerts ? `${alerts} alert${alerts === 1 ? '' : 's'}` : status.score != null ? `Health ${Math.round(status.score)}%` : 'Collecting…';
+    const detail = !enabled
+      ? 'Collection is disabled in Observability settings'
+      : `${hosts ? `${hosts.online}/${hosts.total} hosts online · ` : ''}${status.incidents?.open || 0} open incidents · ${(status.collectors || []).length} collectors`;
+    return `<div class="engine-mini" role="status" title="${esc(detail)}">
+      <span class="dot ${enabled && !alerts ? 'ok' : alerts ? 'bad' : ''}"></span>
+      <span class="sidebar-footer-text">${esc(label)}</span>
+      <a class="icon-btn" href="#/observability/overview" title="Open observability overview" aria-label="Open observability overview">${icon('activity', 12)}</a>
+    </div>`;
+  }
+
   function renderSidebar() {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
@@ -435,7 +519,7 @@
     document.getElementById('app').dataset.collapsed = collapsed ? 'true' : 'false';
     const workspaceId = workspaceIdForRoute(route);
     const workspace = WORKSPACES.find((w) => w.id === workspaceId) || WORKSPACES[0];
-    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : workspaceId === 'databases' ? DATABASES_NAV : NAV;
+    const nav = workspaceId === 'kubernetes' ? KUBERNETES_NAV : workspaceId === 'databases' ? DATABASES_NAV : workspaceId === 'observability' ? OBSERVABILITY_NAV : NAV;
     // The whole sidebar is repainted on every route change and store update.
     // Keep the reader exactly where they were instead of jumping to the top.
     const scroller = sidebar.querySelector('.sidebar-scroll');
@@ -475,14 +559,14 @@
               <span class="workspace-menu-name">${esc(w.label)}</span>
               ${w.id === workspaceId ? U.badge('active', 'green') : w.soon ? U.badge('planned', 'slate') : ''}
             </button>`).join('')}
-            <div class="workspace-menu-note">Docker, Kubernetes and Databases are live. The same shell, search and learning system will host observability.</div>
+            <div class="workspace-menu-note">Docker, Kubernetes, Databases and Observability are live. Monitoring data is stored separately from the Academy database.</div>
           </div>` : ''}
         </div>
       </div>
       <nav class="sidebar-scroll" aria-label="Primary">
         ${nav.map(navGroup).join('')}
       </nav>
-      ${workspaceId === 'kubernetes' ? kubernetesMini() : workspaceId === 'databases' ? databasesMini() : engineMini()}
+      ${workspaceId === 'kubernetes' ? kubernetesMini() : workspaceId === 'databases' ? databasesMini() : workspaceId === 'observability' ? observabilityMini() : engineMini()}
       <div class="sidebar-footer">
         <a class="nav-item ${route.name === 'settings' ? 'active' : ''}" href="#/settings" title="Settings">
           ${icon('settings', 16)}<span class="nav-label">Settings</span>
@@ -582,6 +666,13 @@
       { title: 'Kubernetes contexts', sub: 'Kubeconfig sources and selected context', type: 'Navigate', icon: 'cloud', href: '#/kubernetes/contexts' },
       { title: 'Kubernetes namespaces', sub: 'Live namespaces and pod counts', type: 'Navigate', icon: 'layers', href: '#/kubernetes/namespaces' },
       { title: 'Kubernetes nodes', sub: 'Node readiness and capacity', type: 'Navigate', icon: 'server', href: '#/kubernetes/nodes' },
+      { title: 'Observability overview', sub: 'Health score, collectors and active alerts', type: 'Navigate', icon: 'activity', href: '#/observability/overview' },
+      { title: 'Observability infrastructure', sub: 'Local host and remote servers', type: 'Navigate', icon: 'server', href: '#/observability/infrastructure' },
+      { title: 'Observability alerts', sub: 'Rules, firing alerts and silences', type: 'Navigate', icon: 'bell', href: '#/observability/alerts' },
+      { title: 'Observability logs', sub: 'Stored log lines from every source', type: 'Navigate', icon: 'scroll-text', href: '#/observability/logs' },
+      { title: 'Observability traces', sub: 'OTLP traces grouped by service', type: 'Navigate', icon: 'git-branch', href: '#/observability/traces' },
+      { title: 'Observability dashboards', sub: 'Prebuilt and custom metric dashboards', type: 'Navigate', icon: 'layout-dashboard', href: '#/observability/dashboards' },
+      { title: 'Observability settings', sub: 'Collectors, retention and ingest receiver', type: 'Navigate', icon: 'settings', href: '#/observability/settings' },
       { title: 'Academy search', sub: 'Search every lesson, command and guide', type: 'Navigate', icon: 'search', href: '#/academy/search' },
       { title: 'Settings', sub: 'Appearance, goals and security', type: 'Navigate', icon: 'settings', href: '#/settings' },
       { title: 'Ask AI about this page', sub: 'Open the assistant with live context  (Ctrl+Shift+A)', type: 'Action', icon: 'sparkles', action: 'ai-ask' },
@@ -724,7 +815,7 @@
     } else if (action === 'k8s-refresh') {
       renderRoute({ scroll: false });
     } else if (action === 'open-workspace') {
-      U.toast('That workspace is planned', 'info', { description: 'OpsDeck ships the Docker, Kubernetes and Databases workspaces plus the Academy. The shell is ready for observability.' });
+      U.toast('Workspace unavailable', 'info', { description: 'That workspace is not part of this build.' });
     } else if (action === 'ai-ask') {
       if (OD.ai) OD.ai.openForCurrent();
       else U.toast('AI is unavailable in this build', 'warning');
@@ -786,6 +877,7 @@
       if (target?.id === 'docker') goto('#/overview');
       else if (target?.id === 'kubernetes') goto('#/kubernetes/overview');
       else if (target?.id === 'databases') goto('#/databases/dashboard');
+      else if (target?.id === 'observability') goto('#/observability/overview');
       else if (target) runGlobalAction('open-workspace');
       return;
     }
@@ -947,6 +1039,7 @@
     openPalette,
     closePalette,
     boot,
+    workspaces: WORKSPACES,
   };
 
   document.addEventListener('DOMContentLoaded', boot);

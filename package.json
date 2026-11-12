@@ -1,6 +1,6 @@
 {
   "name": "opsdeck",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "OpsDeck — Operations Studio: a premium desktop control plane for Docker with a complete interactive Docker Academy, built to host Kubernetes, databases and observability workspaces.",
   "author": {
@@ -13,13 +13,15 @@
     "dev": "electron . --dev",
     "check": "node scripts/check.js",
     "smoke": "electron . --smoke-test",
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/",
     "pack": "electron-builder --dir",
     "install:desktop": "node scripts/install-desktop.js",
     "uninstall:desktop": "node scripts/install-desktop.js --uninstall",
     "package": "electron-builder --dir && node scripts/install-desktop.js",
     "dist": "electron-builder",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
   },
   "dependencies": {
     "ioredis": "^5.11.1",

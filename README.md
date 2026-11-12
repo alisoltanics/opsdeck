@@ -224,6 +224,37 @@ shell; the interactive terminal is the one exception, and its wrapper is a
 fixed `stty …; exec docker exec -it <validated id> <bash|sh>` string passed to
 util-linux `script`.
 
+## Cross-platform builds (Windows and macOS)
+
+The observability collectors read each platform with native probes instead of
+guessing: `sysctl`/`vm_stat`/`ps`/`netstat` on macOS, PowerShell CIM and
+`Get-Process` counters on Windows, and `/proc`, `/sys` and `journalctl` on
+Linux. Unavailable values stay `null` and the UI says why instead of showing a
+number.
+
+```bash
+npm run dist:win    # NSIS installer + portable .exe (run on Windows, or Linux with Wine)
+npm run dist:mac    # .dmg + .zip for the host architecture (must run on macOS)
+```
+
+`.github/workflows/release.yml` builds all three platforms on their own runners
+when a `v*` tag is pushed and attaches the installers to the GitHub release.
+
+| Capability | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| CPU, memory, load, disks, network rates | yes | yes (`vm_stat` accounting) | yes (CIM counters) |
+| Per-process CPU and memory | yes | yes (`ps`) | yes (two-sample `Get-Process`) |
+| Disk I/O rate | yes (`/proc/diskstats`) | unavailable | unavailable |
+| Memory pressure (PSI) | yes | unavailable | unavailable |
+| CPU temperature | most hosts (`/sys/class/thermal`) | unavailable (needs root) | unavailable |
+| Local log collection | `journalctl` | unified log (`log show`) | Windows Event Log |
+| Per-process socket counts | `ss` | unavailable | unavailable |
+
+Windows and macOS builds are unsigned. macOS adds a quarantine flag to
+downloaded apps; clear it once with
+`xattr -dr com.apple.quarantine /Applications/OpsDeck.app`. Windows SmartScreen
+will warn about an unknown publisher until a code-signing certificate is added.
+
 ## Architecture
 
 ```

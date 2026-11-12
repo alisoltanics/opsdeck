@@ -1997,10 +1997,7 @@
           ${U.card({
             title: 'Workspaces', icon: 'layout-dashboard', sub: 'The platform is designed to grow beyond Docker',
             body: `<div class="stack-2">
-              <div class="registry-row"><span class="icon-chip tone-accent" style="--chip-size:26px">${icon('box', 12)}</span><span class="host">Docker</span>${U.badge('active', 'green', { dot: true })}</div>
-              <div class="registry-row"><span class="icon-chip tone-violet" style="--chip-size:26px">${icon('cloud', 12)}</span><span class="host">Kubernetes</span>${U.badge('planned', 'slate')}</div>
-              <div class="registry-row"><span class="icon-chip tone-orange" style="--chip-size:26px">${icon('database', 12)}</span><span class="host">Databases</span>${U.badge('planned', 'slate')}</div>
-              <div class="registry-row"><span class="icon-chip tone-cyan" style="--chip-size:26px">${icon('activity', 12)}</span><span class="host">Observability</span>${U.badge('planned', 'slate')}</div>
+              ${(OD.app?.workspaces || []).map((workspace) => `<div class="registry-row"><span class="icon-chip tone-${esc(workspace.tone)}" style="--chip-size:26px">${icon(workspace.icon, 12)}</span><span class="host">${esc(workspace.label)}</span>${workspace.soon ? U.badge('planned', 'slate') : U.badge('active', 'green', { dot: true })}</div>`).join('')}
             </div>`,
           })}
           ${U.card({

@@ -36,9 +36,9 @@ function readKey(file) {
 }
 
 class SecretVault {
-  constructor(app) {
+  constructor(app, options = {}) {
     this.app = app;
-    this.keyFile = path.join(app.getPath('userData'), 'databases.secret');
+    this.keyFile = path.join(app.getPath('userData'), options.keyFile || 'databases.secret');
     this.key = null;
     this.safeStorage = null;
     try {

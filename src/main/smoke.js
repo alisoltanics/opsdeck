@@ -73,6 +73,26 @@ const ROUTES = [
   ['databases performance', '#/databases/performance'],
   ['databases diagnostics', '#/databases/diagnostics'],
   ['databases activity', '#/databases/activity'],
+  ['observability overview', '#/observability/overview'],
+  ['observability infrastructure', '#/observability/infrastructure'],
+  ['observability docker', '#/observability/docker'],
+  ['observability kubernetes', '#/observability/kubernetes'],
+  ['observability databases', '#/observability/databases'],
+  ['observability applications', '#/observability/applications'],
+  ['observability synthetic', '#/observability/synthetic'],
+  ['observability network', '#/observability/network'],
+  ['observability logs', '#/observability/logs'],
+  ['observability traces', '#/observability/traces'],
+  ['observability alerts', '#/observability/alerts'],
+  ['observability incidents', '#/observability/incidents'],
+  ['observability dashboards', '#/observability/dashboards'],
+  ['observability metrics', '#/observability/metrics'],
+  ['observability reports', '#/observability/reports'],
+  ['observability integrations', '#/observability/integrations'],
+  ['observability notifications', '#/observability/notifications'],
+  ['observability agents', '#/observability/agents'],
+  ['observability remediation', '#/observability/remediation'],
+  ['observability settings', '#/observability/settings'],
   ['academy', '#/academy'],
   ['courses', '#/academy/courses'],
   ['course', '#/academy/course/docker-fundamentals'],
@@ -167,6 +187,30 @@ function rendererScript(routes) {
       if (!dbActivity?.ok || !Array.isArray(dbActivity.items)) failures.push('databases: activity bridge failed');
     }
 
+    // Observability bridge: real bootstrap, live overview and read-only queries.
+    const obsBridge = window.opsdeck.observability;
+    if (!obsBridge) failures.push('observability: bridge is missing');
+    else {
+      const boot = await obsBridge.bootstrap();
+      if (!boot?.ok) failures.push('observability: bootstrap failed :: ' + (boot?.error || 'no result'));
+      else {
+        if (!Array.isArray(boot.collectors) || !boot.collectors.length) failures.push('observability: collectors are missing');
+        if (!Array.isArray(boot.dashboards)) failures.push('observability: dashboards are missing');
+        if (!boot.config || typeof boot.config.enabled !== 'boolean') failures.push('observability: config is missing');
+        if ('secrets' in (boot.config || {})) failures.push('observability: bootstrap exposed the secrets map');
+      }
+      const overview = await obsBridge.overview({ range: '1h' });
+      if (!overview?.ok) failures.push('observability: overview failed :: ' + (overview?.error || 'no result'));
+      else if (!Array.isArray(overview.collectors) || !Array.isArray(overview.score?.components)) failures.push('observability: overview shape is incomplete');
+      const catalog = await obsBridge.metricsCatalog({});
+      if (!catalog?.ok || !Array.isArray(catalog.catalog)) failures.push('observability: metric catalog failed');
+      const dashboards = await obsBridge.dashboards();
+      if (!dashboards?.ok || !Array.isArray(dashboards.dashboards) || !dashboards.dashboards.length) failures.push('observability: dashboard list is empty');
+      const obsAi = await window.opsdeck.ai.context({ kind: 'observability', page: 'overview' });
+      if (!obsAi?.ok || !obsAi.context?.text) failures.push('observability: AI context was empty');
+      else if (/## Docker engine/.test(obsAi.context.text)) failures.push('observability: AI context leaked Docker engine data');
+    }
+
     // The workspace switcher must reach the Databases workspace.
     document.querySelector('#workspace-btn')?.click();
     if (!(await waitFor(() => !!document.querySelector('[data-workspace="databases"]'), 2500))) {
@@ -177,6 +221,19 @@ function rendererScript(routes) {
         && !!document.querySelector('#sidebar a[href="#/databases/dashboard"].active')
         && document.querySelector('#view .page'), 8000);
       if (!dbOpen) failures.push('workspace: Databases did not open');
+    }
+
+    // The workspace switcher must reach the Observability workspace.
+    document.querySelector('#workspace-btn')?.click();
+    if (!(await waitFor(() => !!document.querySelector('[data-workspace="observability"]'), 2500))) {
+      failures.push('workspace: Observability entry is missing');
+    } else {
+      document.querySelector('[data-workspace="observability"]')?.click();
+      const obsOpen = await waitFor(() => location.hash === '#/observability/overview'
+        && !!document.querySelector('#sidebar a[href="#/observability/overview"].active')
+        && !!document.querySelector('#view [data-obs-page="overview"]'), 10000);
+      if (!obsOpen) failures.push('workspace: Observability did not open');
+      if (!document.querySelector('#view [data-obs-ai]')) failures.push('observability: Ask AI button is missing');
     }
 
     // Reference live help should resolve (or explain why it cannot).

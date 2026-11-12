@@ -64,3 +64,34 @@ appImage:
   artifactName: OpsDeck-${version}-${arch}.${ext}
   executableArgs:
     - --no-sandbox
+
+win:
+  executableName: OpsDeck
+  icon: assets/icon.png
+  target:
+    - nsis
+    - portable
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OpsDeck
+  artifactName: OpsDeck-${version}-${arch}-setup.${ext}
+
+portable:
+  artifactName: OpsDeck-${version}-${arch}-portable.${ext}
+
+mac:
+  category: public.app-category.developer-tools
+  icon: assets/icon.png
+  # Builds are unsigned until a Developer ID certificate is provided. macOS
+  # users must clear the quarantine flag once: xattr -dr com.apple.quarantine /Applications/OpsDeck.app
+  identity: null
+  hardenedRuntime: false
+  target:
+    - dmg
+    - zip
+  artifactName: OpsDeck-${version}-${arch}.${ext}
