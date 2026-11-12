@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const ROUTES = [
   ['overview', '#/overview'],
+  ['docker insights', '#/insights'],
   ['containers', '#/containers'],
   ['images', '#/images'],
   ['compose', '#/compose'],
@@ -33,6 +34,7 @@ const ROUTES = [
   ['terminal', '#/terminal'],
   ['settings', '#/settings'],
   ['kubernetes overview', '#/kubernetes/overview'],
+  ['kubernetes insights', '#/kubernetes/insights'],
   ['kubernetes topology', '#/kubernetes/topology'],
   ['kubernetes contexts', '#/kubernetes/contexts'],
   ['kubernetes namespaces', '#/kubernetes/namespaces'],
@@ -71,6 +73,7 @@ const ROUTES = [
   ['databases docker', '#/databases/docker'],
   ['databases kubernetes', '#/databases/kubernetes'],
   ['databases performance', '#/databases/performance'],
+  ['databases insights', '#/databases/insights'],
   ['databases diagnostics', '#/databases/diagnostics'],
   ['databases activity', '#/databases/activity'],
   ['observability overview', '#/observability/overview'],
@@ -88,6 +91,7 @@ const ROUTES = [
   ['observability dashboards', '#/observability/dashboards'],
   ['observability metrics', '#/observability/metrics'],
   ['observability reports', '#/observability/reports'],
+  ['observability insights', '#/observability/insights'],
   ['observability integrations', '#/observability/integrations'],
   ['observability notifications', '#/observability/notifications'],
   ['observability agents', '#/observability/agents'],
@@ -178,6 +182,14 @@ function rendererScript(routes) {
       const stillSettled = window.OD.store.state.route?.raw === expectedRaw && text.length > 40 && !document.querySelector('#view [aria-busy="true"]');
       if (!settled || !stillSettled) failures.push(name + ': did not settle (' + text.slice(0, 120).replace(/\\s+/g, ' ') + ')');
       if (!view || !view.querySelector('.page')) failures.push(name + ': no .page rendered');
+      if (name.endsWith('insights')) {
+        const shell = view.querySelector('[data-insight-module]');
+        const expected = hash === '#/insights' ? 'docker'
+          : hash.startsWith('#/databases') ? 'databases'
+            : hash.startsWith('#/kubernetes') ? 'kubernetes' : 'observability';
+        if (!shell) failures.push(name + ': the module intelligence shell is missing');
+        else if (shell.dataset.insightModule !== expected) failures.push(name + ': rendered the wrong intelligence module');
+      }
       if (text.trim().length < 40) failures.push(name + ': rendered an empty page (html ' + (view ? view.innerHTML.length : 0) + ' bytes)');
       for (const marker of errorMarkers) {
         if (text.includes(marker)) failures.push(name + ': ' + marker);

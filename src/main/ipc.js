@@ -533,6 +533,10 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('intel:settings-update', (p) => intelligence.updateSettings(p || {}));
   handle('intel:diagnostics', (p) => intelligence.diagnostics(p || {}));
   handle('intel:notify', (p) => intelligence.notify(p || {}));
+  handle('intel:database-insights', (p) => intelligence.databaseInsights(p || {}));
+  handle('intel:docker-insights', () => intelligence.dockerInsights());
+  handle('intel:kubernetes-insights', (p) => intelligence.kubernetesInsights(p || {}));
+  handle('intel:observability-insights', () => intelligence.observabilityInsights());
 
   observability.start().catch((error) => {
     console.error('Observability service failed to start:', error);

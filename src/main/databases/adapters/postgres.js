@@ -153,12 +153,24 @@ function create(profile, secrets = {}) {
         order by table_schema, table_name, ordinal_position`);
       const indexes = await client.query(`select schemaname as schema, tablename as table, indexname as name, indexdef as definition
         from pg_indexes where schemaname not in ('pg_catalog','information_schema')`);
-      const triggers = await client.query(`select trigger_schema as schema, event_object_table as table, trigger_name as name,
-          event_manipulation as event, action_timing as timing, action_statement as statement
-        from information_schema.triggers order by trigger_schema, event_object_table`);
+      const constraints = await client.query(`select tc.table_schema as schema, tc.table_name as table,
+          tc.constraint_name as name, tc.constraint_type as type,
+          kcu.column_name as column, kcu.ordinal_position as position,
+          ccu.table_schema as ref_schema, ccu.table_name as ref_table, ccu.column_name as ref_column
+        from information_schema.table_constraints tc
+        left join information_schema.key_column_usage kcu
+          on kcu.constraint_schema = tc.constraint_schema and kcu.constraint_name = tc.constraint_name
+        left join information_schema.constraint_column_usage ccu
+          on ccu.constraint_schema = tc.constraint_schema and ccu.constraint_name = tc.constraint_name
+        where tc.constraint_type in ('PRIMARY KEY','FOREIGN KEY','UNIQUE')
+          and tc.table_schema not in ('pg_catalog','information_schema')
+        order by tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position`);
       const sequences = await client.query(`select sequence_schema as schema, sequence_name as name, data_type as type,
           start_value as start, increment as increment
         from information_schema.sequences order by sequence_schema, sequence_name`);
+      const triggers = await client.query(`select trigger_schema as schema, event_object_table as table, trigger_name as name,
+          event_manipulation as event, action_timing as timing, action_statement as statement
+        from information_schema.triggers order by trigger_schema, event_object_table`);
       const routines = await client.query(`select n.nspname as schema, p.proname as name,
           case p.prokind when 'p' then 'procedure' when 'a' then 'aggregate'
             when 'w' then 'window' else 'function' end as kind,
@@ -186,6 +198,7 @@ function create(profile, secrets = {}) {
         relations: relations.rows,
         columns: columns.rows,
         indexes: indexes.rows,
+        constraints: constraints.rows,
         triggers: triggers.rows,
         sequences: sequences.rows,
         routines: routines.rows,
@@ -297,12 +310,31 @@ function create(profile, secrets = {}) {
       try {
         const res = await client.query(`select pid, usename as username, state,
             extract(epoch from (now() - query_start))::numeric(12,1) as seconds,
+            wait_event_type, wait_event,
+            cardinality(pg_blocking_pids(pid)) as blocked_by,
             left(query, 300) as query
           from pg_stat_activity
           where datname = current_database() and state <> 'idle'
             and now() - query_start > interval '1 second'
           order by seconds desc limit 20`);
         longRunning = res.rows.map((row) => ({ ...row }));
+      } catch {
+        try {
+          const res = await client.query(`select pid, usename as username, state,
+              extract(epoch from (now() - query_start))::numeric(12,1) as seconds,
+              left(query, 300) as query
+            from pg_stat_activity
+            where datname = current_database() and state <> 'idle'
+              and now() - query_start > interval '1 second'
+            order by seconds desc limit 20`);
+          longRunning = res.rows.map((row) => ({ ...row }));
+        } catch { /* permission */ }
+      }
+      let idleInTransaction = 0;
+      try {
+        const res = await client.query(`select count(*)::int as count from pg_stat_activity
+          where datname = current_database() and state = 'idle in transaction'`);
+        idleInTransaction = Number(res.rows[0]?.count) || 0;
       } catch { /* permission */ }
       let slow = null;
       try {
@@ -323,6 +355,9 @@ function create(profile, secrets = {}) {
         transactions: { commit: Number(db.xact_commit) || 0, rollback: Number(db.xact_rollback) || 0 },
         deadlocks: Number(db.deadlocks) || 0,
         tempBytes: Number(db.temp_bytes) || 0,
+        tempFiles: Number(db.temp_files) || 0,
+        conflicts: Number(db.conflicts) || 0,
+        idleInTransaction,
         settings: settingMap,
         longRunning,
         slowQueries: slow ? slow.map((row) => ({ ...row })) : null,

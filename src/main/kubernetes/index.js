@@ -621,6 +621,76 @@ class KubernetesService {
     return { ok: true, removed: entry.id, state: await this.bootstrap() };
   }
 
+  /**
+   * Read-only snapshot for the Kubernetes intelligence analysers.
+   *
+   * Only workload/meta objects are requested. Secrets are never listed, so no
+   * secret value can reach the renderer. Each request is isolated: one denied
+   * RBAC rule does not hide the rest of the cluster.
+   */
+  async insightData({ allNamespaces = true } = {}) {
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    const base = {
+      ok: true,
+      context: state.selected,
+      namespace: state.namespace,
+      contexts: state.contexts,
+      tools: tools.tools,
+      checkedAt: new Date().toISOString(),
+      items: {},
+      errors: {},
+    };
+    if (!tools.tools.kubectl.installed) return { ...base, ok: false, error: 'kubectl is not installed.' };
+    if (!state.selected) return { ...base, ok: false, error: 'No Kubernetes context is selected.' };
+
+    const namespaced = allNamespaces === true ? ['--all-namespaces'] : [];
+    const requests = {
+      pods: { args: ['get', 'pods', '-o', 'json'], scoped: true },
+      deployments: { args: ['get', 'deployments.apps', '-o', 'json'], scoped: true, key: 'deployments' },
+      statefulsets: { args: ['get', 'statefulsets.apps', '-o', 'json'], scoped: true },
+      daemonsets: { args: ['get', 'daemonsets.apps', '-o', 'json'], scoped: true },
+      jobs: { args: ['get', 'jobs.batch', '-o', 'json'], scoped: true },
+      services: { args: ['get', 'services', '-o', 'json'], scoped: true },
+      ingresses: { args: ['get', 'ingresses.networking.k8s.io', '-o', 'json'], scoped: true },
+      networkpolicies: { args: ['get', 'networkpolicies.networking.k8s.io', '-o', 'json'], scoped: true },
+      pvcs: { args: ['get', 'persistentvolumeclaims', '-o', 'json'], scoped: true, key: 'persistentvolumeclaims' },
+      endpoints: { args: ['get', 'endpoints', '-o', 'json'], scoped: true },
+      nodes: { args: ['get', 'nodes', '-o', 'json'], scoped: false },
+      namespaces: { args: ['get', 'namespaces', '-o', 'json'], scoped: false },
+      pvs: { args: ['get', 'persistentvolumes', '-o', 'json'], scoped: false },
+      storageclasses: { args: ['get', 'storageclasses.storage.k8s.io', '-o', 'json'], scoped: false },
+      events: { args: ['get', 'events', '-o', 'json'], scoped: true },
+      clusterrolebindings: { args: ['get', 'clusterrolebindings.rbac.authorization.k8s.io', '-o', 'json'], scoped: false },
+      serviceaccounts: { args: ['get', 'serviceaccounts', '-o', 'json'], scoped: true },
+      apiGroups: { args: ['api-resources', '--api-group=argoproj.io', '-o', 'name'], scoped: false, raw: true },
+    };
+
+    const results = await Promise.all(Object.entries(requests).map(async ([key, spec]) => {
+      const args = spec.raw ? spec.args : [...spec.args, ...(spec.scoped ? namespaced : [])];
+      const res = await this.kube(args, {
+        timeout: 20000,
+        context: state.selected,
+        namespace: spec.scoped && allNamespaces !== true ? state.namespace : '',
+      });
+      if (!res.ok) {
+        return [key, { ok: false, error: scrub(res.stderr || `Could not read ${key}.`, 400) }];
+      }
+      if (spec.raw) return [key, { ok: true, text: String(res.stdout || '').slice(0, 20000) }];
+      try {
+        const parsed = JSON.parse(res.stdout);
+        return [key, { ok: true, items: Array.isArray(parsed?.items) ? parsed.items.slice(0, 2000) : [] }];
+      } catch {
+        return [key, { ok: false, error: `Could not parse the ${key} response.` }];
+      }
+    }));
+
+    for (const [key, value] of results) {
+      if (value.ok) base.items[key] = value.items ?? value.text ?? [];
+      else base.errors[key] = value.error;
+    }
+    return base;
+  }
+
   async resources(section, { allNamespaces = false } = {}) {
     const def = RESOURCES[section];
     if (!def) return { ok: false, error: 'Unknown Kubernetes resource.' };

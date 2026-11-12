@@ -25,6 +25,7 @@
   function dispose() {
     for (const fn of cleanup) { try { fn(); } catch { /* ignore */ } }
     cleanup = [];
+    OD.views?.insights?.dispose?.();
   }
   function timer(fn, ms) { const id = setInterval(fn, ms); onCleanup(() => clearInterval(id)); return id; }
 
@@ -2447,12 +2448,18 @@
       case 'events': return renderEvents();
       case 'terminal': return renderTerminal();
       case 'settings': return renderSettings();
+      case 'insights': return OD.views?.insights ? OD.views.insights.render('docker', route) : renderOverview();
       case 'overview':
       default: return renderOverview();
     }
   }
 
   function mount(root, route) {
+    OD.views?.insights?.dispose?.();
+    if (route.name === 'insights' && OD.views?.insights) {
+      OD.views.insights.mount(root, 'docker');
+      return;
+    }
     bindCommon(root);
     switch (route.name) {
       case 'containers': mountContainers(root); break;

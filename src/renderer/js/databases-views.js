@@ -25,6 +25,7 @@
     performance: 'Performance',
     diagnostics: 'Diagnostics',
     activity: 'Activity log',
+    insights: 'Intelligence',
   };
 
   const S = {
@@ -1477,6 +1478,9 @@
     if (!PAGES[section]) {
       return `<div class="page">${U.empty({ icon: 'compass', title: 'Unknown database section', body: `“${section}” is not part of the database workspace.` })}</div>`;
     }
+    if (section === 'insights' && OD.views?.insights) {
+      return OD.views.insights.render('databases', route);
+    }
     try {
       await prepare(route);
     } catch (error) {
@@ -1978,6 +1982,11 @@
   function mount(root, route) {
     clearInterval(perfTimer);
     perfTimer = null;
+    OD.views?.insights?.dispose?.();
+    if (route.parts[0] === 'insights' && OD.views?.insights) {
+      OD.views.insights.mount(root, 'databases');
+      return;
+    }
     if (S.perf.interval > 0 && route.parts[0] === 'performance') {
       perfTimer = setInterval(async () => {
         if (!S.selected.performance) return;
@@ -2454,6 +2463,7 @@
   function dispose() {
     clearInterval(perfTimer);
     perfTimer = null;
+    OD.views?.insights?.dispose?.();
   }
 
   OD.views = OD.views || {};

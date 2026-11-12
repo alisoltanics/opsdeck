@@ -125,6 +125,7 @@
     events: 'Events',
     tools: 'Local tools',
     console: 'Kubectl console',
+    insights: 'Intelligence',
   };
 
   const SECTION_ICONS = {
@@ -1415,6 +1416,7 @@
 
   async function render(route) {
     const section = route.parts[0] || 'overview';
+    if (section === 'insights' && OD.views?.insights) return OD.views.insights.render('kubernetes', route);
     const renderer = RENDERERS[section];
     if (!renderer) {
       return `<div class="page">${pageHead({ title: 'Kubernetes' })}${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no Kubernetes view for “${section}”.`, action: `<a class="btn btn-primary btn-sm" href="#/kubernetes/overview">Open cluster overview</a>` })}</div>`;
@@ -1472,7 +1474,12 @@
     if (result?.ok) rerender();
   }
 
-  function mount(root) {
+  function mount(root, route) {
+    OD.views?.insights?.dispose?.();
+    if (route?.parts?.[0] === 'insights' && OD.views?.insights) {
+      OD.views.insights.mount(root, 'kubernetes');
+      return;
+    }
     let consoleResult = null;
     if (OD.kubernetesTopology && root.querySelector('[data-topo-map]')) {
       OD.kubernetesTopology.mount(root, {
@@ -1700,9 +1707,14 @@
   bindInstallEvents();
 
   OD.views = OD.views || {};
+  function dispose() {
+    OD.views?.insights?.dispose?.();
+  }
+
   OD.views.kubernetes = {
     render,
     mount,
+    dispose,
     pages: PAGES,
     label(section) {
       return PAGES[section] || titleCase(section || 'overview');

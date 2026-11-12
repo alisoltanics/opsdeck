@@ -151,7 +151,7 @@ function create(profile, secrets = {}) {
       schemas: [],
       relations: items.map((item) => ({ schema: name, name: item.name, kind: item.kind, row_estimate: item.count || 0 })),
       columns: [],
-      indexes: items.flatMap((item) => item.indexes.map((index) => ({ table: item.name, name: index.name, unique: index.unique }))),
+      indexes: items.flatMap((item) => item.indexes.map((index) => ({ table: item.name, name: index.name, unique: index.unique, key: index.key }))),
       triggers: [],
       routines: [],
       sequences: [],

@@ -190,6 +190,17 @@ function create(profile, secrets = {}) {
           non_unique, seq_in_index, column_name, index_type
         from information_schema.statistics where table_schema = ?
         order by table_name, index_name, seq_in_index`, [db]);
+      const [constraints] = await connection.query(`select tc.table_name as \`table\`,
+          tc.constraint_name as name, tc.constraint_type as type,
+          kcu.column_name as \`column\`, kcu.ordinal_position as position,
+          kcu.referenced_table_schema as ref_schema, kcu.referenced_table_name as ref_table,
+          kcu.referenced_column_name as ref_column
+        from information_schema.table_constraints tc
+        left join information_schema.key_column_usage kcu
+          on kcu.constraint_schema = tc.constraint_schema and kcu.constraint_name = tc.constraint_name
+          and kcu.table_name = tc.table_name
+        where tc.table_schema = ? and tc.constraint_type in ('PRIMARY KEY','FOREIGN KEY','UNIQUE')
+        order by tc.table_name, tc.constraint_name, kcu.ordinal_position`, [db]);
       const [routines] = await connection.query(`select routine_name as name, routine_type as kind,
           routine_schema as \`schema\`, data_type, routine_definition
         from information_schema.routines where routine_schema = ? order by routine_name`, [db]);
@@ -205,6 +216,7 @@ function create(profile, secrets = {}) {
         relations,
         columns,
         indexes,
+        constraints,
         routines,
         triggers,
         sequences: [],

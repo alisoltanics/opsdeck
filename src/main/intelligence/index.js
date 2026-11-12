@@ -23,6 +23,14 @@ const { ChangeDetector } = require('./changes');
 const { EnvironmentManager } = require('./environments');
 const { AutomationEngine } = require('./automation');
 const { RootCauseAnalyzer } = require('./rca');
+const {
+  databaseHealth, analyzeSchema, analyzeQueryHistory, analyzeWorkloads, databaseForecast,
+  analyzeDockerSecurity, analyzeDockerImages, analyzeDockerResources, analyzeDockerCompose,
+  analyzeDockerOptimizer, compareDockerEnvironments,
+  kubernetesInsights: kubernetesInsightsReport,
+  observabilityInsights: observabilityInsightsModule,
+  sortFindings, summarize,
+} = require('./insights');
 const { clean, clamp, safeError } = require('./util');
 
 const REFRESH_INTERVAL_MS = 90e3;
@@ -626,9 +634,189 @@ class IntelligenceService {
       data.settings.automationIntervalSec = clamp(patch.automationIntervalSec, 5, 3600);
     }
     if (patch.environmentMatch !== undefined) data.settings.environmentMatch = patch.environmentMatch === true;
+    if (Array.isArray(patch.slos)) {
+      data.settings.slos = patch.slos.slice(0, 50);
+    }
+    if (patch.capacityThresholds && typeof patch.capacityThresholds === 'object') {
+      data.settings.capacityThresholds = { ...data.settings.capacityThresholds, ...patch.capacityThresholds };
+    }
+    if (patch.cost && typeof patch.cost === 'object') {
+      data.settings.cost = { ...data.settings.cost, ...patch.cost };
+    }
+    // Re-normalize so a hand-edited value cannot escape the schema.
+    this.store.normalize();
     this.store.schedule();
     this.store.audit({ action: 'settings-update', module: 'intelligence', detail: JSON.stringify(patch).slice(0, 400) });
     return { ok: true, settings: data.settings };
+  }
+
+  // ------------------------------------------------------- module intelligence
+
+  /**
+   * Database health, schema, workload, history and forecast. The connection is
+   * only read; no query is executed that the SQL guard would not allow.
+   */
+  async databaseInsights(payload = {}) {
+    if (!this.databases) return { ok: false, error: 'Database access is not available.' };
+    const started = Date.now();
+    const connections = this.databases.listConnections();
+    const requested = clean(payload.connectionId, 80);
+    const connection = (requested ? connections.find((entry) => entry.id === requested) : null)
+      || connections.find((entry) => entry.status?.state === 'connected')
+      || connections[0];
+    if (!connection) {
+      return {
+        ok: true, available: false, generatedAt: new Date().toISOString(),
+        connections, limitations: ['Add a database connection to analyse health and schema.'],
+        health: { score: null, status: 'unknown', checks: [] }, findings: [],
+      };
+    }
+    const safe = async (fn, fallback) => {
+      try { return await fn(); } catch (error) { return { ...fallback, error: safeError(error, 'The operation failed.') }; }
+    };
+    const [metricsResult, diagnosticsResult, databaseResult] = await Promise.all([
+      safe(() => this.databases.metrics(connection.id), { ok: false, available: false }),
+      safe(() => this.databases.diagnostics(connection.id), { ok: false, steps: [] }),
+      safe(() => this.databases.listDatabases(connection.id), { ok: false, items: [] }),
+    ]);
+    const databases = Array.isArray(databaseResult?.items) ? databaseResult.items : Array.isArray(databaseResult) ? databaseResult : [];
+    const database = clean(payload.database, 120) || connection.database || databases[0]?.name || '';
+    let explorer = null;
+    if (database) explorer = await safe(() => this.databases.explorer({ id: connection.id, database }), { ok: false });
+    if (explorer && !explorer.ok) explorer = null;
+    const historyResult = await safe(() => this.databases.history({ connectionId: connection.id, limit: 400 }), { ok: false, items: [] });
+    const metrics = metricsResult?.ok === false ? { available: false, reason: metricsResult.error } : metricsResult;
+    const health = databaseHealth({ connection, metrics, diagnostics: diagnosticsResult });
+    const schema = explorer ? analyzeSchema({ ...explorer, engine: metrics?.engine || connection.engine }) : {
+      supported: false, tables: 0, indexes: 0, findings: [], stats: {}, limitations: [explorer === null ? 'The database could not be opened, so the schema was not analysed.' : ''],
+    };
+    const workloads = analyzeWorkloads(metrics || {});
+    const history = analyzeQueryHistory(historyResult?.items || []);
+    let forecastResult = { supported: false, series: [], limitations: ['No metric history is stored for this connection.'] };
+    if (this.observability) {
+      forecastResult = await databaseForecast({
+        queryMetrics: (options) => this.queryMetrics(options),
+        resource: `database:${connection.id}`,
+      });
+    }
+    const findings = sortFindings([
+      ...health.findings,
+      ...schema.findings,
+      ...workloads.findings,
+      ...history.findings,
+    ]).slice(0, 200);
+    return {
+      ok: true,
+      available: true,
+      generatedAt: new Date().toISOString(),
+      durationMs: Date.now() - started,
+      connection: {
+        id: connection.id, name: connection.name, engine: connection.engine, host: connection.host,
+        database, status: connection.status?.state || 'idle', readOnly: connection.readOnly === true,
+      },
+      connections: connections.map((entry) => ({ id: entry.id, name: entry.name, engine: entry.engine, status: entry.status?.state || 'idle' })),
+      databases: databases.map((entry) => ({ name: entry.name, sizeBytes: entry.sizeBytes })),
+      health,
+      schema,
+      workloads,
+      history,
+      forecast: forecastResult,
+      findings,
+      counts: summarize(findings),
+      limitations: [
+        ...(health.unknown.length ? [`Not measured: ${health.unknown.join(', ')}`] : []),
+        ...(schema.limitations || []),
+        ...(workloads.limitations || []),
+        ...(forecastResult.limitations || []),
+      ].filter(Boolean).slice(0, 12),
+    };
+  }
+
+  /** Docker security, image hygiene, resource usage, compose, optimizer and env diff. */
+  async dockerInsights() {
+    if (!this.docker) return { ok: false, error: 'Docker is not available.' };
+    const started = Date.now();
+    const [overview, containers, images, volumes, networks, compose, stats] = await Promise.all([
+      this.docker.overview(),
+      this.docker.containersList(),
+      this.docker.imagesList(),
+      this.docker.volumesList(),
+      this.docker.networksList(),
+      this.docker.composeList(),
+      this.docker.stats(),
+    ]);
+    if (overview?.ok === false && containers?.ok === false) {
+      return { ok: false, error: overview?.error || containers?.error || 'The Docker engine is not reachable.' };
+    }
+    const containerRows = containers?.items || [];
+    const targets = containerRows.filter((container) => container.state === 'running').slice(0, 30);
+    const inspects = (await Promise.all(targets.map((container) => this.docker.inspectContainer(container.id).catch(() => null))))
+      .map((result) => result?.ok ? result.item : null)
+      .filter(Boolean);
+    const security = analyzeDockerSecurity(inspects);
+    const imageAnalysis = analyzeDockerImages(images?.items || [], containerRows);
+    const resources = analyzeDockerResources({
+      volumes: volumes?.items || [], networks: networks?.items || [], containers: containerRows, stats: stats?.items || [],
+    });
+    const projects = analyzeDockerCompose(compose?.items || []);
+    const optimizer = analyzeDockerOptimizer({
+      containers: containerRows, inspects, images: images?.items || [], volumes: volumes?.items || [], stats: stats?.items || [],
+    });
+    const envCompare = compareDockerEnvironments(inspects);
+    const findings = sortFindings([
+      ...security.findings, ...imageAnalysis.findings, ...resources.findings,
+      ...projects.findings, ...optimizer.findings, ...envCompare.findings,
+    ]).slice(0, 200);
+    return {
+      ok: true,
+      available: true,
+      generatedAt: new Date().toISOString(),
+      durationMs: Date.now() - started,
+      overview: overview?.ok === false ? { ok: false, error: overview.error } : {
+        containers: containerRows.length, running: containerRows.filter((container) => container.state === 'running').length,
+        images: (images?.items || []).length, volumes: (volumes?.items || []).length, networks: (networks?.items || []).length,
+      },
+      security,
+      images: imageAnalysis,
+      resources,
+      compose: projects,
+      optimizer,
+      envCompare,
+      findings,
+      counts: summarize(findings),
+      limitations: [
+        inspects.length < Math.min(30, containerRows.filter((container) => container.state === 'running').length)
+          ? 'Some containers could not be inspected; their security posture is unknown.' : '',
+        ...(envCompare.limitations || []),
+      ].filter(Boolean),
+    };
+  }
+
+  /** Kubernetes health, security, storage, network, cost, GitOps and troubleshooting. */
+  async kubernetesInsights(payload = {}) {
+    if (!this.kubernetes || typeof this.kubernetes.insightData !== 'function') {
+      return { ok: false, error: 'The Kubernetes bridge is not available in this build.' };
+    }
+    const data = await this.kubernetes.insightData({ allNamespaces: payload.allNamespaces !== false });
+    if (data.ok === false) return { ok: false, error: data.error || 'The cluster could not be read.', limitations: Object.values(data.errors || {}) };
+    const result = kubernetesInsightsReport(data, this.store.get().settings.cost || {});
+    return { ...result, tools: data.tools, contexts: data.contexts, durationMs: 0 };
+  }
+
+  /** Observability SLOs, anomaly detection, capacity forecasts, dependency map and profiles. */
+  async observabilityInsights() {
+    if (!this.observability) return { ok: false, error: 'Observability is not available.' };
+    const traces = typeof this.observability.traceManager?.all === 'function'
+      ? this.observability.traceManager.all()
+      : [];
+    const settings = this.store.get().settings;
+    const result = await observabilityInsightsModule({
+      queryMetrics: (options) => this.queryMetrics(options),
+      traces,
+      slos: settings.slos,
+      thresholds: settings.capacityThresholds,
+    });
+    return { ...result, traceCount: traces.length, sloCount: (settings.slos || []).length };
   }
 
   // ---------------------------------------------------------------- bridges

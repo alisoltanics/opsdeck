@@ -55,6 +55,9 @@ function defaults() {
       environmentMatch: true,
       automationEnabled: true,
       automationIntervalSec: 15,
+      slos: [],
+      capacityThresholds: { cpu: 80, memory: 85, disk: 85 },
+      cost: { cpuHour: 0, memoryGbHour: 0, currency: 'USD' },
     },
   };
 }
@@ -161,6 +164,28 @@ class IntelligenceStore {
     }
     data.assignments = assignments;
     data.settings.automationIntervalSec = clamp(data.settings.automationIntervalSec || 15, 5, 3600);
+    data.settings.slos = array(data.settings.slos).slice(0, 50).map((slo, index) => ({
+      id: clean(slo.id, 60) || `slo-${index + 1}`,
+      name: clean(slo.name, 120) || 'Service objective',
+      metric: clean(slo.metric, 120) || 'synthetic.up',
+      aggregation: ['avg', 'max', 'min', 'last'].includes(slo.aggregation) ? slo.aggregation : 'avg',
+      comparison: slo.comparison === 'lte' ? 'lte' : 'gte',
+      threshold: clamp(slo.threshold == null ? 1 : slo.threshold, -1e12, 1e12),
+      target: clamp(slo.target == null ? 99.9 : slo.target, 0, 100),
+      windowHours: clamp(slo.windowHours || 24, 1, 720),
+      unit: clean(slo.unit, 20),
+      enabled: slo.enabled !== false,
+    }));
+    data.settings.capacityThresholds = {
+      cpu: clamp(data.settings.capacityThresholds?.cpu || 80, 1, 100),
+      memory: clamp(data.settings.capacityThresholds?.memory || 85, 1, 100),
+      disk: clamp(data.settings.capacityThresholds?.disk || 85, 1, 100),
+    };
+    data.settings.cost = {
+      cpuHour: clamp(data.settings.cost?.cpuHour || 0, 0, 1000),
+      memoryGbHour: clamp(data.settings.cost?.memoryGbHour || 0, 0, 1000),
+      currency: clean(data.settings.cost?.currency, 8) || 'USD',
+    };
   }
 
   get() {

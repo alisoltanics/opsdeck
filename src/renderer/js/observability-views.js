@@ -35,6 +35,7 @@
     agents: 'Agents & ingest',
     remediation: 'Remediation',
     settings: 'Settings',
+    insights: 'Intelligence',
   };
 
   const RANGE_PAGES = new Set(['overview', 'docker', 'kubernetes', 'databases', 'applications', 'metrics', 'dashboards']);
@@ -1659,6 +1660,7 @@
         ${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no observability view for “${S.page}”.`, action: LINK('Open overview', 'activity', '#/observability/overview', 'primary') })}
       </div>`;
     }
+    if (S.page === 'insights' && OD.views?.insights) return OD.views.insights.render('observability', route);
     const fresh = S.fresh && S.fresh.page === S.page && Date.now() - S.fresh.at < 2000;
     if (!fresh) await loadPage(S.page);
     S.fresh = null;
@@ -1668,9 +1670,14 @@
 
   // ------------------------------------------------------------------- mount
 
-  function mount(root) {
+  function mount(root, route) {
     if (!root) return;
     dispose();
+    OD.views?.insights?.dispose?.();
+    if ((route?.parts?.[0] || S.page) === 'insights' && OD.views?.insights) {
+      OD.views.insights.mount(root, 'observability');
+      return;
+    }
     const controller = new AbortController();
     S.controller = controller;
     const opts = { signal: controller.signal };
@@ -1717,6 +1724,7 @@
   }
 
   function dispose() {
+    OD.views?.insights?.dispose?.();
     if (S.controller) {
       try { S.controller.abort(); } catch { /* ignore */ }
       S.controller = null;

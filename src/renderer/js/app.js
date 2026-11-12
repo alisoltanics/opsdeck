@@ -24,6 +24,7 @@
       label: 'Docker',
       items: [
         { id: 'overview', label: 'Overview', icon: 'layout-dashboard', href: '#/overview' },
+        { id: 'insights', label: 'Intelligence', icon: 'sparkles', href: '#/insights' },
         { id: 'containers', label: 'Containers', icon: 'box', href: '#/containers' },
         { id: 'images', label: 'Images', icon: 'layers', href: '#/images' },
         { id: 'compose', label: 'Compose', icon: 'boxes', href: '#/compose' },
@@ -54,6 +55,7 @@
       label: 'Clusters',
       items: [
         { id: 'kubernetes', section: 'overview', label: 'Cluster overview', icon: 'layout-dashboard', href: '#/kubernetes/overview' },
+        { id: 'kubernetes', section: 'insights', label: 'Intelligence', icon: 'sparkles', href: '#/kubernetes/insights' },
         { id: 'kubernetes', section: 'topology', label: 'Cluster map', icon: 'map', href: '#/kubernetes/topology' },
         { id: 'kubernetes', section: 'contexts', label: 'Contexts', icon: 'cloud', href: '#/kubernetes/contexts' },
         { id: 'kubernetes', section: 'namespaces', label: 'Namespaces', icon: 'layers', href: '#/kubernetes/namespaces' },
@@ -181,6 +183,7 @@
       label: 'Operations',
       items: [
         { id: 'databases', section: 'performance', label: 'Performance', icon: 'activity', href: '#/databases/performance' },
+        { id: 'databases', section: 'insights', label: 'Intelligence', icon: 'sparkles', href: '#/databases/insights' },
         { id: 'databases', section: 'diagnostics', label: 'Diagnostics', icon: 'stethoscope', href: '#/databases/diagnostics' },
         { id: 'databases', section: 'activity', label: 'Activity log', icon: 'scroll-text', href: '#/databases/activity' },
       ],
@@ -226,6 +229,7 @@
       label: 'Output',
       items: [
         { id: 'observability', section: 'reports', label: 'Reports', icon: 'file', href: '#/observability/reports' },
+        { id: 'observability', section: 'insights', label: 'Intelligence', icon: 'sparkles', href: '#/observability/insights' },
         { id: 'observability', section: 'integrations', label: 'Integrations', icon: 'plug', href: '#/observability/integrations' },
         { id: 'observability', section: 'notifications', label: 'Notifications', icon: 'send', href: '#/observability/notifications' },
       ],
@@ -244,6 +248,7 @@
     overview: 'Overview', containers: 'Containers', images: 'Images', compose: 'Compose',
     volumes: 'Volumes', networks: 'Networks', builds: 'Builds', registries: 'Registries',
     monitoring: 'Monitoring', events: 'Events', terminal: 'Terminal', settings: 'Settings',
+    insights: 'Intelligence',
     academy: 'Academy', kubernetes: 'Kubernetes', databases: 'Databases', observability: 'Observability', intelligence: 'Intelligence', notfound: 'Not found',
   };
 
@@ -285,7 +290,7 @@
   }
 
   function isDockerRoute(name) {
-    return ['overview', 'containers', 'images', 'compose', 'volumes', 'networks', 'builds', 'registries', 'monitoring', 'events', 'terminal', 'settings'].includes(name);
+    return ['overview', 'insights', 'containers', 'images', 'compose', 'volumes', 'networks', 'builds', 'registries', 'monitoring', 'events', 'terminal', 'settings'].includes(name);
   }
 
   // Settings is shared by every workspace, so it keeps whichever workspace the
