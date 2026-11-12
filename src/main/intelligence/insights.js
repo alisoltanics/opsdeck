@@ -264,7 +264,12 @@ function analyzeSchema(explorer = {}) {
   const limitations = [];
   const tables = relations.filter((relation) => /table|collection/i.test(String(relation.kind || 'table')) && !/view/i.test(String(relation.kind || '')));
   if (!tables.length) {
-    return { supported: false, tables: 0, indexes: 0, findings: [], limitations: ['This engine did not report relational tables.'], stats: {} };
+    return {
+      supported: false, tables: 0, indexes: 0, findings: [],
+      limitations: ['This engine did not report relational tables.'],
+      stats: {},
+      dependencies: { supported: false, nodes: [], edges: [], cycles: [], mostReferenced: [], isolated: [], stats: {} },
+    };
   }
 
   const columnMap = new Map();
@@ -334,9 +339,19 @@ function analyzeSchema(explorer = {}) {
     const key = `${constraint.table}`;
     if (String(constraint.type) === 'PRIMARY KEY') primaryTables.add(key);
     if (String(constraint.type) === 'FOREIGN KEY') {
-      const existing = foreignKeys.find((entry) => entry.table === constraint.table && entry.name === constraint.name);
+      const schema = constraint.schema || '';
+      const existing = foreignKeys.find((entry) => entry.schema === schema && entry.table === constraint.table && entry.name === constraint.name);
       if (existing) existing.columns.push(constraint.column);
-      else foreignKeys.push({ table: constraint.table, name: constraint.name, columns: [constraint.column], refTable: constraint.ref_table });
+      else {
+        foreignKeys.push({
+          schema,
+          table: constraint.table,
+          name: constraint.name,
+          columns: [constraint.column],
+          refSchema: constraint.ref_schema || schema,
+          refTable: constraint.ref_table,
+        });
+      }
     }
   }
   // SQLite reports the primary key on the column, MySQL through the PRIMARY index.
@@ -404,11 +419,22 @@ function analyzeSchema(explorer = {}) {
     } else seen.set(key, index.name);
   }
 
+  const dependencies = buildTableDependencies(tables, foreignKeys, tableStats);
+  for (const cycle of dependencies.cycles.slice(0, 5)) {
+    findings.push(finding('schema', 'info', 'Circular foreign-key relationship', cycle.nodes.join(' → '), {
+      id: `db-cycle-${cycle.signature.replace(/[^a-z0-9]+/gi, '-').slice(0, 80)}`,
+      resource: cycle.nodes[0],
+      evidence: 'Deletes and inserts must satisfy the cycle; check the ON DELETE behaviour.',
+      action: 'Break the cycle with a nullable reference or an application-level invariant.',
+    }));
+  }
+
   return {
     supported: true,
     engine,
     tables: tables.length,
     indexes: indexMap.size,
+    dependencies,
     stats: {
       tables: tables.length,
       indexes: indexMap.size,
@@ -420,6 +446,141 @@ function analyzeSchema(explorer = {}) {
     tableStats: tableStats.sort((a, b) => b.sizeBytes - a.sizeBytes).slice(0, 100),
     findings: sortFindings(findings).slice(0, 80),
     limitations,
+  };
+}
+
+/**
+ * Foreign-key graph for one schema.
+ *
+ * Edges are only the declared foreign keys that the engine reported. Nothing
+ * is inferred from naming conventions, so a missing constraint stays missing.
+ */
+function buildTableDependencies(tables, foreignKeys, tableStats = []) {
+  const keyOf = (schema, name) => `${schema || ''}|${name || ''}`;
+  const nodes = new Map();
+  const ensureNode = (schema, name) => {
+    if (!name) return null;
+    const key = keyOf(schema, name);
+    if (!nodes.has(key)) {
+      nodes.set(key, {
+        id: key, name, schema: schema || '', known: false,
+        rows: 0, sizeBytes: 0, outgoing: 0, incoming: 0,
+      });
+    }
+    return nodes.get(key);
+  };
+  for (const table of tables) {
+    const node = ensureNode(table.schema, table.name);
+    if (!node) continue;
+    node.known = true;
+    const stat = tableStats.find((entry) => entry.name === table.name && (entry.schema || '') === (table.schema || ''));
+    node.rows = stat?.rows || 0;
+    node.sizeBytes = stat?.sizeBytes || 0;
+  }
+
+  const edges = [];
+  const seen = new Set();
+  for (const fk of foreignKeys) {
+    if (!fk.refTable) continue;
+    const from = ensureNode(fk.schema, fk.table);
+    const to = ensureNode(fk.refSchema || fk.schema, fk.refTable);
+    if (!from || !to) continue;
+    const id = `${from.id}->${to.id}:${fk.name || (fk.columns || []).join(',')}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    edges.push({
+      id,
+      from: from.id, to: to.id,
+      fromLabel: from.schema ? `${from.schema}.${from.name}` : from.name,
+      toLabel: to.schema ? `${to.schema}.${to.name}` : to.name,
+      columns: (fk.columns || []).filter(Boolean),
+      constraint: fk.name || '',
+      toKnown: to.known,
+    });
+    from.outgoing += 1;
+    to.incoming += 1;
+  }
+
+  const labelOf = (key) => {
+    const node = nodes.get(key);
+    if (node) return node.schema ? `${node.schema}.${node.name}` : node.name;
+    const [schema, name] = String(key).split('|');
+    return schema ? `${schema}.${name}` : name;
+  };
+
+  // Iterative depth-first search keeps a pathological schema from exhausting
+  // the main-process stack.
+  const adjacency = new Map();
+  for (const edge of edges) {
+    if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);
+    adjacency.get(edge.from).push(edge.to);
+  }
+  const order = new Map([...nodes.keys()].map((key, index) => [key, index]));
+  const color = new Uint8Array(nodes.size);
+  const cycles = [];
+  const seenCycle = new Set();
+  for (const start of nodes.keys()) {
+    if (color[order.get(start)]) continue;
+    color[order.get(start)] = 1;
+    const path = [start];
+    const stack = [{ key: start, next: 0 }];
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const neighbours = adjacency.get(frame.key) || [];
+      if (frame.next < neighbours.length) {
+        const next = neighbours[frame.next];
+        frame.next += 1;
+        const position = order.get(next);
+        if (position == null) continue;
+        if (color[position] === 1) {
+          const at = path.indexOf(next);
+          if (at >= 0) {
+            const cycle = path.slice(at).concat(next);
+            const signature = [...cycle].sort().join('|');
+            if (!seenCycle.has(signature)) {
+              seenCycle.add(signature);
+              cycles.push({ signature, nodes: cycle.map(labelOf) });
+            }
+          }
+        } else if (color[position] === 0) {
+          color[position] = 1;
+          path.push(next);
+          stack.push({ key: next, next: 0 });
+        }
+      } else {
+        color[order.get(frame.key)] = 2;
+        stack.pop();
+        path.pop();
+      }
+    }
+  }
+
+  const allNodes = [...nodes.values()];
+  const mostReferenced = allNodes
+    .filter((node) => node.incoming > 0)
+    .sort((a, b) => b.incoming - a.incoming || labelOf(a.id).localeCompare(labelOf(b.id)))
+    .slice(0, 20)
+    .map((node) => ({ id: node.id, label: labelOf(node.id), incoming: node.incoming, outgoing: node.outgoing, rows: node.rows }));
+  const isolated = allNodes
+    .filter((node) => node.known && node.incoming === 0 && node.outgoing === 0)
+    .sort((a, b) => b.sizeBytes - a.sizeBytes)
+    .slice(0, 30)
+    .map((node) => ({ id: node.id, label: labelOf(node.id), rows: node.rows, sizeBytes: node.sizeBytes }));
+
+  return {
+    supported: true,
+    nodes: allNodes.slice(0, 500).map((node) => ({ ...node, label: labelOf(node.id) })),
+    edges: edges.slice(0, 200),
+    cycles: cycles.slice(0, 20),
+    mostReferenced,
+    isolated,
+    stats: {
+      tables: allNodes.filter((node) => node.known).length,
+      edges: edges.length,
+      external: allNodes.filter((node) => !node.known).length,
+      cycles: cycles.length,
+      isolated: isolated.length,
+    },
   };
 }
 

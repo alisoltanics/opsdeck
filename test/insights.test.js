@@ -95,6 +95,63 @@ test('database: schema finds missing keys, unindexed foreign keys and duplicates
   assert.equal(result.findings.filter((entry) => /supporting index/i.test(entry.title) && entry.resource === 'orders').length, 0);
 });
 
+test('database: dependencies only follow declared foreign keys and detect cycles', () => {
+  const explorer = {
+    engine: 'postgres',
+    relations: [
+      { schema: 'public', name: 'customers', kind: 'table', row_estimate: 100, size_bytes: 4096 },
+      { schema: 'public', name: 'orders', kind: 'table', row_estimate: 500, size_bytes: 8192 },
+      { schema: 'public', name: 'order_items', kind: 'table', row_estimate: 900, size_bytes: 16384 },
+      { schema: 'public', name: 'audit_log', kind: 'table', row_estimate: 30, size_bytes: 2048 },
+    ],
+    columns: [
+      { schema: 'public', table: 'customers', name: 'id', key: 'PRI' },
+      { schema: 'public', table: 'customers', name: 'primary_order_id' },
+      { schema: 'public', table: 'orders', name: 'id', key: 'PRI' },
+      { schema: 'public', table: 'orders', name: 'customer_id' },
+      { schema: 'public', table: 'order_items', name: 'id', key: 'PRI' },
+      { schema: 'public', table: 'order_items', name: 'order_id' },
+    ],
+    indexes: [],
+    constraints: [
+      { schema: 'public', table: 'orders', name: 'orders_customer_fk', type: 'FOREIGN KEY', column: 'customer_id', ref_schema: 'public', ref_table: 'customers' },
+      { schema: 'public', table: 'order_items', name: 'items_order_fk', type: 'FOREIGN KEY', column: 'order_id', ref_schema: 'public', ref_table: 'orders' },
+      { schema: 'public', table: 'customers', name: 'customers_order_fk', type: 'FOREIGN KEY', column: 'primary_order_id', ref_schema: 'public', ref_table: 'orders' },
+    ],
+  };
+  const result = analyzeSchema(explorer);
+  const deps = result.dependencies;
+  assert.equal(deps.supported, true);
+  assert.equal(deps.stats.tables, 4);
+  assert.equal(deps.stats.edges, 3);
+  assert.equal(deps.stats.external, 0);
+  assert.ok(deps.edges.some((edge) => edge.fromLabel === 'public.order_items' && edge.toLabel === 'public.orders'));
+  assert.ok(deps.edges.some((edge) => edge.columns.includes('customer_id')));
+  assert.equal(deps.stats.cycles, 1);
+  assert.ok(deps.cycles[0].nodes.includes('public.customers'));
+  assert.ok(deps.cycles[0].nodes.includes('public.orders'));
+  assert.equal(deps.mostReferenced[0].label, 'public.orders');
+  assert.equal(deps.mostReferenced[0].incoming, 2);
+  assert.deepEqual(deps.isolated.map((entry) => entry.label), ['public.audit_log']);
+  assert.ok(result.findings.some((entry) => /circular foreign-key/i.test(entry.title)));
+  // No edge is invented from a shared prefix or a naming convention.
+  assert.ok(!deps.edges.some((edge) => edge.toLabel.includes('audit')));
+});
+
+test('database: dependencies keep referenced tables outside the schema visible', () => {
+  const result = analyzeSchema({
+    engine: 'mysql',
+    relations: [{ schema: 'app', name: 'orders', kind: 'table', row_estimate: 10, size_bytes: 1024 }],
+    columns: [{ schema: 'app', table: 'orders', name: 'id', key: 'PRI' }],
+    indexes: [{ table: 'orders', name: 'PRIMARY', non_unique: 0, seq_in_index: 1, column_name: 'id' }],
+    constraints: [{ schema: 'app', table: 'orders', name: 'orders_user_fk', type: 'FOREIGN KEY', column: 'user_id', ref_schema: 'auth', ref_table: 'users' }],
+  });
+  assert.equal(result.dependencies.supported, true);
+  assert.equal(result.dependencies.stats.external, 1);
+  assert.equal(result.dependencies.edges[0].toLabel, 'auth.users');
+  assert.equal(result.dependencies.edges[0].toKnown, false);
+});
+
 test('database: schema understands MySQL index rows and a missing default', () => {
   const explorer = {
     engine: 'mysql',

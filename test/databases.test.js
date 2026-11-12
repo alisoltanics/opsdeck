@@ -210,6 +210,8 @@ test('SQLite adapter creates, writes, reads and introspects a real database', as
 
     const created = await adapter.query('test.sqlite', 'create table people (id integer primary key, name text);');
     assert.equal(created.ok, true);
+    const referencing = await adapter.query('test.sqlite', 'create table pets (id integer primary key, person_id integer references people(id), name text);');
+    assert.equal(referencing.ok, true);
 
     const inserted = await adapter.query('test.sqlite', "insert into people (name) values ('Ada'); insert into people (name) values ('Grace');");
     assert.equal(inserted.affectedRows, 2);
@@ -227,9 +229,13 @@ test('SQLite adapter creates, writes, reads and introspects a real database', as
     const meta = await adapter.explorer();
     assert.ok(meta.relations.some((relation) => relation.name === 'people'));
     assert.ok(meta.columns.some((column) => column.name === 'name'));
+    const fk = meta.constraints.find((constraint) => constraint.type === 'FOREIGN KEY' && constraint.table === 'pets');
+    assert.ok(fk, 'the SQLite adapter reports foreign keys');
+    assert.equal(fk.column, 'person_id');
+    assert.equal(fk.ref_table, 'people');
 
     const metrics = await adapter.metrics();
-    assert.equal(metrics.tables, 1);
+    assert.equal(metrics.tables, 2);
 
     const plan = await adapter.explain('test.sqlite', 'select * from people');
     assert.ok(Array.isArray(plan.plan));

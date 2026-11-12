@@ -58,7 +58,7 @@ test('service: database insights choose the live connection and isolate a denied
         relations: [{ schema: 'public', name: 'orders', kind: 'table', row_estimate: 100, size_bytes: 4096 }],
         columns: [{ schema: 'public', table: 'orders', name: 'id', key: 'PRI' }],
         indexes: [{ table: 'orders', name: 'orders_pkey', definition: 'CREATE UNIQUE INDEX orders_pkey ON orders (id)' }],
-        constraints: [{ table: 'orders', name: 'orders_pkey', type: 'PRIMARY KEY', column: 'id' }],
+        constraints: [{ schema: 'public', table: 'orders', name: 'orders_pkey', type: 'PRIMARY KEY', column: 'id', ref_schema: '', ref_table: '' }],
       };
     },
     history: async () => ({ ok: true, items: [] }),

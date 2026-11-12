@@ -156,6 +156,29 @@ function create(profile) {
     for (const row of triggerRows[0]?.values || []) {
       triggers.push({ schema: 'main', table: row[1], name: row[0], statement: row[2] || '' });
     }
+    // SQLite exposes foreign keys only through a pragma, not information_schema.
+    const constraints = [];
+    for (const relation of relations.filter((item) => item.kind === 'table')) {
+      const list = database.exec(`PRAGMA foreign_key_list(${quoteIdent('sqlite', relation.name)})`);
+      const grouped = new Map();
+      for (const row of list[0]?.values || []) {
+        const [id, seq, parent, from, to, onUpdate, onDelete] = row;
+        if (!grouped.has(id)) grouped.set(id, []);
+        grouped.get(id).push({ seq, parent, from, to, onUpdate, onDelete });
+      }
+      for (const [id, columns] of grouped) {
+        columns.sort((a, b) => Number(a.seq) - Number(b.seq));
+        for (const entry of columns) {
+          if (!entry.from || !entry.parent) continue;
+          constraints.push({
+            schema: 'main', table: relation.name, name: `fk_${relation.name}_${id}`,
+            type: 'FOREIGN KEY', column: entry.from, position: entry.seq,
+            ref_schema: 'main', ref_table: entry.parent, ref_column: entry.to,
+            on_delete: entry.onDelete, on_update: entry.onUpdate,
+          });
+        }
+      }
+    }
     const views = relations.filter((item) => item.kind === 'view').map((item) => ({ name: item.name, schema: 'main' }));
     const tables = relations.filter((item) => item.kind === 'table').map((item) => ({ name: item.name, schema: 'main' }));
     return {
@@ -165,6 +188,7 @@ function create(profile) {
       relations,
       columns,
       indexes,
+      constraints,
       triggers,
       routines: [],
       sequences: [],

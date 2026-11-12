@@ -190,7 +190,7 @@ function create(profile, secrets = {}) {
           non_unique, seq_in_index, column_name, index_type
         from information_schema.statistics where table_schema = ?
         order by table_name, index_name, seq_in_index`, [db]);
-      const [constraints] = await connection.query(`select tc.table_name as \`table\`,
+      const [constraints] = await connection.query(`select tc.table_schema as \`schema\`, tc.table_name as \`table\`,
           tc.constraint_name as name, tc.constraint_type as type,
           kcu.column_name as \`column\`, kcu.ordinal_position as position,
           kcu.referenced_table_schema as ref_schema, kcu.referenced_table_name as ref_table,

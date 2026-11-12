@@ -236,6 +236,7 @@
     }
     const health = data.health || {};
     const schema = data.schema || {};
+    const dependencies = schema.dependencies || {};
     const workloads = data.workloads || {};
     const history = data.history || {};
     const forecast = data.forecast || {};
@@ -300,6 +301,44 @@
       <td class="intel-wrap">${esc(entry.note || '')}</td>
     </tr>`).join('');
 
+    const dependencyRows = (dependencies.edges || []).map((edge) => `<tr>
+      <td><strong>${esc(edge.fromLabel)}</strong></td>
+      <td class="mono">${esc((edge.columns || []).join(', ') || '—')}</td>
+      <td>${esc(edge.toLabel)}${edge.toKnown ? '' : badge('external', 'slate')}</td>
+      <td class="mono intel-wrap">${esc(edge.constraint || '—')}</td>
+    </tr>`).join('');
+
+    const referencedRows = (dependencies.mostReferenced || []).map((entry) => `<tr>
+      <td><strong>${esc(entry.label)}</strong></td>
+      <td class="intel-nowrap">${fmtNumber(entry.incoming)}</td>
+      <td class="intel-nowrap">${fmtNumber(entry.outgoing)}</td>
+      <td class="intel-nowrap">${fmtNumber(entry.rows)}</td>
+    </tr>`).join('');
+
+    const isolatedRows = (dependencies.isolated || []).map((entry) => `<tr>
+      <td><strong>${esc(entry.label)}</strong></td>
+      <td class="intel-nowrap">${fmtNumber(entry.rows)}</td>
+      <td class="intel-nowrap">${fmtBytes(entry.sizeBytes)}</td>
+    </tr>`).join('');
+
+    const dependencyBody = dependencies.supported
+      ? `${(dependencies.cycles || []).length ? `<div class="insight-subhead">Circular relationships</div><ul class="insight-limits">${dependencies.cycles.map((cycle) => `<li>${esc(cycle.nodes.join(' → '))}</li>`).join('')}</ul>` : ''}
+        ${table(['Child table', 'Columns', 'Parent table', 'Constraint'], dependencyRows, {
+          emptyTitle: 'No foreign keys',
+          emptyBody: 'The engine reported no foreign-key constraint, so no dependency is claimed.',
+          icon: 'git-branch',
+        })}
+        <div class="intel-grid">
+          <div><div class="insight-subhead">Most referenced tables</div>${table(['Table', 'Referenced by', 'References', 'Rows'], referencedRows, { emptyTitle: 'No referenced table', icon: 'arrow-right' })}</div>
+          <div><div class="insight-subhead">Tables with no declared relationship</div>${table(['Table', 'Rows', 'Size'], isolatedRows, { emptyTitle: 'Every table is related', emptyBody: 'Every reported table participates in a foreign key.', icon: 'database' })}</div>
+        </div>`
+      : U.empty({
+        compact: true,
+        icon: 'git-branch',
+        title: 'Dependencies were not reported',
+        body: dependencies.supported === false ? 'This engine or schema did not report foreign-key constraints.' : (schema.limitations || [])[0] || 'Open the schema analysis first.',
+      });
+
     return `
       ${U.card({
         title: 'Connection',
@@ -333,6 +372,14 @@
         body: schema.supported
           ? `${table(['Table', 'Kind', 'Rows', 'Size', 'Columns / indexes', 'Key'], schemaRows, { emptyTitle: 'No tables reported' })}${schema.findings?.length ? `<div class="insight-subhead">Schema findings</div>${findingsList(schema.findings, { limit: 20 })}` : ''}`
           : U.empty({ compact: true, icon: 'folder-tree', title: 'Schema was not analysed', body: (schema.limitations || [])[0] || 'The explorer did not return relational tables.' }),
+      })}
+      ${U.card({
+        title: 'Table dependencies',
+        icon: 'git-branch',
+        sub: dependencies.supported
+          ? `${fmtNumber(dependencies.stats?.edges ?? 0)} declared foreign key(s) across ${fmtNumber(dependencies.stats?.tables ?? 0)} table(s)${dependencies.stats?.external ? ` · ${fmtNumber(dependencies.stats.external)} referenced table(s) outside this schema` : ''}`
+          : 'Built only from declared constraints, never from table names',
+        body: dependencyBody,
       })}
       ${U.card({ title: 'Workloads', icon: 'activity', sub: 'Active sessions, blocking chains and slow statements', body: `${table(['Session', 'User', 'State', 'Age', 'Wait', 'Blocked', 'Statement'], workloadRows, { emptyTitle: 'No active workloads', emptyBody: workloads.available ? 'Nothing is running right now.' : (workloads.limitations || [])[0] || 'This engine does not expose session data.', icon: 'activity' })}${slowRows ? `<div class="insight-subhead">Slow statements from the engine</div>${table(['Statement', 'Calls', 'Mean', 'Rows'], slowRows)}` : ''}` })}
       ${U.card({ title: 'Query time machine', icon: 'history', sub: 'History is grouped by normalised statement so literal values do not split it', body: `${table(['Statement', 'Runs', 'Errors', 'Mean', 'p95', 'Trend'], statementRows, { emptyTitle: 'No query history yet', emptyBody: 'Run a query in the SQL editor; history is recorded by the database service.', icon: 'history' })}${latestRows ? `<div class="insight-subhead">Latest runs</div>${table(['When', 'Result', 'Duration', 'Statement'], latestRows)}` : ''}` })}
