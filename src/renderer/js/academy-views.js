@@ -1974,20 +1974,34 @@
   // Inline icons and styled runs sit directly against neighbouring text in places
   // where the container is not a flex row. Add the missing space after render.
   function fixSpacing(root) {
-    const display = (el) => getComputedStyle(el).display;
+    const letter = /[\p{L}\p{N}]/u;
+    const skip = 'pre, code.hljs, .code-block, .xterm, svg, textarea, input, [data-no-i18n]';
+    // Icons next to text: add the space when the parent does not provide a gap.
     root.querySelectorAll('svg.icon').forEach((svg) => {
-      const next = svg.nextSibling;
       const parent = svg.parentElement;
-      if (!parent || /flex|grid/.test(display(parent))) return;
-      if (next && next.nodeType === 3 && /^\S/.test(next.nodeValue)) svg.style.marginInlineEnd = '6px';
+      if (!parent || svg.dataset.spaced) return;
+      const style = getComputedStyle(parent);
+      const isFlex = /flex|grid/.test(style.display);
+      const gap = parseFloat(style.columnGap) || 0;
+      if (isFlex && gap > 0) return;
+      const next = svg.nextSibling;
+      const prev = svg.previousSibling;
+      const nextText = next && next.nodeType === 3 && /^\S/.test(next.nodeValue);
+      const prevText = prev && prev.nodeType === 3 && /\S$/.test(prev.nodeValue);
+      if (nextText || (isFlex && next)) svg.style.marginInlineEnd = '6px';
+      if (prevText) svg.style.marginInlineStart = '6px';
+      svg.dataset.spaced = '1';
     });
-    root.querySelectorAll('.lesson-prose strong, .lesson-prose a, .lesson-prose code, .callout-body strong, .callout-body a, .callout-body code, .step-body strong').forEach((el) => {
+    // Inline runs (bold, code, links) that touch a neighbouring word.
+    root.querySelectorAll('strong, em, b, a, code, .inline-code, .badge').forEach((el) => {
+      if (el.closest(skip) && !el.matches('code.inline-code')) return;
+      if (el.parentElement && el.parentElement.closest('pre, .code-block')) return;
       const prev = el.previousSibling;
       const next = el.nextSibling;
-      const tail = (n) => (n && n.nodeType === 3 ? n.nodeValue.slice(-1) : '');
-      const head = (n) => (n && n.nodeType === 3 ? n.nodeValue.charAt(0) : '');
-      if (/[\p{L}\p{N}]/u.test(tail(prev)) && el.textContent) el.style.marginInlineStart = '.25em';
-      if (/[\p{L}\p{N}]/u.test(head(next))) el.style.marginInlineEnd = '.25em';
+      const tail = prev && prev.nodeType === 3 ? prev.nodeValue.slice(-1) : '';
+      const head = next && next.nodeType === 3 ? next.nodeValue.charAt(0) : '';
+      if (letter.test(tail)) el.style.marginInlineStart = '.3em';
+      if (letter.test(head)) el.style.marginInlineEnd = '.3em';
     });
   }
 

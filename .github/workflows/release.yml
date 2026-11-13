@@ -38,7 +38,7 @@ jobs:
         include:
           - runner: ubuntu-latest
             name: linux-x64
-            command: npx electron-builder --linux AppImage deb --x64 --publish never
+            command: npx electron-builder --linux deb --x64 --publish never
           - runner: windows-latest
             name: windows-x64
             command: npx electron-builder --win nsis portable --x64 --publish never

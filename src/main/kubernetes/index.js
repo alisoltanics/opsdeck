@@ -448,6 +448,11 @@ class KubernetesService {
       || contexts[0]?.name
       || '';
     const selectedContext = contexts.find((entry) => entry.name === selected);
+    // Remember the automatic choice so it stays stable between launches.
+    if (selected && settings.context !== selected && !this.autoSaved) {
+      this.autoSaved = true;
+      this.registry.saveSettings({ context: selected, namespace: settings.namespace === 'default' && selectedContext?.namespace ? selectedContext.namespace : settings.namespace });
+    }
     const namespace = settings.namespace || selectedContext?.namespace || 'default';
     return {
       ok: true,

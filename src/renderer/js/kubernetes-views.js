@@ -1987,7 +1987,13 @@
     OD.views?.insights?.dispose?.();
   }
 
+  async function prime() {
+    if (!api?.kubernetes) return;
+    await loadBootstrap();
+  }
+
   OD.views.kubernetes = {
+    prime,
     openConsoleModal,
     render,
     mount,

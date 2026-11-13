@@ -185,6 +185,8 @@
     index.commandMap.clear();
     index.guides.clear();
     index.paths.clear();
+    index.pathList = [];
+    index.guideList = [];
     index.diagrams.clear();
     index.lessonList = [];
 

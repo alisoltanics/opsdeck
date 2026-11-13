@@ -319,7 +319,7 @@
 }
 .callout-icon { flex: 0 0 auto; margin-top: 1px; }
 .callout-body { min-width: 0; }
-.callout-body strong { display: block; font-size: 11.8px; font-weight: 620; margin-bottom: 3px; }
+.callout-body > strong { display: block; font-size: 11.8px; font-weight: 620; margin-bottom: 3px; }
 .callout-body p { color: var(--muted); font-size: 11.8px; line-height: 1.6; }
 .callout.tip { border-inline-start-color: var(--green); background: var(--green-soft); }
 .callout.tip .callout-icon { color: var(--green); }
@@ -350,7 +350,7 @@
   width: 1px; background: var(--border);
 }
 .step-body { flex: 1; min-width: 0; padding-top: 2px; }
-.step-body strong { display: block; font-size: 12px; font-weight: 600; }
+.step-body > strong { display: block; font-size: 12px; font-weight: 600; }
 .step-body p { color: var(--muted); font-size: 11.8px; line-height: 1.55; margin-top: 2px; }
 
 .section-anchor { display: flex; align-items: center; gap: 8px; }
@@ -974,7 +974,6 @@
 
 .lesson-meta, .pill-row, .continue-meta, .hero-stat, .course-meta, .lesson-nav a { word-spacing: normal; }
 .ref-section > h2 svg, .section-eyebrow svg, .eyebrow svg { flex: none; }
-.callout-body strong + p, .callout-body strong { display: block; margin-bottom: 2px; }
 
 .lesson-topnav { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .roadmap { margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }

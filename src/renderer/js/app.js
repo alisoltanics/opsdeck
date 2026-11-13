@@ -1134,6 +1134,16 @@
     await renderRoute();
     setMaximizedState();
     startPolling();
+    primeKubernetes();
+  }
+
+  // Read the kubeconfig and pick the cluster at launch, so the sidebar already
+  // shows the connected context without opening a Kubernetes page first.
+  async function primeKubernetes() {
+    try {
+      await OD.views.kubernetes?.prime?.();
+      applyChrome();
+    } catch { /* the Kubernetes workspace reports its own errors */ }
   }
 
   // ------------------------------------------------------------------ exports
