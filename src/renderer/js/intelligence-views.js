@@ -579,7 +579,7 @@
       <td>${statusBadge(item.status)}</td>
       <td>${envSelect(item)}</td>
       <td class="intel-muted">${esc(item.namespace || item.host || item.cluster || '—')}</td>
-      <td class="intel-row-actions">${OD.ai?.iconButton ? OD.ai.iconButton({ kind: 'intelligence', page: 'resources', id: item.id, name: item.name }, { label: 'Ask AI about this resource' }) : ''}${BTN('', 'star', `data-intel-favorite="${esc(item.id)}" data-name="${esc(item.name)}" data-module="${esc(item.module)}" data-kind="${esc(item.kind)}" data-href="${esc(item.href || '')}" title="Add to favourites"`, 'ghost', 'xs')}</td>
+      <td class="intel-row-actions">${BTN('', 'eye', `data-intel-inspect="${esc(item.id)}" title="Inspect without leaving this page"`, 'ghost', 'xs')}${OD.ai?.iconButton ? OD.ai.iconButton({ kind: 'intelligence', page: 'resources', id: item.id, name: item.name }, { label: 'Ask AI about this resource' }) : ''}${BTN('', 'star', `data-intel-favorite="${esc(item.id)}" data-name="${esc(item.name)}" data-module="${esc(item.module)}" data-kind="${esc(item.kind)}" data-href="${esc(item.href || '')}" title="Add to favourites"`, 'ghost', 'xs')}</td>
     </tr>`);
 
     return `<div class="intel-filter-bar">
@@ -606,6 +606,72 @@
   function envSelect(item) {
     const options = [{ value: '', label: 'Unassigned' }, ...(S.boot?.environments || []).map((entry) => ({ value: entry.id, label: entry.name }))];
     return `<select class="input input-xs intel-env-select" data-intel-env-assign="${esc(item.id)}">${options.map((option) => `<option value="${esc(option.value)}" ${String(option.value) === String(item.environment || '') ? 'selected' : ''}>${esc(option.label)}</option>`).join('')}</select>`;
+  }
+
+  /**
+   * Side panel for a cross-module resource. It reuses the same snapshot,
+   * timeline, change history and note store as the full pages, so opening it
+   * never leaves a second source of truth behind.
+   */
+  async function openResourcePanel(id) {
+    let data;
+    try {
+      data = await api.intelligence.resourceDetail({ id, limit: 40 });
+    } catch (error) {
+      U.toast('Could not inspect the resource', 'error', { description: error.message || String(error) });
+      return;
+    }
+    if (!data || data.ok === false) {
+      U.toast('Resource unavailable', 'error', { description: data?.error || 'The source did not return this resource.' });
+      return;
+    }
+    const resource = data.resource || {};
+    const labels = Object.entries(resource.labels || {}).slice(0, 30);
+    const events = (data.events || []).slice(0, 20);
+    const changes = (data.changes || []).slice(0, 20);
+    const notes = (data.notes || []).slice(0, 20);
+    const eventRows = events.map((event) => `<div class="intel-list-row">
+      <span class="intel-time">${esc(timeAgo(event.at))}</span>${severityBadge(event.severity)}
+      <div class="intel-list-main"><strong>${esc(event.title)}</strong><span>${esc(event.detail || event.resource || '')}</span></div>
+      ${moduleBadge(event.module)}
+    </div>`).join('');
+    const changeRows = changes.map((change) => `<div class="intel-list-row">
+      <span class="intel-time">${esc(timeAgo(change.at))}</span>${severityBadge(change.severity)}
+      <div class="intel-list-main"><strong>${esc(change.title)}</strong><span>${esc(change.detail || '')}</span></div>
+      <span class="intel-muted">${esc(change.kind || '')}</span>
+    </div>`).join('');
+    const noteRows = notes.map((note) => `<div class="intel-note">
+      <div class="intel-note-head"><strong>${esc(note.author || 'local-user')}</strong><span>${esc(timeAgo(note.updatedAt || note.createdAt))}</span></div>
+      <p>${esc(note.body)}</p>
+    </div>`).join('');
+    U.drawer({
+      title: resource.name || 'Resource',
+      subtitle: resource.id || id,
+      eyebrow: `${moduleMeta(resource.module).label} · ${resource.kind || 'resource'}`,
+      icon: moduleMeta(resource.module).icon,
+      width: '640px',
+      body: `<div class="intel-panel">
+        <div class="intel-panel-head">
+          <div>${statusBadge(resource.status)}${envBadge(resource.environment)}<p class="intel-muted" style="margin:6px 0 0">${esc(resource.statusDetail || 'No additional status was reported.')}</p></div>
+          ${resource.href ? `<a class="btn btn-secondary btn-sm" href="${esc(resource.href)}">Open workspace${icon('arrow-up-right', 12)}</a>` : ''}
+        </div>
+        ${kv([
+          ['Module', moduleBadge(resource.module)],
+          ['Kind', esc(resource.kind || '—')],
+          ['Location', esc([resource.cluster, resource.namespace, resource.host].filter(Boolean).join(' · ') || '—')],
+          ['Observed', data.collectedAt ? `${esc(fmtDateTime(data.collectedAt))} (${esc(timeAgo(data.collectedAt))})` : '—'],
+          ['Labels', labels.length ? `<span class="mono intel-wrap">${labels.map(([key, value]) => `${esc(key)}=${esc(value)}`).join(' · ')}</span>` : '—'],
+        ])}
+        <div class="intel-subhead">Recent events <span class="intel-muted">${fmtNumber(events.length)} matched by name</span></div>
+        ${eventRows || `<p class="intel-muted">No retained timeline event mentions this resource name.</p>`}
+        <div class="intel-subhead">Recorded changes</div>
+        ${changeRows || `<p class="intel-muted">No change has been recorded for this resource id.</p>`}
+        <div class="intel-subhead">Investigation notes</div>
+        ${noteRows || `<p class="intel-muted">No local note for this resource.</p>`}
+        ${(data.limitations || []).length ? `<ul class="intel-muted intel-panel-limits">${data.limitations.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}
+      </div>`,
+      footer: `${OD.ai?.button ? OD.ai.button({ kind: 'intelligence', page: 'resources', id: resource.id, name: resource.name }, { label: 'Ask AI', size: 'sm' }) : ''}${BTN('Close', 'x', 'data-close', 'secondary')}`,
+    });
   }
 
   // ------------------------------------------------------------------- search
@@ -1525,6 +1591,12 @@
       event.preventDefault();
       S.resources.page = Math.max(1, Number(pageButton.dataset.intelPage) || 1);
       refreshView();
+      return;
+    }
+    const inspect = event.target.closest('[data-intel-inspect]');
+    if (inspect) {
+      event.preventDefault();
+      await openResourcePanel(inspect.dataset.intelInspect);
       return;
     }
     const timelinePage = event.target.closest('[data-intel-timeline-page]');

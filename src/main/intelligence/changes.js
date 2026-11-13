@@ -195,10 +195,12 @@ class ChangeDetector {
     const limit = Math.max(1, Math.min(1000, Number(options.limit) || 200));
     const module = clean(options.module, 40);
     const kind = clean(options.kind, 60);
+    const resourceId = clean(options.resourceId, 400);
     const query = clean(options.query, 200).toLowerCase();
     let items = (this.store.get().changes || []).slice().reverse();
     if (module) items = items.filter((entry) => entry.module === module);
     if (kind) items = items.filter((entry) => entry.kind === kind);
+    if (resourceId) items = items.filter((entry) => entry.resourceId === resourceId);
     if (query) {
       items = items.filter((entry) => `${entry.title} ${entry.detail} ${entry.resource}`.toLowerCase().includes(query));
     }

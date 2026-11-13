@@ -267,8 +267,47 @@ class IntelligenceService {
     };
   }
 
-  async search(options = {}) {
-    const started = Date.now();
+  /**
+   * Detail for the cross-module side panel. The resource, its recent timeline
+   * entries, recorded changes and local notes are read from the same stores the
+   * full pages use; nothing is inferred here.
+   */
+  async resourceDetail(resourceId, options = {}) {
+    const id = clean(resourceId, 400);
+    if (!id) return { ok: false, error: 'A resource id is required.' };
+    const snapshot = await this.snapshot();
+    const resource = snapshot.items.find((item) => item.id === id);
+    if (!resource) {
+      return {
+        ok: false,
+        error: 'That resource is no longer reported by its source.',
+        sources: snapshot.sources,
+        collectedAt: snapshot.collectedAt,
+      };
+    }
+    const timeline = await this.timeline({
+      query: resource.name,
+      limit: clamp(options.limit || 40, 1, 100),
+    }).catch((error) => ({ items: [], errors: [safeError(error, 'Timeline unavailable.')] }));
+    const changes = this.changeDetector.history({ resourceId: id, limit: 40 });
+    const notes = this.store.notes({ resourceId: id, limit: 50 });
+    return {
+      ok: true,
+      resource,
+      events: timeline.items || [],
+      changes: changes.items || [],
+      notes: notes.items || [],
+      sources: snapshot.sources,
+      timelineErrors: timeline.errors || [],
+      collectedAt: snapshot.collectedAt,
+      limitations: [
+        'Events are matched by resource name across the retained timeline; an object with the same name in another namespace may also appear.',
+        'Changes and notes are filtered by the exact resource id.',
+      ],
+    };
+  }
+
+  async search(options = {}) {    const started = Date.now();
     const query = clean(options.query, 200);
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     const modules = new Set((Array.isArray(options.modules) ? options.modules : []).map((module) => clean(module, 40)).filter(Boolean));

@@ -325,6 +325,8 @@ test('changes: appearance, health transition, replicas and removal are recorded'
   const history = detector.history({ limit: 10 });
   assert.equal(history.total, 3);
   assert.equal(history.items[0].kind, 'removed');
+  assert.equal(detector.history({ resourceId: 'docker:container:api' }).total, 2);
+  assert.equal(detector.history({ resourceId: 'docker:container:web' }).total, 1);
 });
 
 test('changes: image and replica changes use real metadata only', () => {

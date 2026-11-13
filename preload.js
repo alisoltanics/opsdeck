@@ -250,6 +250,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     status: () => invoke('intel:status'),
     refresh: () => invoke('intel:refresh'),
     resources: (payload) => invoke('intel:resources', payload),
+    resourceDetail: (payload) => invoke('intel:resource-detail', payload),
     search: (payload) => invoke('intel:search', payload),
     graph: (payload) => invoke('intel:graph', payload),
     timeline: (payload) => invoke('intel:timeline', payload),

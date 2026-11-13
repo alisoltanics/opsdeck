@@ -684,3 +684,14 @@
 .insight-field { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--muted); }
 .insight-field .input { width: 100%; }
 .insight-form-actions { display: flex; align-items: end; }
+
+/* Resource side panel ------------------------------------------------------ */
+.intel-panel { display: flex; flex-direction: column; gap: 10px; }
+.intel-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.intel-panel-head > div { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.intel-panel-limits { margin: 4px 0 0; padding-inline-start: 18px; line-height: 1.7; }
+.intel-note { padding: 8px 0; border-bottom: 1px dashed var(--border-soft); }
+.intel-note:last-of-type { border-bottom: 0; }
+.intel-note-head { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.intel-note-head strong { color: var(--text); font-weight: 600; }
+.intel-note p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; unicode-bidi: plaintext; }

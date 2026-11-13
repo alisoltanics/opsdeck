@@ -521,6 +521,7 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('intel:status', () => intelligence.status());
   handle('intel:refresh', () => intelligence.refresh({ force: true }));
   handle('intel:resources', (p) => intelligence.resources(p || {}));
+  handle('intel:resource-detail', (p) => intelligence.resourceDetail(p?.id, p || {}));
   handle('intel:search', (p) => intelligence.search(p || {}));
   handle('intel:graph', (p) => intelligence.graph(p || {}));
   handle('intel:timeline', (p) => intelligence.timeline(p || {}));

@@ -498,3 +498,45 @@ test('service: automation forwards Kubernetes restarts and scales through resour
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('service: resource detail gathers side-panel evidence without inventing any', async () => {
+  const { instance, dir } = service({});
+  try {
+    const at = new Date().toISOString();
+    instance.snapshot = async () => ({
+      items: [{
+        id: 'docker:container:web', module: 'docker', kind: 'container', name: 'web',
+        status: 'healthy', statusDetail: 'Up 2 hours', labels: { app: 'web' }, href: '#/containers',
+        environment: 'production', host: 'local',
+      }],
+      sources: { docker: { ok: true } },
+      collectedAt: at,
+    });
+    instance.timeline = async () => ({
+      items: [{ id: 'e1', at, title: 'Container started', detail: 'web', module: 'docker', severity: 'info' }],
+      errors: [],
+    });
+    instance.changeDetector.history = () => ({
+      items: [{ id: 'c1', at, title: 'Image changed', detail: 'web', severity: 'warning', kind: 'image', resourceId: 'docker:container:web' }],
+    });
+    instance.noteSave({ module: 'docker', resourceId: 'docker:container:web', body: 'Restarted after the upgrade.' });
+
+    const detail = await instance.resourceDetail('docker:container:web');
+    assert.equal(detail.ok, true);
+    assert.equal(detail.resource.name, 'web');
+    assert.equal(detail.resource.environment, 'production');
+    assert.equal(detail.events.length, 1);
+    assert.equal(detail.changes.length, 1);
+    assert.equal(detail.notes.length, 1);
+    assert.match(detail.notes[0].body, /upgrade/);
+    assert.ok(detail.limitations.some((entry) => /same name in another namespace/i.test(entry)));
+
+    const missing = await instance.resourceDetail('docker:container:gone');
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /no longer reported/i);
+    assert.equal((await instance.resourceDetail('')).ok, false);
+  } finally {
+    instance.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
