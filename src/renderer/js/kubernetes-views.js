@@ -1668,6 +1668,7 @@
 
     paintCount();
     toBottom();
+    if (OD.pendingKubectl) { input.value = OD.pendingKubectl; OD.pendingKubectl = ''; }
     input.focus({ preventScroll: true });
   }
 

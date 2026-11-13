@@ -601,6 +601,8 @@
     const value = String(text || '');
     const rtl = (value.match(/[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/g) || []).length;
     if (!rtl) return false;
+    // In the Persian interface any Persian text is right-aligned, even if it starts in English.
+    if (window.OD?.i18n?.lang === 'fa') return true;
     const latin = (value.match(/[A-Za-z]/g) || []).length;
     return rtl / (rtl + latin + 1) > 0.15;
   }
@@ -1225,6 +1227,7 @@
     routeTarget,
     targetFromElement,
     formatAnswer,
+    isRtlText,
     configBadge,
   };
 })();

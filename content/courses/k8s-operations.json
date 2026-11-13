@@ -37,6 +37,11 @@
        "body": "Most pod problems fall into a few buckets, and the `STATUS` column of `kubectl get pods` tells you which one. **Pending** means the scheduler has not placed the pod (or it is waiting for a volume). **ImagePullBackOff** / **ErrImagePull** means the kubelet cannot fetch the image. **CrashLoopBackOff** means the container starts, exits, and kubelet is backing off between restarts. **OOMKilled** means the kernel killed the container for exceeding its memory limit.\n\nThe workflow is always the same: `get` for the status, `describe` for events and state, `logs` for what the application said."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-troubleshoot-flow",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "table",
        "title": "Status to likely cause",
        "head": [
@@ -210,6 +215,11 @@
        "type": "text",
        "title": "Who can do what, where",
        "body": "**RBAC** is additive: there are no deny rules. A **Role** lists allowed `verbs` on `resources` within one namespace. A **ClusterRole** does the same cluster-wide, or for cluster-scoped objects such as nodes. A **RoleBinding** attaches a Role (or ClusterRole) to subjects inside a namespace; a **ClusterRoleBinding** grants it across the whole cluster.\n\nPods authenticate to the API server as a **ServiceAccount**. Every namespace has a `default` one; give each workload its own so permissions stay minimal."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-rbac-model",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "code",
@@ -504,6 +514,11 @@
        "type": "text",
        "title": "Horizontal Pod Autoscaling",
        "body": "The **HorizontalPodAutoscaler** adjusts a Deployment's replica count based on observed metrics. CPU utilisation is calculated as a percentage of the pod's **CPU request**, so pods without `resources.requests.cpu` cannot be scaled on CPU. HPA needs **metrics-server** installed to supply resource metrics; `kubectl top` uses the same source."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-hpa-loop",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "code",

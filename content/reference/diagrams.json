@@ -1091,6 +1091,1562 @@
           "style": "dashed"
         }
       ]
+    },
+    "k8s-architecture": {
+      "title": "Kubernetes architecture",
+      "description": "Everything goes through the API server. The control plane stores and decides; each node runs what it is told.",
+      "width": 960,
+      "height": 394,
+      "nodes": [
+        {
+          "id": "kubectl",
+          "label": "kubectl",
+          "sub": "you / CI",
+          "x": 40,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "client",
+          "detail": "Talks to the API server over HTTPS. It never touches nodes or pods directly.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "api",
+          "label": "kube-apiserver",
+          "sub": "front door of the cluster",
+          "x": 270,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "daemon",
+          "detail": "The only component that reads and writes cluster state. Authenticates, authorises and validates every request.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "etcd",
+          "label": "etcd",
+          "sub": "the source of truth",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "Consistent key-value store holding every object. Only the API server talks to it.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "sched",
+          "label": "kube-scheduler",
+          "sub": "picks a node for each Pod",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Watches for Pods without a node and assigns one based on resources, affinity and taints.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "cm",
+          "label": "controller-manager",
+          "sub": "reconciliation loops",
+          "x": 500,
+          "y": 286,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Runs controllers (Deployment, ReplicaSet, Node, Job...) that keep actual state equal to desired state.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "kubelet",
+          "label": "kubelet",
+          "sub": "node agent",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Runs on each node. Starts the containers of Pods assigned to it and reports their status.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "proxy",
+          "label": "kube-proxy",
+          "sub": "Service networking",
+          "x": 730,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "network",
+          "detail": "Programs the node network rules so Service IPs reach the right Pods.",
+          "lesson": "k8s-why-and-architecture"
+        },
+        {
+          "id": "cri",
+          "label": "container runtime",
+          "sub": "containerd / CRI-O",
+          "x": 730,
+          "y": 286,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Pulls images and runs containers on behalf of the kubelet.",
+          "lesson": "k8s-why-and-architecture"
+        }
+      ],
+      "edges": [
+        {
+          "from": "kubectl",
+          "to": "api",
+          "label": "request",
+          "style": "solid"
+        },
+        {
+          "from": "api",
+          "to": "etcd",
+          "label": "read / write",
+          "style": "solid"
+        },
+        {
+          "from": "sched",
+          "to": "api",
+          "label": "watch + bind",
+          "style": "dashed"
+        },
+        {
+          "from": "cm",
+          "to": "api",
+          "label": "watch + update",
+          "style": "dashed"
+        },
+        {
+          "from": "kubelet",
+          "to": "api",
+          "label": "watch + status",
+          "style": "dashed"
+        },
+        {
+          "from": "kubelet",
+          "to": "cri",
+          "label": "CRI",
+          "style": "solid"
+        },
+        {
+          "from": "proxy",
+          "to": "api",
+          "label": "watch Services",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-declarative-loop": {
+      "title": "The declarative loop",
+      "description": "You declare the desired state. Controllers keep comparing it with reality and fix the difference, forever.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "yaml",
+          "label": "Manifest",
+          "sub": "desired state (YAML)",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "What you want: image, replicas, ports. You describe the end result, not the steps.",
+          "lesson": "k8s-kubectl-and-declarative"
+        },
+        {
+          "id": "apply",
+          "label": "kubectl apply",
+          "sub": "send to the API",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "client",
+          "detail": "Submits the manifest. Re-applying the same file is safe: nothing changes if nothing differs.",
+          "lesson": "k8s-kubectl-and-declarative"
+        },
+        {
+          "id": "store",
+          "label": "Stored object",
+          "sub": "spec + status in etcd",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "spec is what you asked for; status is what the cluster reports back.",
+          "lesson": "k8s-kubectl-and-declarative"
+        },
+        {
+          "id": "ctrl",
+          "label": "Controller",
+          "sub": "observe, compare, act",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Watches objects and creates, updates or deletes others until reality matches spec.",
+          "lesson": "k8s-kubectl-and-declarative"
+        },
+        {
+          "id": "real",
+          "label": "Running state",
+          "sub": "Pods, nodes, networks",
+          "x": 730,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "running",
+          "detail": "The actual world. If a Pod dies, the controller notices the drift and replaces it.",
+          "lesson": "k8s-kubectl-and-declarative"
+        }
+      ],
+      "edges": [
+        {
+          "from": "yaml",
+          "to": "apply",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "apply",
+          "to": "store",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "store",
+          "to": "ctrl",
+          "label": "watch",
+          "style": "dashed"
+        },
+        {
+          "from": "ctrl",
+          "to": "real",
+          "label": "reconcile",
+          "style": "solid"
+        },
+        {
+          "from": "real",
+          "to": "store",
+          "label": "report status",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-pod-lifecycle": {
+      "title": "Pod lifecycle",
+      "description": "A Pod moves through phases. Most problems show up as a Pod stuck in one of them.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "pending",
+          "label": "Pending",
+          "sub": "accepted, not running yet",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "paused",
+          "detail": "Waiting to be scheduled or for images to be pulled. Stuck here usually means no node fits or the image cannot be pulled.",
+          "lesson": "k8s-pods-in-depth"
+        },
+        {
+          "id": "init",
+          "label": "Init containers",
+          "sub": "run one by one",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Each init container must exit 0 before the next starts and before app containers start.",
+          "lesson": "k8s-pods-in-depth"
+        },
+        {
+          "id": "running",
+          "label": "Running",
+          "sub": "at least one container up",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "running",
+          "detail": "Containers are started. Readiness probes decide whether it receives traffic.",
+          "lesson": "k8s-pods-in-depth"
+        },
+        {
+          "id": "done",
+          "label": "Succeeded",
+          "sub": "all containers exited 0",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "exited",
+          "detail": "Typical for Jobs. The Pod is not restarted.",
+          "lesson": "k8s-pods-in-depth"
+        },
+        {
+          "id": "failed",
+          "label": "Failed",
+          "sub": "a container exited non-zero",
+          "x": 730,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "warning",
+          "detail": "With restartPolicy Never. With Always or OnFailure the kubelet restarts the container instead.",
+          "lesson": "k8s-pods-in-depth"
+        },
+        {
+          "id": "crash",
+          "label": "CrashLoopBackOff",
+          "sub": "restart delay grows",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "warning",
+          "detail": "The container keeps exiting, so the kubelet waits 10s, 20s, 40s... up to 5 minutes between restarts.",
+          "lesson": "k8s-troubleshoot-pods"
+        }
+      ],
+      "edges": [
+        {
+          "from": "pending",
+          "to": "init",
+          "label": "scheduled",
+          "style": "solid"
+        },
+        {
+          "from": "init",
+          "to": "running",
+          "label": "all init done",
+          "style": "solid"
+        },
+        {
+          "from": "running",
+          "to": "done",
+          "label": "exit 0",
+          "style": "solid"
+        },
+        {
+          "from": "running",
+          "to": "crash",
+          "label": "exits non-zero",
+          "style": "solid"
+        },
+        {
+          "from": "crash",
+          "to": "running",
+          "label": "restart",
+          "style": "dashed"
+        },
+        {
+          "from": "running",
+          "to": "failed",
+          "label": "Never policy",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-deployment-rollout": {
+      "title": "Deployment rolling update",
+      "description": "A Deployment owns ReplicaSets. A rollout scales the new one up while the old one scales down.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "dep",
+          "label": "Deployment",
+          "sub": "web · image v2",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "You change the Pod template (for example the image). The Deployment creates a new ReplicaSet for it.",
+          "lesson": "k8s-deployments"
+        },
+        {
+          "id": "rs1",
+          "label": "ReplicaSet web-7d9",
+          "sub": "old template (v1)",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "idle",
+          "detail": "Kept around with 0 replicas so you can roll back.",
+          "lesson": "k8s-deployments"
+        },
+        {
+          "id": "rs2",
+          "label": "ReplicaSet web-5f2",
+          "sub": "new template (v2)",
+          "x": 270,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "running",
+          "detail": "Scaled up step by step, limited by maxSurge.",
+          "lesson": "k8s-deployments"
+        },
+        {
+          "id": "p1",
+          "label": "Pods v1",
+          "sub": "scaling down",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "exited",
+          "detail": "Removed gradually, limited by maxUnavailable, so capacity never drops too far.",
+          "lesson": "k8s-deployments"
+        },
+        {
+          "id": "p2",
+          "label": "Pods v2",
+          "sub": "scaling up",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Must pass readiness before old Pods are removed.",
+          "lesson": "k8s-deployments"
+        },
+        {
+          "id": "svc",
+          "label": "Service",
+          "sub": "keeps routing",
+          "x": 730,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "network",
+          "detail": "Sends traffic only to Ready Pods, so users see no downtime.",
+          "lesson": "k8s-services"
+        }
+      ],
+      "edges": [
+        {
+          "from": "dep",
+          "to": "rs1",
+          "label": "owns",
+          "style": "solid"
+        },
+        {
+          "from": "dep",
+          "to": "rs2",
+          "label": "owns",
+          "style": "solid"
+        },
+        {
+          "from": "rs1",
+          "to": "p1",
+          "label": "manages",
+          "style": "solid"
+        },
+        {
+          "from": "rs2",
+          "to": "p2",
+          "label": "manages",
+          "style": "solid"
+        },
+        {
+          "from": "p2",
+          "to": "svc",
+          "label": "ready",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-service-routing": {
+      "title": "How a Service routes traffic",
+      "description": "A Service is a stable name and IP. Its selector picks the Pods; only Ready Pods receive traffic.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "client",
+          "label": "Client Pod",
+          "sub": "curl http://web",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "client",
+          "detail": "Uses the Service DNS name; CoreDNS resolves it to the ClusterIP.",
+          "lesson": "k8s-services"
+        },
+        {
+          "id": "dns",
+          "label": "CoreDNS",
+          "sub": "web.demo.svc.cluster.local",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "tool",
+          "detail": "Cluster DNS. Resolves Service names to ClusterIPs.",
+          "lesson": "k8s-network-model"
+        },
+        {
+          "id": "svc",
+          "label": "Service",
+          "sub": "ClusterIP 10.96.0.20:80",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "network",
+          "detail": "A virtual IP that does not belong to any one Pod. kube-proxy turns it into Pod endpoints.",
+          "lesson": "k8s-services"
+        },
+        {
+          "id": "ep",
+          "label": "Endpoints",
+          "sub": "ready Pod IPs",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "The list of Ready Pods whose labels match the selector. Empty list means no traffic.",
+          "lesson": "k8s-services"
+        },
+        {
+          "id": "a",
+          "label": "Pod web-a",
+          "sub": "app=web · 10.244.1.4",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Matches the selector and is Ready.",
+          "lesson": "k8s-services"
+        },
+        {
+          "id": "b",
+          "label": "Pod web-b",
+          "sub": "app=web · 10.244.2.7",
+          "x": 730,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Matches the selector and is Ready.",
+          "lesson": "k8s-services"
+        }
+      ],
+      "edges": [
+        {
+          "from": "client",
+          "to": "dns",
+          "label": "lookup",
+          "style": "solid"
+        },
+        {
+          "from": "dns",
+          "to": "svc",
+          "label": "ClusterIP",
+          "style": "solid"
+        },
+        {
+          "from": "svc",
+          "to": "ep",
+          "label": "selector",
+          "style": "dashed"
+        },
+        {
+          "from": "ep",
+          "to": "a",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "ep",
+          "to": "b",
+          "label": "",
+          "style": "solid"
+        }
+      ]
+    },
+    "k8s-ingress-flow": {
+      "title": "Ingress traffic path",
+      "description": "External HTTP(S) enters through one load balancer and an Ingress controller that routes by host and path.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "user",
+          "label": "Browser",
+          "sub": "shop.example.com",
+          "x": 40,
+          "y": 30,
+          "w": 144,
+          "h": 84,
+          "kind": "client",
+          "detail": "Sends a request with a Host header and path.",
+          "lesson": "k8s-ingress"
+        },
+        {
+          "id": "lb",
+          "label": "Load balancer",
+          "sub": "public IP",
+          "x": 224,
+          "y": 30,
+          "w": 144,
+          "h": 84,
+          "kind": "cloud",
+          "detail": "Cloud or MetalLB entry point in front of the controller.",
+          "lesson": "k8s-ingress"
+        },
+        {
+          "id": "ing",
+          "label": "Ingress controller",
+          "sub": "nginx / traefik",
+          "x": 408,
+          "y": 30,
+          "w": 144,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Reads Ingress rules and acts as the reverse proxy. TLS is terminated here.",
+          "lesson": "k8s-ingress"
+        },
+        {
+          "id": "web",
+          "label": "Service web",
+          "sub": "host: / ",
+          "x": 592,
+          "y": 30,
+          "w": 144,
+          "h": 84,
+          "kind": "network",
+          "detail": "Receives requests for / .",
+          "lesson": "k8s-ingress"
+        },
+        {
+          "id": "api",
+          "label": "Service api",
+          "sub": "host: /api",
+          "x": 592,
+          "y": 158,
+          "w": 144,
+          "h": 84,
+          "kind": "network",
+          "detail": "Receives requests for /api.",
+          "lesson": "k8s-ingress"
+        },
+        {
+          "id": "pw",
+          "label": "Pods web",
+          "sub": "",
+          "x": 776,
+          "y": 30,
+          "w": 144,
+          "h": 84,
+          "kind": "container",
+          "detail": "Backends of the web Service.",
+          "lesson": "k8s-services"
+        },
+        {
+          "id": "pa",
+          "label": "Pods api",
+          "sub": "",
+          "x": 776,
+          "y": 158,
+          "w": 144,
+          "h": 84,
+          "kind": "container",
+          "detail": "Backends of the api Service.",
+          "lesson": "k8s-services"
+        },
+        {
+          "id": "rule",
+          "label": "Ingress rules",
+          "sub": "hosts · paths · TLS",
+          "x": 408,
+          "y": 158,
+          "w": 144,
+          "h": 84,
+          "kind": "config",
+          "detail": "The Ingress object. It is only configuration; the controller makes it real.",
+          "lesson": "k8s-ingress"
+        }
+      ],
+      "edges": [
+        {
+          "from": "user",
+          "to": "lb",
+          "label": "HTTPS",
+          "style": "solid"
+        },
+        {
+          "from": "lb",
+          "to": "ing",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "rule",
+          "to": "ing",
+          "label": "configures",
+          "style": "dashed"
+        },
+        {
+          "from": "ing",
+          "to": "web",
+          "label": "/",
+          "style": "solid"
+        },
+        {
+          "from": "ing",
+          "to": "api",
+          "label": "/api",
+          "style": "solid"
+        },
+        {
+          "from": "web",
+          "to": "pw",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "api",
+          "to": "pa",
+          "label": "",
+          "style": "solid"
+        }
+      ]
+    },
+    "k8s-storage-chain": {
+      "title": "Persistent storage",
+      "description": "A Pod claims storage with a PVC. A StorageClass provisions a PV, which is backed by a real disk.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "pod",
+          "label": "Pod",
+          "sub": "mounts /data",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Uses the claim by name in volumes. The data outlives the Pod.",
+          "lesson": "k8s-persistent-storage"
+        },
+        {
+          "id": "pvc",
+          "label": "PersistentVolumeClaim",
+          "sub": "request: 5Gi RWO",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "A namespaced request for storage. Binds to one PV.",
+          "lesson": "k8s-persistent-storage"
+        },
+        {
+          "id": "pv",
+          "label": "PersistentVolume",
+          "sub": "cluster-wide volume",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "The actual storage resource. Created by an admin or dynamically.",
+          "lesson": "k8s-persistent-storage"
+        },
+        {
+          "id": "disk",
+          "label": "Backing disk",
+          "sub": "EBS / NFS / local",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "host",
+          "detail": "Where bytes really live.",
+          "lesson": "k8s-persistent-storage"
+        },
+        {
+          "id": "sc",
+          "label": "StorageClass",
+          "sub": "provisioner + policy",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "daemon",
+          "detail": "Describes how to create volumes on demand and the reclaim policy.",
+          "lesson": "k8s-persistent-storage"
+        }
+      ],
+      "edges": [
+        {
+          "from": "pod",
+          "to": "pvc",
+          "label": "claims",
+          "style": "solid"
+        },
+        {
+          "from": "pvc",
+          "to": "pv",
+          "label": "binds",
+          "style": "solid"
+        },
+        {
+          "from": "pv",
+          "to": "disk",
+          "label": "backed by",
+          "style": "solid"
+        },
+        {
+          "from": "pvc",
+          "to": "sc",
+          "label": "asks for class",
+          "style": "dashed"
+        },
+        {
+          "from": "sc",
+          "to": "pv",
+          "label": "provisions",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-rbac-model": {
+      "title": "RBAC model",
+      "description": "Who (subject) can do what (verbs) on which resources, and where (namespace or cluster).",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "sub",
+          "label": "Subject",
+          "sub": "User · Group · ServiceAccount",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "client",
+          "detail": "The identity making the request.",
+          "lesson": "k8s-rbac"
+        },
+        {
+          "id": "rb",
+          "label": "RoleBinding",
+          "sub": "links subject to a Role",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "Grants the Role to subjects inside one namespace.",
+          "lesson": "k8s-rbac"
+        },
+        {
+          "id": "role",
+          "label": "Role",
+          "sub": "verbs on resources",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "A set of allowed actions, e.g. get, list on pods.",
+          "lesson": "k8s-rbac"
+        },
+        {
+          "id": "res",
+          "label": "Resources",
+          "sub": "pods · secrets · deployments",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "What the verbs apply to.",
+          "lesson": "k8s-rbac"
+        },
+        {
+          "id": "crb",
+          "label": "ClusterRoleBinding",
+          "sub": "cluster-wide grant",
+          "x": 270,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "daemon",
+          "detail": "Grants a ClusterRole in every namespace. Use sparingly.",
+          "lesson": "k8s-rbac"
+        },
+        {
+          "id": "crole",
+          "label": "ClusterRole",
+          "sub": "cluster-scoped rules",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Like a Role but can also cover nodes, namespaces and non-namespaced resources.",
+          "lesson": "k8s-rbac"
+        }
+      ],
+      "edges": [
+        {
+          "from": "rb",
+          "to": "sub",
+          "label": "subject",
+          "style": "dashed"
+        },
+        {
+          "from": "rb",
+          "to": "role",
+          "label": "roleRef",
+          "style": "solid"
+        },
+        {
+          "from": "role",
+          "to": "res",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "crb",
+          "to": "sub",
+          "label": "subject",
+          "style": "dashed"
+        },
+        {
+          "from": "crb",
+          "to": "crole",
+          "label": "roleRef",
+          "style": "solid"
+        },
+        {
+          "from": "crole",
+          "to": "res",
+          "label": "",
+          "style": "solid"
+        }
+      ]
+    },
+    "k8s-troubleshoot-flow": {
+      "title": "Pod troubleshooting flow",
+      "description": "Read the STATUS column first, then follow the matching branch.",
+      "width": 960,
+      "height": 394,
+      "nodes": [
+        {
+          "id": "get",
+          "label": "kubectl get pods",
+          "sub": "read STATUS",
+          "x": 40,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "client",
+          "detail": "Start here. The status already narrows the problem.",
+          "lesson": "k8s-troubleshoot-pods"
+        },
+        {
+          "id": "pending",
+          "label": "Pending",
+          "sub": "not scheduled",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "paused",
+          "detail": "kubectl describe pod, then read Events: Insufficient cpu/memory, taints, unbound PVC.",
+          "lesson": "k8s-troubleshoot-pods"
+        },
+        {
+          "id": "image",
+          "label": "ImagePullBackOff",
+          "sub": "cannot pull image",
+          "x": 270,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "warning",
+          "detail": "Check the image name and tag, the registry and imagePullSecrets.",
+          "lesson": "k8s-troubleshoot-pods"
+        },
+        {
+          "id": "crash",
+          "label": "CrashLoopBackOff",
+          "sub": "container keeps exiting",
+          "x": 270,
+          "y": 286,
+          "w": 190,
+          "h": 84,
+          "kind": "warning",
+          "detail": "kubectl logs --previous shows why the last run died.",
+          "lesson": "k8s-troubleshoot-pods"
+        },
+        {
+          "id": "desc",
+          "label": "describe + events",
+          "sub": "what Kubernetes saw",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "tool",
+          "detail": "Events list scheduling and pull failures with a clear reason.",
+          "lesson": "k8s-troubleshoot-pods"
+        },
+        {
+          "id": "logs",
+          "label": "logs --previous",
+          "sub": "what the app said",
+          "x": 500,
+          "y": 286,
+          "w": 190,
+          "h": 84,
+          "kind": "tool",
+          "detail": "Application errors before the crash. Exit 137 means OOMKilled.",
+          "lesson": "k8s-troubleshoot-pods"
+        },
+        {
+          "id": "fix",
+          "label": "Fix and re-apply",
+          "sub": "",
+          "x": 730,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "running",
+          "detail": "Change the manifest, apply, watch the rollout.",
+          "lesson": "k8s-troubleshoot-pods"
+        }
+      ],
+      "edges": [
+        {
+          "from": "get",
+          "to": "pending",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "get",
+          "to": "image",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "get",
+          "to": "crash",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "pending",
+          "to": "desc",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "image",
+          "to": "desc",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "crash",
+          "to": "logs",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "desc",
+          "to": "fix",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "logs",
+          "to": "fix",
+          "label": "",
+          "style": "solid"
+        }
+      ]
+    },
+    "k8s-hpa-loop": {
+      "title": "Horizontal Pod Autoscaler",
+      "description": "Every 15 seconds the HPA compares measured usage with the target and changes the replica count.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "ms",
+          "label": "metrics-server",
+          "sub": "CPU / memory",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "tool",
+          "detail": "Collects resource usage from kubelets and exposes it through the metrics API.",
+          "lesson": "k8s-autoscaling-maintenance"
+        },
+        {
+          "id": "hpa",
+          "label": "HPA",
+          "sub": "target 70% CPU",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "daemon",
+          "detail": "Computes desired = ceil(current * usage / target) within min and max.",
+          "lesson": "k8s-autoscaling-maintenance"
+        },
+        {
+          "id": "dep",
+          "label": "Deployment",
+          "sub": "replicas: 2 → 5",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "The scale target. The HPA writes its replicas field.",
+          "lesson": "k8s-autoscaling-maintenance"
+        },
+        {
+          "id": "pods",
+          "label": "Pods",
+          "sub": "requests define 100%",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Utilisation is measured against CPU requests, so requests must be set.",
+          "lesson": "k8s-probes-resources"
+        }
+      ],
+      "edges": [
+        {
+          "from": "ms",
+          "to": "hpa",
+          "label": "metrics",
+          "style": "solid"
+        },
+        {
+          "from": "hpa",
+          "to": "dep",
+          "label": "scale",
+          "style": "solid"
+        },
+        {
+          "from": "dep",
+          "to": "pods",
+          "label": "creates",
+          "style": "solid"
+        },
+        {
+          "from": "pods",
+          "to": "ms",
+          "label": "usage",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-config-injection": {
+      "title": "Configuration into a Pod",
+      "description": "ConfigMaps and Secrets keep settings out of the image. They reach the container as env vars or files.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "cm",
+          "label": "ConfigMap",
+          "sub": "LOG_LEVEL=info",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "Non-sensitive settings.",
+          "lesson": "k8s-configmaps"
+        },
+        {
+          "id": "sec",
+          "label": "Secret",
+          "sub": "DB_PASSWORD (base64)",
+          "x": 40,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "warning",
+          "detail": "Sensitive values. Base64 is encoding, not encryption.",
+          "lesson": "k8s-secrets"
+        },
+        {
+          "id": "env",
+          "label": "Environment variables",
+          "sub": "envFrom / valueFrom",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "tool",
+          "detail": "Read once at container start. Changes need a restart.",
+          "lesson": "k8s-configmaps"
+        },
+        {
+          "id": "vol",
+          "label": "Mounted files",
+          "sub": "volumeMounts",
+          "x": 270,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "Files update in place when the object changes (except subPath).",
+          "lesson": "k8s-configmaps"
+        },
+        {
+          "id": "pod",
+          "label": "Container",
+          "sub": "reads env + files",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Your app sees both as ordinary env vars and files.",
+          "lesson": "k8s-configmaps"
+        }
+      ],
+      "edges": [
+        {
+          "from": "cm",
+          "to": "env",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "cm",
+          "to": "vol",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "sec",
+          "to": "env",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "sec",
+          "to": "vol",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "env",
+          "to": "pod",
+          "label": "",
+          "style": "solid"
+        },
+        {
+          "from": "vol",
+          "to": "pod",
+          "label": "",
+          "style": "solid"
+        }
+      ]
+    },
+    "k8s-statefulset-identity": {
+      "title": "StatefulSet identity",
+      "description": "Each replica keeps a stable name, a stable DNS entry and its own volume, even after a restart.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "hs",
+          "label": "Headless Service",
+          "sub": "clusterIP: None",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "network",
+          "detail": "Gives each Pod its own DNS record: db-0.db, db-1.db.",
+          "lesson": "k8s-statefulsets"
+        },
+        {
+          "id": "p0",
+          "label": "db-0",
+          "sub": "started first",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Ordered startup: db-1 waits for db-0 to be Ready.",
+          "lesson": "k8s-statefulsets"
+        },
+        {
+          "id": "p1",
+          "label": "db-1",
+          "sub": "started second",
+          "x": 270,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Keeps its name when rescheduled.",
+          "lesson": "k8s-statefulsets"
+        },
+        {
+          "id": "v0",
+          "label": "PVC data-db-0",
+          "sub": "own volume",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "Created from volumeClaimTemplates. Survives Pod deletion.",
+          "lesson": "k8s-statefulsets"
+        },
+        {
+          "id": "v1",
+          "label": "PVC data-db-1",
+          "sub": "own volume",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "volume",
+          "detail": "Reattached to db-1 whenever it comes back.",
+          "lesson": "k8s-statefulsets"
+        }
+      ],
+      "edges": [
+        {
+          "from": "hs",
+          "to": "p0",
+          "label": "db-0.db",
+          "style": "dashed"
+        },
+        {
+          "from": "hs",
+          "to": "p1",
+          "label": "db-1.db",
+          "style": "dashed"
+        },
+        {
+          "from": "p0",
+          "to": "v0",
+          "label": "mounts",
+          "style": "solid"
+        },
+        {
+          "from": "p1",
+          "to": "v1",
+          "label": "mounts",
+          "style": "solid"
+        }
+      ]
+    },
+    "k8s-cronjob-flow": {
+      "title": "CronJob → Job → Pods",
+      "description": "A CronJob creates a Job on a schedule. The Job runs Pods until the required completions succeed.",
+      "width": 960,
+      "height": 138,
+      "nodes": [
+        {
+          "id": "cron",
+          "label": "CronJob",
+          "sub": "*/5 * * * *",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "Creates a Job each time the schedule fires. concurrencyPolicy controls overlaps.",
+          "lesson": "k8s-jobs-cronjobs"
+        },
+        {
+          "id": "job",
+          "label": "Job",
+          "sub": "completions: 1",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "runtime",
+          "detail": "Tracks successful Pod completions and retries up to backoffLimit.",
+          "lesson": "k8s-jobs-cronjobs"
+        },
+        {
+          "id": "pod",
+          "label": "Pod",
+          "sub": "runs to completion",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Runs once. Never restarted after success.",
+          "lesson": "k8s-jobs-cronjobs"
+        },
+        {
+          "id": "hist",
+          "label": "History",
+          "sub": "successfulJobsHistoryLimit",
+          "x": 730,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "idle",
+          "detail": "Old Jobs kept for logs, then cleaned up.",
+          "lesson": "k8s-jobs-cronjobs"
+        }
+      ],
+      "edges": [
+        {
+          "from": "cron",
+          "to": "job",
+          "label": "schedule",
+          "style": "solid"
+        },
+        {
+          "from": "job",
+          "to": "pod",
+          "label": "creates",
+          "style": "solid"
+        },
+        {
+          "from": "pod",
+          "to": "job",
+          "label": "exit code",
+          "style": "dashed"
+        },
+        {
+          "from": "job",
+          "to": "hist",
+          "label": "finished",
+          "style": "dashed"
+        }
+      ]
+    },
+    "k8s-network-policy-flow": {
+      "title": "NetworkPolicy",
+      "description": "With a default-deny policy, only traffic that a rule allows reaches the selected Pods.",
+      "width": 960,
+      "height": 266,
+      "nodes": [
+        {
+          "id": "web",
+          "label": "web Pods",
+          "sub": "app=web",
+          "x": 40,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "container",
+          "detail": "Allowed by the rule below.",
+          "lesson": "k8s-network-policies"
+        },
+        {
+          "id": "mon",
+          "label": "monitoring ns",
+          "sub": "team=obs",
+          "x": 40,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "client",
+          "detail": "Allowed through a namespaceSelector.",
+          "lesson": "k8s-network-policies"
+        },
+        {
+          "id": "pol",
+          "label": "NetworkPolicy",
+          "sub": "default deny + allow rules",
+          "x": 270,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "config",
+          "detail": "Selects Pods and lists permitted ingress sources and ports.",
+          "lesson": "k8s-network-policies"
+        },
+        {
+          "id": "api",
+          "label": "api Pods",
+          "sub": "policy applies here",
+          "x": 500,
+          "y": 30,
+          "w": 190,
+          "h": 84,
+          "kind": "running",
+          "detail": "Receive only what the policy allows.",
+          "lesson": "k8s-network-policies"
+        },
+        {
+          "id": "other",
+          "label": "other Pods",
+          "sub": "not listed",
+          "x": 500,
+          "y": 158,
+          "w": 190,
+          "h": 84,
+          "kind": "warning",
+          "detail": "Blocked. Needs a CNI that enforces policies.",
+          "lesson": "k8s-network-policies"
+        }
+      ],
+      "edges": [
+        {
+          "from": "web",
+          "to": "api",
+          "label": "allowed :8080",
+          "style": "solid"
+        },
+        {
+          "from": "mon",
+          "to": "api",
+          "label": "allowed :9090",
+          "style": "solid"
+        },
+        {
+          "from": "other",
+          "to": "api",
+          "label": "denied",
+          "style": "dashed"
+        },
+        {
+          "from": "pol",
+          "to": "api",
+          "label": "selects",
+          "style": "dashed"
+        }
+      ]
     }
   }
 }

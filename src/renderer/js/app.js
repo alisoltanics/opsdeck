@@ -936,6 +936,11 @@
     if (run) {
       event.preventDefault();
       const command = run.dataset.runCommand || '';
+      if (/^\s*(kubectl|helm)\b/.test(command)) {
+        OD.pendingKubectl = command;
+        goto('#/kubernetes/console');
+        return;
+      }
       if (OD.views.docker && OD.views.docker.terminalPending) {
         OD.views.docker.terminalPending(command);
       }

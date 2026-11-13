@@ -205,9 +205,10 @@
     const yamls = (lesson.sections || []).filter((x) => x.type === 'code' && x.language === 'yaml').map((x) => ({ title: x.title || '', code: x.code }));
     out.hidden = false;
     out.innerHTML = U.loader('Running…');
+    const withTools = (html) => `<div class="lesson-run-tools"><button type="button" class="btn btn-ghost btn-xs" data-run-full>${icon('maximize', 12)}<span>Fullscreen</span></button></div>${html}`;
     if (button) button.disabled = true;
     try {
-      out.innerHTML = runResultHtml(await window.opsdeck.kubernetes.runLesson({ script, yamls }));
+      out.innerHTML = withTools(runResultHtml(await window.opsdeck.kubernetes.runLesson({ script, yamls })));
     } catch (error) {
       out.innerHTML = runResultHtml({ ok: false, error: error.message });
     } finally {
@@ -648,7 +649,9 @@
 
             <div class="notes-card">
               <h3>${icon('notebook-pen', 14)}Your notes</h3>
-              <textarea class="input" id="lesson-notes" placeholder="Write what you want to remember. Notes are stored locally with SQLite.">${esc(note)}</textarea>
+              <div class="notes-tabs" role="tablist"><button type="button" class="chip active" data-notes-tab="edit">Write</button><button type="button" class="chip" data-notes-tab="preview">Preview</button><span class="faint text-xs">Markdown supported</span></div>
+              <textarea class="input" id="lesson-notes" dir="auto" placeholder="Write what you want to remember. Notes are stored locally with SQLite.">${esc(note)}</textarea>
+              <div class="notes-preview ai-answer" id="notes-preview" hidden></div>
               <div class="notes-foot"><span id="note-status">${note ? 'Saved locally' : 'Autosaves after you stop typing'}</span><span>${icon('lock', 11)} local only</span></div>
             </div>
 
@@ -702,6 +705,12 @@
     mountDiagrams(root);
 
     root.addEventListener('click', async (event) => {
+      const fullBtn = event.target.closest('[data-run-full]');
+      if (fullBtn) {
+        const box = fullBtn.closest('[data-run-out]');
+        if (document.fullscreenElement) document.exitFullscreen(); else box?.requestFullscreen?.();
+        return;
+      }
       const runBtn = event.target.closest('[data-lesson-run]');
       if (runBtn) {
         event.preventDefault();
@@ -771,6 +780,18 @@
         evaluateAchievements();
       }, 700);
       notes.addEventListener('input', save);
+      const preview = root.querySelector('#notes-preview');
+      root.querySelectorAll('[data-notes-tab]').forEach((tab) => tab.addEventListener('click', () => {
+        const show = tab.dataset.notesTab === 'preview';
+        root.querySelectorAll('[data-notes-tab]').forEach((t) => t.classList.toggle('active', t === tab));
+        notes.hidden = show;
+        preview.hidden = !show;
+        if (show) {
+          const text = notes.value.trim();
+          preview.setAttribute('dir', OD.ai?.isRtlText?.(text) ? 'rtl' : 'ltr');
+          preview.innerHTML = text && OD.ai?.formatAnswer ? OD.ai.formatAnswer(text) : '<p class="faint">Nothing to preview yet.</p>';
+        }
+      }));
       onCleanup(() => save.cancel());
     }
 

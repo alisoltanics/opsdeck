@@ -202,6 +202,11 @@
        "body": "A **Service** gives a set of Pods a stable virtual IP and DNS name. Membership is defined by a **label selector**; the control plane keeps an EndpointSlice with the ready Pod IPs, and `kube-proxy` on each node programs rules that load-balance traffic to them.\n\n`port` is what clients connect to, `targetPort` is the container port, and `nodePort` (when used) is the port opened on every node."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-service-routing",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  type: ClusterIP\n  selector:\n    app: web\n  ports:\n    - name: http\n      port: 80\n      targetPort: 8080",
@@ -385,6 +390,11 @@
        "body": "A **Service** of type LoadBalancer costs one cloud load balancer per Service. An **Ingress** instead describes HTTP routing rules, and an **ingress controller** (ingress-nginx, Traefik, HAProxy and others) watches those objects and configures a shared proxy.\n\nAn Ingress object does nothing on its own. If no controller is installed, requests are never routed. Select the controller with `ingressClassName`."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-ingress-flow",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: shop\nspec:\n  ingressClassName: nginx\n  tls:\n    - hosts: [shop.example.com]\n      secretName: shop-tls\n  rules:\n    - host: shop.example.com\n      http:\n        paths:\n          - path: /api\n            pathType: Prefix\n            backend:\n              service:\n                name: api\n                port:\n                  number: 80\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: web\n                port:\n                  number: 80",
@@ -537,6 +547,11 @@
        "type": "text",
        "title": "Open by default, closed by policy",
        "body": "By default all Pods accept traffic from anywhere. A **NetworkPolicy** selects Pods and, once any policy selects a Pod for a direction, only traffic **explicitly allowed** is permitted for that direction. Policies are additive; there are no deny rules.\n\nPolicies are enforced by the CNI plugin. Calico and Cilium enforce them; plain Flannel does not, and the objects are silently ignored."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-network-policy-flow",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "code",

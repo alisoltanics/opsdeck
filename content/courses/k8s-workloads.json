@@ -36,6 +36,11 @@
        "body": "A **Deployment** declares the desired state of a stateless app. It creates a **ReplicaSet**, which keeps the requested number of identical Pods running. You almost never create ReplicaSets directly: when the Pod template changes, the Deployment creates a *new* ReplicaSet and gradually shifts Pods from the old one to the new one.\n\nOld ReplicaSets are kept (scaled to 0) so you can roll back. `revisionHistoryLimit` (default 10) controls how many are retained."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-deployment-rollout",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1\n      maxUnavailable: 0\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx:1.27\n          ports:\n            - containerPort: 80",
@@ -199,6 +204,11 @@
        "type": "text",
        "title": "Stable identity",
        "body": "A **StatefulSet** gives each Pod a sticky identity: a predictable name (`db-0`, `db-1`, ...), a stable DNS name, and its own PersistentVolumeClaim. If `db-1` is rescheduled it comes back as `db-1` and reattaches to the same volume.\n\nBy default Pods are created in order (0, 1, 2) and terminated in reverse order. Use `podManagementPolicy: Parallel` if your app does not need ordering."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-statefulset-identity",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "code",
@@ -465,6 +475,11 @@
        "type": "text",
        "title": "Jobs run to completion",
        "body": "A **Job** creates Pods and retries them until a number of them succeed. Unlike a Deployment, a successful Pod is not restarted. Pods in a Job must use `restartPolicy: OnFailure` or `Never`.\n\n`completions` is how many successful Pods are needed, `parallelism` how many run at once, and `backoffLimit` (default 6) how many failures are tolerated before the Job is marked Failed, with exponential back-off between retries."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-cronjob-flow",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "code",

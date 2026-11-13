@@ -37,6 +37,11 @@
        "body": "Running `docker run` on one host is easy. Running hundreds of containers across many machines is not: who restarts a crashed container, where does a new one fit, how do replicas find each other, how do you roll out a new version without downtime?\n\nKubernetes is a **container orchestrator**. You declare the **desired state** (\"three replicas of this image, reachable on port 80\") and the cluster continuously works to make reality match it. It provides scheduling, self-healing, service discovery, rolling updates and scaling as built-in primitives."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-architecture",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "table",
        "title": "Cluster components",
        "head": [
@@ -227,6 +232,11 @@
        "body": "`kubectl` reads `~/.kube/config` (or the files in `$KUBECONFIG`). It holds **clusters** (API server address and CA), **users** (credentials) and **contexts**, each pairing a cluster, a user and a default namespace.\n\nThe **current context** decides which cluster every command hits, so check it before anything destructive."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-declarative-loop",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl config get-contexts\nkubectl config current-context\nkubectl config use-context dev-cluster\nkubectl config set-context --current --namespace=shop",
@@ -389,6 +399,11 @@
        "type": "text",
        "title": "The Pod is the unit of scheduling",
        "body": "A **Pod** is one or more containers that share a network namespace (one IP, `localhost` between them) and can share volumes. All containers in a Pod land on the same node and live and die together. Pods are **ephemeral**: when one is deleted or its node fails, it is replaced by a new Pod with a new IP, which is why you rarely create bare Pods in production and use controllers like Deployments instead."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-pod-lifecycle",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "table",

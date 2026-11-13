@@ -37,6 +37,11 @@
        "body": "A **ConfigMap** stores non-confidential configuration as key/value pairs in the cluster. Pods consume it as environment variables, command-line arguments or files in a volume, so the same image runs unchanged in dev, staging and production.\n\nA ConfigMap holds at most **1 MiB** and lives in a namespace; a Pod can only reference ConfigMaps from its own namespace. Never put passwords in one, use a Secret for that."
       },
       {
+       "type": "diagram",
+       "diagram": "k8s-config-injection",
+       "caption": "Click a box to see what it does."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl create configmap app-config \\\n  --from-literal=LOG_LEVEL=info \\\n  --from-file=nginx.conf\nkubectl get configmap app-config -o yaml\n\n# or declaratively\ncat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: app-settings\ndata:\n  LOG_LEVEL: info\n  FEATURE_X: \"true\"\n  app.properties: |\n    mode=production\n    retries=3\nEOF",
@@ -396,6 +401,11 @@
        "type": "text",
        "title": "Containers forget",
        "body": "A container's filesystem disappears when it restarts. Kubernetes **volumes** outlive containers: `emptyDir` lasts for the Pod's lifetime (scratch space, shared between containers), while **persistent** volumes outlive the Pod entirely.\n\nPersistent storage is split in two roles. A **PersistentVolume (PV)** is a piece of storage in the cluster, a cluster-scoped resource. A **PersistentVolumeClaim (PVC)** is a namespaced request for storage by a user. Kubernetes binds a claim to a matching PV, and Pods reference the claim, never the PV."
+      },
+      {
+       "type": "diagram",
+       "diagram": "k8s-storage-chain",
+       "caption": "Click a box to see what it does."
       },
       {
        "type": "text",
