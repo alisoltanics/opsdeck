@@ -200,8 +200,17 @@
     }
   }
 
-  async function load(module, { force = false } = {}) {
-    if (S.loading[module]) return;
+  // Concurrent callers share one request. Returning early here left a second
+  // render (the router can render twice on first entry) with no data at all.
+  const inflight = {};
+  function load(module, options = {}) {
+    if (inflight[module]) return inflight[module];
+    const run = loadOnce(module, options).finally(() => { delete inflight[module]; });
+    inflight[module] = run;
+    return run;
+  }
+
+  async function loadOnce(module, { force = false } = {}) {
     if (!force && S.data[module] && Date.now() - (S.at[module] || 0) < 20000) return;
     S.loading[module] = true;
     S.error[module] = '';

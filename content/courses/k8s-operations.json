@@ -1,0 +1,828 @@
+{
+ "id": "k8s-operations",
+ "order": 24,
+ "title": "Operating Kubernetes",
+ "subtitle": "Troubleshooting, access control, Helm, scaling and production readiness",
+ "level": "Advanced",
+ "duration": "3h",
+ "icon": "wrench",
+ "accent": "violet",
+ "description": "Run Kubernetes day to day: diagnose failing pods, grant least-privilege access, package with Helm, scale automatically, maintain nodes safely and harden workloads for production.",
+ "outcomes": [
+  "Diagnose Pending, CrashLoopBackOff, ImagePullBackOff and OOMKilled pods",
+  "Design RBAC with ServiceAccounts and verify it with kubectl auth can-i",
+  "Deploy, upgrade and roll back with Helm and autoscale with HPA",
+  "Drain nodes safely and apply a production hardening checklist"
+ ],
+ "modules": [
+  {
+   "id": "k8s-ops-troubleshooting-access",
+   "title": "Troubleshooting and access",
+   "summary": "Find failures fast and control who can do what.",
+   "lessons": [
+    {
+     "id": "k8s-troubleshoot-pods",
+     "title": "Troubleshooting pods",
+     "duration": "14 min",
+     "summary": "Read pod status, events and logs to diagnose Pending, CrashLoopBackOff, ImagePullBackOff and OOMKilled.",
+     "objectives": [
+      "Map a pod status to the stage where it failed",
+      "Use describe, events and logs --previous to find the cause",
+      "Recognise OOMKilled and exit code 137"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Start from the status, then ask the right question",
+       "body": "Most pod problems fall into a few buckets, and the `STATUS` column of `kubectl get pods` tells you which one. **Pending** means the scheduler has not placed the pod (or it is waiting for a volume). **ImagePullBackOff** / **ErrImagePull** means the kubelet cannot fetch the image. **CrashLoopBackOff** means the container starts, exits, and kubelet is backing off between restarts. **OOMKilled** means the kernel killed the container for exceeding its memory limit.\n\nThe workflow is always the same: `get` for the status, `describe` for events and state, `logs` for what the application said."
+      },
+      {
+       "type": "table",
+       "title": "Status to likely cause",
+       "head": [
+        "Status",
+        "Typical cause",
+        "First command"
+       ],
+       "rows": [
+        [
+         "Pending",
+         "No node fits the requests, taints, unbound PVC",
+         "kubectl describe pod"
+        ],
+        [
+         "ImagePullBackOff",
+         "Wrong tag, private registry without pull secret",
+         "kubectl describe pod"
+        ],
+        [
+         "CrashLoopBackOff",
+         "App crashes, bad command, failing config",
+         "kubectl logs --previous"
+        ],
+        [
+         "OOMKilled",
+         "Memory use above limits.memory",
+         "kubectl describe pod (Last State)"
+        ],
+        [
+         "Running but not Ready",
+         "Readiness probe failing",
+         "kubectl describe pod, kubectl logs"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get pods -o wide\nkubectl describe pod web-7d9c8b6f5-abcde\nkubectl logs web-7d9c8b6f5-abcde\nkubectl logs web-7d9c8b6f5-abcde --previous\nkubectl logs web-7d9c8b6f5-abcde -c sidecar\nkubectl get events --sort-by=.lastTimestamp\nkubectl get events --field-selector involvedObject.name=web-7d9c8b6f5-abcde",
+       "title": "The core diagnostic loop",
+       "output": null,
+       "note": "`--previous` shows the log of the last terminated container, which is the one that actually crashed. The current container in CrashLoopBackOff often has no output yet."
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Events expire",
+       "body": "Events are kept for about an hour by default. If you are investigating an old incident, `describe` may show nothing; check your logging and monitoring stack instead."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl describe pod api-5c7d | sed -n '/Last State/,/Ready/p'\n# Last State:  Terminated\n#   Reason:    OOMKilled\n#   Exit Code: 137\n\nkubectl get pod api-5c7d -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}'",
+       "title": "Confirming an OOM kill",
+       "output": null,
+       "note": "Exit code 137 is 128 + 9 (SIGKILL). Raise `resources.limits.memory` or fix the leak; do not just restart."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Do not debug by deleting",
+       "body": "Deleting a crashing pod replaces it with an identical one and destroys the `--previous` logs. Collect evidence first, then act."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Reproduce a CrashLoopBackOff",
+       "prompt": "Run a pod that exits immediately, then read why it keeps restarting.",
+       "command": "kubectl run crasher --image=busybox --restart=Always -- sh -c 'echo boom; exit 1'",
+       "expected": "The pod enters CrashLoopBackOff and `kubectl logs crasher --previous` prints boom.",
+       "hint": "Use --previous to see the terminated container's output.",
+       "solution": "kubectl logs crasher --previous"
+      },
+      {
+       "title": "Trigger ImagePullBackOff",
+       "prompt": "Create a deployment with a non-existent image tag and find the pull error in the events.",
+       "command": "kubectl create deployment bad --image=nginx:no-such-tag",
+       "expected": "describe pod shows Failed to pull image ... not found, and status ImagePullBackOff.",
+       "hint": "The error is in the Events section at the bottom of describe.",
+       "solution": "kubectl describe pod -l app=bad"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "You see CrashLoopBackOff. Which command shows why the last attempt died?",
+        "options": [
+         "kubectl get pods -w",
+         "kubectl logs POD --previous",
+         "kubectl top pod POD",
+         "kubectl delete pod POD"
+        ],
+        "answer": 1,
+        "explain": "--previous prints the log of the terminated container instance that crashed."
+       },
+       {
+        "question": "A pod stays Pending and describe says '0/3 nodes are available: insufficient memory'. What is wrong?",
+        "options": [
+         "The image tag is invalid",
+         "Requests exceed free node capacity",
+         "The readiness probe fails",
+         "RBAC denies the pod"
+        ],
+        "answer": 1,
+        "explain": "The scheduler cannot find a node with enough allocatable memory for the requests."
+       },
+       {
+        "question": "Which exit code usually accompanies OOMKilled?",
+        "options": [
+         "0",
+         "1",
+         "137",
+         "143"
+        ],
+        "answer": 2,
+        "explain": "137 = 128 + SIGKILL(9), sent by the kernel OOM killer."
+       },
+       {
+        "question": "Where does kubectl describe show scheduling and image pull failures?",
+        "options": [
+         "Spec section",
+         "Events section",
+         "Labels",
+         "Annotations"
+        ],
+        "answer": 1,
+        "explain": "Events record scheduler, kubelet and pull decisions in time order."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-rbac"
+     ],
+     "tags": [
+      "troubleshooting",
+      "pods",
+      "kubectl"
+     ],
+     "commands": [
+      "kubectl describe",
+      "kubectl logs",
+      "kubectl get events",
+      "kubectl get pods"
+     ],
+     "sources": [
+      {
+       "title": "Debug Pods",
+       "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+      },
+      {
+       "title": "Determine the Reason for Pod Failure",
+       "url": "https://kubernetes.io/docs/tasks/debug/debug-application/determine-reason-pod-failure/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-rbac",
+     "title": "RBAC and ServiceAccounts",
+     "duration": "16 min",
+     "summary": "Grant least-privilege access with ServiceAccounts, Roles, RoleBindings and ClusterRoles, and verify it with kubectl auth can-i.",
+     "objectives": [
+      "Explain subjects, verbs, resources and bindings",
+      "Create a namespaced Role and bind it to a ServiceAccount",
+      "Verify and debug permissions with kubectl auth can-i"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Who can do what, where",
+       "body": "**RBAC** is additive: there are no deny rules. A **Role** lists allowed `verbs` on `resources` within one namespace. A **ClusterRole** does the same cluster-wide, or for cluster-scoped objects such as nodes. A **RoleBinding** attaches a Role (or ClusterRole) to subjects inside a namespace; a **ClusterRoleBinding** grants it across the whole cluster.\n\nPods authenticate to the API server as a **ServiceAccount**. Every namespace has a `default` one; give each workload its own so permissions stay minimal."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: pod-reader\n  namespace: demo\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: pod-reader\n  namespace: demo\nrules:\n  - apiGroups: [\"\"]\n    resources: [\"pods\", \"pods/log\"]\n    verbs: [\"get\", \"list\", \"watch\"]\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: pod-reader\n  namespace: demo\nsubjects:\n  - kind: ServiceAccount\n    name: pod-reader\n    namespace: demo\nroleRef:\n  kind: Role\n  name: pod-reader\n  apiGroup: rbac.authorization.k8s.io",
+       "title": "Read-only access to pods in one namespace",
+       "output": null,
+       "note": "`roleRef` is immutable: to change it, delete and recreate the binding."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl auth can-i list pods -n demo --as=system:serviceaccount:demo:pod-reader\nkubectl auth can-i delete pods -n demo --as=system:serviceaccount:demo:pod-reader\nkubectl auth can-i --list -n demo --as=system:serviceaccount:demo:pod-reader\nkubectl get rolebindings,clusterrolebindings -A | grep pod-reader",
+       "title": "Verify with impersonation",
+       "output": null,
+       "note": "Impersonation with `--as` needs permission itself, so run it as an admin. The service account form is `system:serviceaccount:NAMESPACE:NAME`."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Avoid cluster-admin shortcuts",
+       "body": "Binding `cluster-admin` to a workload to make a Forbidden error go away gives that pod full control of the cluster. Read the error, which names the verb and resource, and grant exactly that."
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Imperative shortcuts",
+       "body": "`kubectl create role` and `kubectl create rolebinding --dry-run=client -o yaml` generate correct manifests quickly."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Create and test a Role",
+       "prompt": "Create a role allowing get/list on pods, bind it to a service account and check it.",
+       "command": "kubectl create serviceaccount viewer -n default",
+       "expected": "can-i get pods as the service account returns yes; can-i delete pods returns no.",
+       "hint": "Use kubectl create role and kubectl create rolebinding --serviceaccount=default:viewer.",
+       "solution": "kubectl create role pod-get --verb=get,list --resource=pods\nkubectl create rolebinding viewer-pods --role=pod-get --serviceaccount=default:viewer\nkubectl auth can-i get pods --as=system:serviceaccount:default:viewer"
+      },
+      {
+       "title": "List effective permissions",
+       "prompt": "Show everything the service account may do in the namespace.",
+       "command": "kubectl auth can-i --list --as=system:serviceaccount:default:viewer",
+       "expected": "A table of resources and verbs including pods get/list.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does a RoleBinding do?",
+        "options": [
+         "Defines new verbs",
+         "Grants a Role's permissions to subjects in a namespace",
+         "Creates a ServiceAccount",
+         "Encrypts secrets"
+        ],
+        "answer": 1,
+        "explain": "Roles define permissions; bindings attach them to users, groups or service accounts."
+       },
+       {
+        "question": "Can RBAC express an explicit deny?",
+        "options": [
+         "Yes, with deny verbs",
+         "Yes, with ClusterRoles",
+         "No, it is purely additive",
+         "Only for secrets"
+        ],
+        "answer": 2,
+        "explain": "RBAC only grants; absence of a rule means denied."
+       },
+       {
+        "question": "Which command checks if a service account can list pods in demo?",
+        "options": [
+         "kubectl get sa",
+         "kubectl auth can-i list pods -n demo --as=system:serviceaccount:demo:NAME",
+         "kubectl describe role",
+         "kubectl whoami"
+        ],
+        "answer": 1,
+        "explain": "auth can-i with --as impersonates the subject."
+       },
+       {
+        "question": "Which object is needed to grant access to nodes?",
+        "options": [
+         "Role",
+         "ClusterRole (with a binding)",
+         "ConfigMap",
+         "NetworkPolicy"
+        ],
+        "answer": 1,
+        "explain": "Nodes are cluster-scoped, so a ClusterRole is required."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-troubleshoot-pods",
+      "k8s-production-checklist"
+     ],
+     "tags": [
+      "rbac",
+      "security",
+      "serviceaccount"
+     ],
+     "commands": [
+      "kubectl auth can-i",
+      "kubectl create role",
+      "kubectl create rolebinding"
+     ],
+     "sources": [
+      {
+       "title": "Using RBAC Authorization",
+       "url": "https://kubernetes.io/docs/reference/access-authn-authz/rbac/"
+      },
+      {
+       "title": "Configure Service Accounts for Pods",
+       "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-ops-delivery-production",
+   "title": "Delivery, scaling and production",
+   "summary": "Helm, autoscaling, node maintenance and hardening.",
+   "lessons": [
+    {
+     "id": "k8s-helm-basics",
+     "title": "Helm basics",
+     "duration": "15 min",
+     "summary": "Install, configure, upgrade and roll back applications packaged as Helm charts.",
+     "objectives": [
+      "Distinguish charts, values and releases",
+      "Install and override values with --set and -f",
+      "Upgrade and roll back a release using revision history"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Charts, values, releases",
+       "body": "A **chart** is a package of templated Kubernetes manifests. **Values** (`values.yaml`) are the inputs to those templates. A **release** is one installed instance of a chart in a namespace; Helm stores each revision of it as a Secret, which is what makes rollback possible.\n\nPrefer `helm upgrade --install`, which is idempotent and works in CI whether or not the release exists."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "helm repo add bitnami https://charts.bitnami.com/bitnami\nhelm repo update\nhelm search repo nginx\nhelm show values bitnami/nginx > values-default.yaml\nhelm install web bitnami/nginx -n demo --create-namespace --set replicaCount=2\nhelm list -n demo\nhelm status web -n demo",
+       "title": "Find and install a chart",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "replicaCount: 3\nservice:\n  type: ClusterIP\nresources:\n  requests:\n    cpu: 100m\n    memory: 128Mi\n  limits:\n    memory: 256Mi",
+       "title": "my-values.yaml",
+       "output": null,
+       "note": "Keep overrides in a file under version control rather than long --set chains."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "helm template web bitnami/nginx -f my-values.yaml | less\nhelm upgrade --install web bitnami/nginx -n demo -f my-values.yaml --atomic --wait\nhelm history web -n demo\nhelm rollback web 1 -n demo\nhelm uninstall web -n demo",
+       "title": "Render, upgrade, roll back",
+       "output": null,
+       "note": "`--atomic` rolls back automatically if the upgrade does not become ready. `helm template` renders locally without touching the cluster."
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "Rollback creates a new revision",
+       "body": "`helm rollback web 1` does not rewind history: it creates revision N+1 with the contents of revision 1. Persistent data and externally changed state are not reverted."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Pin chart versions",
+       "body": "Without `--version`, an upgrade may pull a newer chart with breaking changes. Pin versions in CI."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Install with overrides",
+       "prompt": "Install a chart with a values override and confirm the replica count.",
+       "command": "helm install web bitnami/nginx --set replicaCount=2",
+       "expected": "helm list shows the release deployed and kubectl get deploy web-nginx shows 2/2.",
+       "hint": "If the repo is missing, run helm repo add first.",
+       "solution": "helm repo add bitnami https://charts.bitnami.com/bitnami\nhelm install web bitnami/nginx --set replicaCount=2\nkubectl get deploy"
+      },
+      {
+       "title": "Upgrade and roll back",
+       "prompt": "Change replicaCount, inspect history, then return to revision 1.",
+       "command": "helm upgrade web bitnami/nginx --set replicaCount=3",
+       "expected": "helm history shows revisions; after rollback the deployment returns to 2 replicas.",
+       "hint": null,
+       "solution": "helm history web\nhelm rollback web 1"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What is a Helm release?",
+        "options": [
+         "A chart in a repository",
+         "An installed instance of a chart",
+         "A values file",
+         "A Kubernetes namespace"
+        ],
+        "answer": 1,
+        "explain": "A release is a named, versioned installation of a chart."
+       },
+       {
+        "question": "Which command installs or upgrades idempotently?",
+        "options": [
+         "helm install",
+         "helm upgrade --install",
+         "helm template",
+         "helm pull"
+        ],
+        "answer": 1,
+        "explain": "upgrade --install creates the release if absent, otherwise upgrades."
+       },
+       {
+        "question": "What does helm template do?",
+        "options": [
+         "Installs the chart",
+         "Renders manifests locally without deploying",
+         "Deletes a release",
+         "Lists releases"
+        ],
+        "answer": 1,
+        "explain": "It outputs the rendered YAML, useful for review and diffing."
+       },
+       {
+        "question": "After helm rollback web 1, the history has...",
+        "options": [
+         "Only revision 1",
+         "A new highest revision",
+         "Nothing",
+         "Revision 0"
+        ],
+        "answer": 1,
+        "explain": "Rollback records a new revision based on the old one."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-autoscaling-maintenance"
+     ],
+     "tags": [
+      "helm",
+      "packaging",
+      "releases"
+     ],
+     "commands": [
+      "helm install",
+      "helm upgrade",
+      "helm rollback",
+      "helm history",
+      "helm template"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Using Helm",
+       "url": "https://helm.sh/docs/intro/using_helm/"
+      },
+      {
+       "title": "Managing Workloads",
+       "url": "https://kubernetes.io/docs/concepts/workloads/management/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-autoscaling-maintenance",
+     "title": "Autoscaling and node maintenance",
+     "duration": "16 min",
+     "summary": "Scale on demand with the HorizontalPodAutoscaler, then safely take nodes out of service with cordon, drain and taints.",
+     "objectives": [
+      "Configure an HPA and understand why requests are required",
+      "Cordon and drain a node safely",
+      "Use taints and tolerations to steer scheduling"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Horizontal Pod Autoscaling",
+       "body": "The **HorizontalPodAutoscaler** adjusts a Deployment's replica count based on observed metrics. CPU utilisation is calculated as a percentage of the pod's **CPU request**, so pods without `resources.requests.cpu` cannot be scaled on CPU. HPA needs **metrics-server** installed to supply resource metrics; `kubectl top` uses the same source."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: web\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: web\n  minReplicas: 2\n  maxReplicas: 10\n  metrics:\n    - type: Resource\n      resource:\n        name: cpu\n        target:\n          type: Utilization\n          averageUtilization: 70",
+       "title": "HPA targeting 70% CPU",
+       "output": null,
+       "note": "Imperative form: kubectl autoscale deployment web --min=2 --max=10 --cpu-percent=70"
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl top nodes\nkubectl top pods\nkubectl get hpa web -w\nkubectl describe hpa web",
+       "title": "Observe scaling",
+       "output": null,
+       "note": "If TARGETS shows <unknown>, metrics-server is missing or the pods have no CPU request."
+      },
+      {
+       "type": "text",
+       "title": "Node maintenance",
+       "body": "To patch or replace a node: **cordon** marks it unschedulable without touching running pods; **drain** cordons and then evicts pods so controllers recreate them elsewhere. Eviction respects PodDisruptionBudgets. **Taints** on a node repel pods unless they carry a matching **toleration**."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl cordon worker-2\nkubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data\n# ... patch, reboot ...\nkubectl uncordon worker-2\n\nkubectl taint nodes worker-3 dedicated=gpu:NoSchedule\nkubectl taint nodes worker-3 dedicated=gpu:NoSchedule-",
+       "title": "Cordon, drain, taint",
+       "output": null,
+       "note": "The trailing `-` removes a taint. Effects: NoSchedule, PreferNoSchedule, NoExecute (also evicts running pods)."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Drain needs replicas",
+       "body": "Draining a node that hosts the only replica of a workload causes downtime. Run at least two replicas and a PodDisruptionBudget first."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Autoscale a deployment",
+       "prompt": "Create an HPA for a deployment with min 2, max 5, 60% CPU.",
+       "command": "kubectl autoscale deployment web --min=2 --max=5 --cpu-percent=60",
+       "expected": "kubectl get hpa shows web with MINPODS 2 and MAXPODS 5.",
+       "hint": "The deployment must define a CPU request.",
+       "solution": null
+      },
+      {
+       "title": "Cordon a node",
+       "prompt": "Mark a node unschedulable and check its status.",
+       "command": "kubectl cordon NODE",
+       "expected": "kubectl get nodes shows Ready,SchedulingDisabled; kubectl uncordon NODE restores it.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Why must pods set CPU requests for CPU-based HPA?",
+        "options": [
+         "Requests limit memory",
+         "Utilisation is computed relative to the request",
+         "HPA needs limits only",
+         "It is optional"
+        ],
+        "answer": 1,
+        "explain": "Percentage utilisation is current usage divided by the requested CPU."
+       },
+       {
+        "question": "What does kubectl drain do beyond cordon?",
+        "options": [
+         "Deletes the node",
+         "Evicts pods from the node",
+         "Upgrades kubelet",
+         "Removes taints"
+        ],
+        "answer": 1,
+        "explain": "Drain cordons and then evicts the pods, honouring PDBs."
+       },
+       {
+        "question": "Why does drain often need --ignore-daemonsets?",
+        "options": [
+         "DaemonSet pods cannot be evicted usefully; they are recreated on the node",
+         "It speeds up eviction",
+         "Daemonsets are secrets",
+         "It is a typo"
+        ],
+        "answer": 0,
+        "explain": "DaemonSet pods are tied to every node, so drain refuses unless told to skip them."
+       },
+       {
+        "question": "Which taint effect also evicts already running pods?",
+        "options": [
+         "NoSchedule",
+         "PreferNoSchedule",
+         "NoExecute",
+         "Evict"
+        ],
+        "answer": 2,
+        "explain": "NoExecute evicts pods that do not tolerate the taint."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-basics",
+      "k8s-production-checklist"
+     ],
+     "tags": [
+      "hpa",
+      "autoscaling",
+      "drain",
+      "taints"
+     ],
+     "commands": [
+      "kubectl autoscale",
+      "kubectl top",
+      "kubectl cordon",
+      "kubectl drain",
+      "kubectl taint"
+     ],
+     "sources": [
+      {
+       "title": "Horizontal Pod Autoscaling",
+       "url": "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/"
+      },
+      {
+       "title": "Safely Drain a Node",
+       "url": "https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/"
+      },
+      {
+       "title": "Taints and Tolerations",
+       "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-production-checklist",
+     "title": "Production checklist",
+     "duration": "15 min",
+     "summary": "Harden and prepare a workload: security context, Pod Security, PodDisruptionBudgets, resource policy and observability.",
+     "objectives": [
+      "Apply a restrictive securityContext",
+      "Use Pod Security Admission labels and PDBs",
+      "Set resource policy and probes for observability"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What production-ready means",
+       "body": "A workload is production-ready when it fails safely, is limited in what it can do, and can be observed. The checklist: run as **non-root** with a read-only filesystem and dropped capabilities; enforce **Pod Security Standards** per namespace; set **requests and limits**; add **readiness/liveness probes**; protect availability with a **PodDisruptionBudget**; and ship logs and metrics."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 3\n  selector:\n    matchLabels: {app: api}\n  template:\n    metadata:\n      labels: {app: api}\n    spec:\n      securityContext:\n        runAsNonRoot: true\n        seccompProfile: {type: RuntimeDefault}\n      containers:\n        - name: api\n          image: registry.example.com/api:1.4.2\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities: {drop: [\"ALL\"]}\n          resources:\n            requests: {cpu: 200m, memory: 256Mi}\n            limits: {memory: 256Mi}\n          readinessProbe:\n            httpGet: {path: /healthz, port: 8080}\n          livenessProbe:\n            httpGet: {path: /livez, port: 8080}\n            initialDelaySeconds: 10",
+       "title": "Hardened Deployment",
+       "output": null,
+       "note": "Pin image tags to versions or digests; never use :latest in production."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: api\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels: {app: api}",
+       "title": "PodDisruptionBudget",
+       "output": null,
+       "note": "Voluntary disruptions such as drain will not evict below minAvailable."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl label namespace prod pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted\nkubectl get pdb\nkubectl top pods -n prod\nkubectl get events -n prod --sort-by=.lastTimestamp",
+       "title": "Pod Security Admission and checks",
+       "output": null,
+       "note": "Start with `warn` and `audit` modes to see what would break before using `enforce`."
+      },
+      {
+       "type": "table",
+       "title": "Checklist",
+       "head": [
+        "Area",
+        "Practice"
+       ],
+       "rows": [
+        [
+         "Security",
+         "Non-root, no privilege escalation, drop ALL capabilities, RuntimeDefault seccomp"
+        ],
+        [
+         "Access",
+         "Dedicated ServiceAccount, least-privilege RBAC"
+        ],
+        [
+         "Resources",
+         "Requests on everything; memory limit equal to request"
+        ],
+        [
+         "Availability",
+         "3+ replicas, PDB, probes, anti-affinity or topology spread"
+        ],
+        [
+         "Observability",
+         "Structured stdout logs, metrics scraping, alerts on restarts and OOMs"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "CPU limits are debated",
+       "body": "Memory limits are essential because memory is not compressible. CPU limits can cause throttling; many teams set CPU requests only."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Apply Pod Security labels",
+       "prompt": "Label a namespace to warn on restricted violations and then try to run a root pod.",
+       "command": "kubectl label namespace default pod-security.kubernetes.io/warn=restricted",
+       "expected": "kubectl run root-test --image=nginx prints a warning listing violated restricted policy fields.",
+       "hint": "The namespace label controls the mode: enforce, audit or warn.",
+       "solution": "kubectl run root-test --image=nginx"
+      },
+      {
+       "title": "Create a PDB",
+       "prompt": "Create a PDB for deployment web keeping at least 1 pod available.",
+       "command": "kubectl create pdb web --selector=app=web --min-available=1",
+       "expected": "kubectl get pdb shows ALLOWED DISRUPTIONS based on the replica count.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does a PodDisruptionBudget protect against?",
+        "options": [
+         "Node crashes",
+         "Voluntary disruptions such as drain",
+         "OOM kills",
+         "Image pull errors"
+        ],
+        "answer": 1,
+        "explain": "PDBs limit evictions caused by voluntary operations; they cannot stop hardware failure."
+       },
+       {
+        "question": "Which securityContext setting prevents a process from gaining more privileges than its parent?",
+        "options": [
+         "runAsUser: 0",
+         "allowPrivilegeEscalation: false",
+         "privileged: true",
+         "hostNetwork: true"
+        ],
+        "answer": 1,
+        "explain": "allowPrivilegeEscalation: false sets no_new_privs on the container."
+       },
+       {
+        "question": "Which Pod Security Standards level is the most restrictive?",
+        "options": [
+         "privileged",
+         "baseline",
+         "restricted",
+         "strict"
+        ],
+        "answer": 2,
+        "explain": "The levels are privileged, baseline and restricted."
+       },
+       {
+        "question": "Why start Pod Security rollout with warn mode?",
+        "options": [
+         "It is faster",
+         "To see violations without blocking pods",
+         "enforce is deprecated",
+         "It disables checks"
+        ],
+        "answer": 1,
+        "explain": "warn and audit report violations while still admitting pods."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-rbac",
+      "k8s-autoscaling-maintenance"
+     ],
+     "tags": [
+      "production",
+      "security",
+      "pdb"
+     ],
+     "commands": [
+      "kubectl label",
+      "kubectl create pdb",
+      "kubectl top"
+     ],
+     "sources": [
+      {
+       "title": "Pod Security Standards",
+       "url": "https://kubernetes.io/docs/concepts/security/pod-security-standards/"
+      },
+      {
+       "title": "Configure a Security Context",
+       "url": "https://kubernetes.io/docs/tasks/configure-pod-container/security-context/"
+      },
+      {
+       "title": "Specifying a Disruption Budget",
+       "url": "https://kubernetes.io/docs/tasks/run-application/configure-pdb/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-networking",
+  "k8s-config-storage"
+ ],
+ "track": "kubernetes"
+}

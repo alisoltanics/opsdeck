@@ -1,0 +1,54 @@
+{
+  "id": "kubernetes-engineer",
+  "title": "Kubernetes Engineer",
+  "subtitle": "From pods to running production clusters",
+  "level": "Intermediate",
+  "duration": "11h 30m",
+  "icon": "cloud",
+  "accent": "violet",
+  "description": "Learn the architecture, workloads, networking, configuration and storage, then operate clusters with RBAC, Helm and autoscaling.",
+  "prerequisites": [],
+  "outcomes": [
+    "Explain the Kubernetes architecture",
+    "Deploy and scale workloads",
+    "Expose services and secure traffic",
+    "Troubleshoot and operate a cluster"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "k8s-fundamentals",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "k8s-workloads",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "k8s-networking",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "k8s-config-storage",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "k8s-operations",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "k8s-fundamentals",
+      "k8s-workloads",
+      "k8s-networking",
+      "k8s-config-storage",
+      "k8s-operations"
+    ]
+  }
+}

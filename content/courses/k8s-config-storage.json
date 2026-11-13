@@ -1,0 +1,724 @@
+{
+ "id": "k8s-config-storage",
+ "order": 23,
+ "title": "Configuration and Storage",
+ "subtitle": "ConfigMaps, Secrets, persistent volumes and namespace governance",
+ "level": "Intermediate",
+ "duration": "2h",
+ "icon": "database",
+ "accent": "cyan",
+ "description": "Separate configuration from images, handle sensitive data safely, give workloads durable storage and keep shared namespaces under control.",
+ "outcomes": [
+  "Inject configuration with ConfigMaps and Secrets",
+  "Provision and claim persistent storage",
+  "Enforce quotas and defaults per namespace"
+ ],
+ "modules": [
+  {
+   "id": "k8s-config-secrets",
+   "title": "Configuration and secrets",
+   "summary": "ConfigMaps and Secrets.",
+   "lessons": [
+    {
+     "id": "k8s-configmaps",
+     "title": "ConfigMaps",
+     "duration": "30 min",
+     "summary": "Decouple configuration from images: create ConfigMaps, inject them as env vars or files, and freeze them with immutable.",
+     "objectives": [
+      "Create a ConfigMap from literals, files and YAML",
+      "Consume it as environment variables and as a volume",
+      "Know which consumption method picks up updates",
+      "Use immutable ConfigMaps safely"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Configuration outside the image",
+       "body": "A **ConfigMap** stores non-confidential configuration as key/value pairs in the cluster. Pods consume it as environment variables, command-line arguments or files in a volume, so the same image runs unchanged in dev, staging and production.\n\nA ConfigMap holds at most **1 MiB** and lives in a namespace; a Pod can only reference ConfigMaps from its own namespace. Never put passwords in one, use a Secret for that."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl create configmap app-config \\\n  --from-literal=LOG_LEVEL=info \\\n  --from-file=nginx.conf\nkubectl get configmap app-config -o yaml\n\n# or declaratively\ncat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: app-settings\ndata:\n  LOG_LEVEL: info\n  FEATURE_X: \"true\"\n  app.properties: |\n    mode=production\n    retries=3\nEOF",
+       "title": "Creating a ConfigMap",
+       "output": null,
+       "note": "Values under `data` are always strings, so quote booleans and numbers. Use `binaryData` for non-UTF-8 content."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: cfg-demo\nspec:\n  containers:\n  - name: app\n    image: busybox:1.36\n    command: [\"sh\", \"-c\", \"env | grep -E 'LOG|FEATURE'; cat /etc/app/app.properties; sleep 3600\"]\n    env:\n    - name: LOG_LEVEL\n      valueFrom:\n        configMapKeyRef:\n          name: app-settings\n          key: LOG_LEVEL\n    envFrom:\n    - configMapRef:\n        name: app-settings\n    volumeMounts:\n    - name: cfg\n      mountPath: /etc/app\n      readOnly: true\n  volumes:\n  - name: cfg\n    configMap:\n      name: app-settings\n      items:\n      - key: app.properties\n        path: app.properties",
+       "title": "Env vars and volume mounts",
+       "output": null,
+       "note": "`env`/`envFrom` inject variables; the `configMap` volume projects each key as a file."
+      },
+      {
+       "type": "table",
+       "title": "Which consumption method updates?",
+       "head": [
+        "Method",
+        "Updated after ConfigMap edit?",
+        "Notes"
+       ],
+       "rows": [
+        [
+         "Environment variable",
+         "No",
+         "Read once at container start; restart the Pod"
+        ],
+        [
+         "Volume mount",
+         "Yes, eventually (kubelet sync, typically up to a minute or so)",
+         "Files are swapped via symlinks; the app must re-read them"
+        ],
+        [
+         "Volume with `subPath`",
+         "No",
+         "subPath mounts never receive updates"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Immutable ConfigMaps",
+       "body": "Set `immutable: true` to forbid changes to `data`. This protects against accidental edits and reduces API server load because kubelets stop watching it. To change it you must delete and recreate it, so version the name (`app-config-v2`) and roll the Deployment to the new name."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Config changes do not restart Pods",
+       "body": "Editing a ConfigMap does not roll a Deployment. Use `kubectl rollout restart deployment/NAME`, or version the ConfigMap name in the Pod template so a change triggers a rollout."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Create and inspect",
+       "prompt": "Create a ConfigMap named web-config with literal GREETING=hello and view it as YAML.",
+       "command": "kubectl create configmap web-config --from-literal=GREETING=hello && kubectl get configmap web-config -o yaml",
+       "expected": "A ConfigMap manifest with data.GREETING: hello.",
+       "hint": "Use --from-literal KEY=VALUE.",
+       "solution": null
+      },
+      {
+       "title": "Read it from a Pod",
+       "prompt": "Run a throwaway Pod that receives GREETING through envFrom and prints it.",
+       "command": "kubectl run cfg-test --image=busybox:1.36 --restart=Never --overrides='{\"spec\":{\"containers\":[{\"name\":\"cfg-test\",\"image\":\"busybox:1.36\",\"command\":[\"sh\",\"-c\",\"echo $GREETING\"],\"envFrom\":[{\"configMapRef\":{\"name\":\"web-config\"}}]}]}}' && kubectl logs cfg-test",
+       "expected": "hello",
+       "hint": "--overrides lets you pass a partial Pod spec as JSON.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "How does a running container see an updated ConfigMap value?",
+        "options": [
+         "Env vars update instantly",
+         "Mounted files update eventually; env vars need a restart",
+         "Neither ever updates",
+         "Only with subPath"
+        ],
+        "answer": 1,
+        "explain": "Volume-projected files are refreshed by the kubelet; environment variables are fixed at container start."
+       },
+       {
+        "question": "What is the size limit of a ConfigMap?",
+        "options": [
+         "64 KiB",
+         "1 MiB",
+         "10 MiB",
+         "Unlimited"
+        ],
+        "answer": 1,
+        "explain": "ConfigMap data is stored in etcd and capped at 1 MiB."
+       },
+       {
+        "question": "What does immutable: true do?",
+        "options": [
+         "Encrypts the data",
+         "Prevents changes to data; must be recreated to change",
+         "Hides it from kubectl",
+         "Makes it cluster-wide"
+        ],
+        "answer": 1,
+        "explain": "Immutable ConfigMaps cannot be edited, which prevents accidents and lowers watch load."
+       },
+       {
+        "question": "A ConfigMap is mounted with subPath. After editing it, the file...",
+        "options": [
+         "Updates automatically",
+         "Stays stale until the Pod restarts",
+         "Is deleted",
+         "Becomes read-write"
+        ],
+        "answer": 1,
+        "explain": "Containers using subPath volume mounts do not receive ConfigMap updates."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [],
+     "tags": [
+      "configmap",
+      "config"
+     ],
+     "commands": [
+      "kubectl create configmap",
+      "kubectl get configmap",
+      "kubectl rollout restart"
+     ],
+     "sources": [
+      {
+       "title": "ConfigMaps",
+       "url": "https://kubernetes.io/docs/concepts/configuration/configmap/"
+      },
+      {
+       "title": "Configure a Pod to use a ConfigMap",
+       "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-secrets",
+     "title": "Secrets",
+     "duration": "30 min",
+     "summary": "Store sensitive data the Kubernetes way, understand why base64 is not encryption, and handle Secrets safely.",
+     "objectives": [
+      "Create Secrets of the common types",
+      "Consume Secrets as env vars and volumes",
+      "Explain why base64 offers no protection",
+      "Apply RBAC, encryption at rest and other safe-handling practices"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What a Secret is",
+       "body": "A **Secret** holds a small amount of sensitive data such as a password, token or key. It is structurally like a ConfigMap, but the API treats it more carefully: it can be restricted by RBAC, kept out of logs and `kubectl describe` output, and encrypted at rest. Secrets are limited to **1 MiB**.\n\nValues in `data` are **base64-encoded**. This is only an encoding so binary data fits in JSON/YAML. Anyone who can read the object can decode it in one command."
+      },
+      {
+       "type": "table",
+       "title": "Common Secret types",
+       "head": [
+        "Type",
+        "Purpose"
+       ],
+       "rows": [
+        [
+         "`Opaque`",
+         "Default; arbitrary user data"
+        ],
+        [
+         "`kubernetes.io/tls`",
+         "`tls.crt` and `tls.key` for Ingress and TLS"
+        ],
+        [
+         "`kubernetes.io/dockerconfigjson`",
+         "Registry credentials for `imagePullSecrets`"
+        ],
+        [
+         "`kubernetes.io/basic-auth`",
+         "`username` and `password` keys"
+        ],
+        [
+         "`kubernetes.io/service-account-token`",
+         "Legacy long-lived ServiceAccount token"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl create secret generic db-creds \\\n  --from-literal=username=app \\\n  --from-literal=password='S3cr3t!'\nkubectl create secret tls web-tls --cert=tls.crt --key=tls.key\nkubectl create secret docker-registry regcred \\\n  --docker-server=registry.example.com --docker-username=bot --docker-password=TOKEN\n\n# base64 is NOT encryption:\nkubectl get secret db-creds -o jsonpath='{.data.password}' | base64 -d",
+       "title": "Creating and consuming",
+       "output": null,
+       "note": "The last command prints the plaintext password for anyone with `get` on Secrets."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: secret-demo\nspec:\n  containers:\n  - name: app\n    image: busybox:1.36\n    command: [\"sleep\", \"3600\"]\n    env:\n    - name: DB_PASSWORD\n      valueFrom:\n        secretKeyRef:\n          name: db-creds\n          key: password\n    volumeMounts:\n    - name: creds\n      mountPath: /etc/creds\n      readOnly: true\n  volumes:\n  - name: creds\n    secret:\n      secretName: db-creds\n      defaultMode: 0400",
+       "title": "Pod using a Secret",
+       "output": null,
+       "note": "Mounted Secrets live in a tmpfs (memory), never written to node disk. Files update eventually; env vars do not."
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Base64 is not encryption",
+       "body": "By default Secrets are stored **unencrypted in etcd**. Anyone with etcd access, backup access, or RBAC `get`/`list` on Secrets (or permission to create a Pod in the namespace and mount it) can read them. Never commit Secret manifests to Git in plain form."
+      },
+      {
+       "type": "steps",
+       "title": "Safe handling checklist",
+       "items": [
+        {
+         "title": "Limit access with RBAC",
+         "body": "Grant `get`/`list`/`watch` on Secrets only where needed; `list` reveals every value in a namespace."
+        },
+        {
+         "title": "Enable encryption at rest",
+         "body": "Configure an `EncryptionConfiguration` on the API server (ideally with a KMS provider)."
+        },
+        {
+         "title": "Prefer volumes over env vars",
+         "body": "Env vars leak through crash dumps, `docker inspect`-style tooling and child processes."
+        },
+        {
+         "title": "Keep them out of Git",
+         "body": "Use Sealed Secrets, SOPS or an external secrets operator (Vault, cloud secret managers)."
+        },
+        {
+         "title": "Rotate regularly",
+         "body": "Version Secret names and roll Pods when credentials change."
+        }
+       ]
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Create and decode",
+       "prompt": "Create a Secret api-key with token=abc123, then decode the token.",
+       "command": "kubectl create secret generic api-key --from-literal=token=abc123 && kubectl get secret api-key -o jsonpath='{.data.token}' | base64 -d",
+       "expected": "abc123 (the stored value is YWJjMTIz).",
+       "hint": "Use jsonpath and pipe to base64 -d.",
+       "solution": null
+      },
+      {
+       "title": "Check your permissions",
+       "prompt": "Ask the API whether you can read Secrets in the current namespace.",
+       "command": "kubectl auth can-i get secrets",
+       "expected": "yes or no, depending on your RBAC role.",
+       "hint": "kubectl auth can-i VERB RESOURCE.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Base64 encoding of Secret values provides...",
+        "options": [
+         "Strong encryption",
+         "No security, only encoding",
+         "Hashing",
+         "Compression"
+        ],
+        "answer": 1,
+        "explain": "Base64 is trivially reversible; it exists to represent binary data in YAML/JSON."
+       },
+       {
+        "question": "Which type is used for registry pull credentials?",
+        "options": [
+         "Opaque",
+         "kubernetes.io/tls",
+         "kubernetes.io/dockerconfigjson",
+         "basic-auth"
+        ],
+        "answer": 2,
+        "explain": "dockerconfigjson Secrets are referenced from imagePullSecrets."
+       },
+       {
+        "question": "How do you protect Secrets stored in etcd?",
+        "options": [
+         "Name them carefully",
+         "Enable encryption at rest on the API server",
+         "Use ConfigMaps instead",
+         "Nothing is possible"
+        ],
+        "answer": 1,
+        "explain": "EncryptionConfiguration (optionally with a KMS provider) encrypts Secrets before storing them."
+       },
+       {
+        "question": "Why are mounted Secret volumes preferred over env vars?",
+        "options": [
+         "They are faster",
+         "Env vars can leak via dumps and child processes, and volumes can update",
+         "Volumes are unlimited in size",
+         "Env vars are not supported"
+        ],
+        "answer": 1,
+        "explain": "Volumes avoid process-environment leakage and receive updates."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-configmaps"
+     ],
+     "tags": [
+      "secret",
+      "security"
+     ],
+     "commands": [
+      "kubectl create secret",
+      "kubectl get secret",
+      "kubectl auth can-i"
+     ],
+     "sources": [
+      {
+       "title": "Secrets",
+       "url": "https://kubernetes.io/docs/concepts/configuration/secret/"
+      },
+      {
+       "title": "Good practices for Kubernetes Secrets",
+       "url": "https://kubernetes.io/docs/concepts/security/secrets-good-practices/"
+      },
+      {
+       "title": "Encrypting Secret data at rest",
+       "url": "https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-storage-governance",
+   "title": "Storage and governance",
+   "summary": "Persistent volumes, quotas and limit ranges.",
+   "lessons": [
+    {
+     "id": "k8s-persistent-storage",
+     "title": "Persistent storage",
+     "duration": "35 min",
+     "summary": "Volumes, PersistentVolumes, claims, StorageClasses, access modes, reclaim policy and dynamic provisioning.",
+     "objectives": [
+      "Distinguish ephemeral volumes from persistent ones",
+      "Explain the PV, PVC and StorageClass relationship",
+      "Choose access modes and reclaim policies",
+      "Use dynamic provisioning and a PVC in a Pod"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Containers forget",
+       "body": "A container's filesystem disappears when it restarts. Kubernetes **volumes** outlive containers: `emptyDir` lasts for the Pod's lifetime (scratch space, shared between containers), while **persistent** volumes outlive the Pod entirely.\n\nPersistent storage is split in two roles. A **PersistentVolume (PV)** is a piece of storage in the cluster, a cluster-scoped resource. A **PersistentVolumeClaim (PVC)** is a namespaced request for storage by a user. Kubernetes binds a claim to a matching PV, and Pods reference the claim, never the PV."
+      },
+      {
+       "type": "text",
+       "title": "StorageClass and dynamic provisioning",
+       "body": "A **StorageClass** describes a kind of storage (SSD, replicated, ...) and the provisioner that creates it. When a PVC names a class, the provisioner creates a PV automatically: **dynamic provisioning**. A class marked default is used when the PVC omits `storageClassName`.\n\n`volumeBindingMode: WaitForFirstConsumer` delays provisioning until a Pod is scheduled, so the volume is created in the right zone."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data-pvc\nspec:\n  accessModes: [\"ReadWriteOnce\"]\n  storageClassName: standard\n  resources:\n    requests:\n      storage: 5Gi\n---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: db\nspec:\n  containers:\n  - name: db\n    image: postgres:16\n    env:\n    - name: POSTGRES_PASSWORD\n      value: example\n    - name: PGDATA\n      value: /var/lib/postgresql/data/pgdata\n    volumeMounts:\n    - name: data\n      mountPath: /var/lib/postgresql/data\n  volumes:\n  - name: data\n    persistentVolumeClaim:\n      claimName: data-pvc",
+       "title": "PVC and a Pod that uses it",
+       "output": null,
+       "note": "The PVC stays `Pending` until bound. With `WaitForFirstConsumer` that is normal until the Pod is scheduled."
+      },
+      {
+       "type": "table",
+       "title": "Access modes",
+       "head": [
+        "Mode",
+        "Meaning"
+       ],
+       "rows": [
+        [
+         "`ReadWriteOnce` (RWO)",
+         "Read-write by a single node"
+        ],
+        [
+         "`ReadOnlyMany` (ROX)",
+         "Read-only by many nodes"
+        ],
+        [
+         "`ReadWriteMany` (RWX)",
+         "Read-write by many nodes (NFS, CephFS, ...)"
+        ],
+        [
+         "`ReadWriteOncePod` (RWOP)",
+         "Read-write by exactly one Pod"
+        ]
+       ]
+      },
+      {
+       "type": "table",
+       "title": "Reclaim policy: what happens when the PVC is deleted",
+       "head": [
+        "Policy",
+        "Result"
+       ],
+       "rows": [
+        [
+         "`Delete`",
+         "PV and the backing storage are removed (default for dynamic provisioning)"
+        ],
+        [
+         "`Retain`",
+         "PV is kept with its data, status `Released`; an admin must reclaim it manually"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Deleting a PVC can delete data",
+       "body": "With a `Delete` reclaim policy the underlying disk is destroyed with the claim. For important data use `Retain`: `kubectl patch pv NAME -p '{\"spec\":{\"persistentVolumeReclaimPolicy\":\"Retain\"}}'`. For databases prefer a StatefulSet with `volumeClaimTemplates` so each replica gets its own PVC."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get storageclass\nkubectl get pvc,pv\nkubectl describe pvc data-pvc\nkubectl get events --field-selector involvedObject.name=data-pvc",
+       "title": "Inspecting storage",
+       "output": null,
+       "note": "Look for the bound volume name and any provisioning errors in the events."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Find the default class",
+       "prompt": "List StorageClasses and identify the default one.",
+       "command": "kubectl get storageclass",
+       "expected": "The default class shows (default) after its name.",
+       "hint": "Check the NAME column.",
+       "solution": null
+      },
+      {
+       "title": "Claim storage",
+       "prompt": "Create a 1Gi RWO PVC named scratch and check its status.",
+       "command": "kubectl apply -f - <<'EOF'\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: scratch\nspec:\n  accessModes: [\"ReadWriteOnce\"]\n  resources:\n    requests:\n      storage: 1Gi\nEOF\nkubectl get pvc scratch",
+       "expected": "Status Bound, or Pending with WaitForFirstConsumer until a Pod uses it.",
+       "hint": "Omitting storageClassName uses the default class.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Who references a PersistentVolume from a Pod spec?",
+        "options": [
+         "The Pod directly by PV name",
+         "The Pod through a PersistentVolumeClaim",
+         "The Node",
+         "The StorageClass"
+        ],
+        "answer": 1,
+        "explain": "Pods reference claims, and the claim binds to a PV."
+       },
+       {
+        "question": "What does dynamic provisioning require?",
+        "options": [
+         "A manually created PV",
+         "A StorageClass with a provisioner",
+         "ReadWriteMany",
+         "A StatefulSet"
+        ],
+        "answer": 1,
+        "explain": "A PVC naming a StorageClass triggers its provisioner to create a PV."
+       },
+       {
+        "question": "Which reclaim policy preserves data after the PVC is deleted?",
+        "options": [
+         "Delete",
+         "Recycle",
+         "Retain",
+         "Release"
+        ],
+        "answer": 2,
+        "explain": "Retain keeps the PV and data; the PV becomes Released and needs admin cleanup."
+       },
+       {
+        "question": "ReadWriteOnce means...",
+        "options": [
+         "One Pod only",
+         "Read-write by a single node",
+         "Read-only",
+         "Write once ever"
+        ],
+        "answer": 1,
+        "explain": "RWO allows mounting read-write by one node; ReadWriteOncePod restricts to one Pod."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-configmaps"
+     ],
+     "tags": [
+      "storage",
+      "pv",
+      "pvc"
+     ],
+     "commands": [
+      "kubectl get pvc",
+      "kubectl get pv",
+      "kubectl get storageclass",
+      "kubectl describe pvc"
+     ],
+     "sources": [
+      {
+       "title": "Persistent Volumes",
+       "url": "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"
+      },
+      {
+       "title": "Storage Classes",
+       "url": "https://kubernetes.io/docs/concepts/storage/storage-classes/"
+      },
+      {
+       "title": "Volumes",
+       "url": "https://kubernetes.io/docs/concepts/storage/volumes/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-quotas-limitranges",
+     "title": "ResourceQuotas and LimitRanges",
+     "duration": "25 min",
+     "summary": "Govern a shared cluster per namespace: cap aggregate usage with quotas and set per-container defaults with limit ranges.",
+     "objectives": [
+      "Explain quota versus limit range",
+      "Write a ResourceQuota for compute and object counts",
+      "Set default requests/limits and bounds with a LimitRange",
+      "Diagnose Pods rejected by quota"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Two tools, two scopes",
+       "body": "In a shared cluster one team can starve the others. Kubernetes governs this per namespace with two objects:\n\n- A **ResourceQuota** caps the **aggregate** consumption of a namespace: total CPU/memory requests and limits, storage, and object counts.\n- A **LimitRange** constrains **individual** objects: default requests/limits for containers that omit them, plus min and max values per container, Pod or PVC.\n\nThey work together: once a quota covers `requests.cpu` or `limits.memory`, every new Pod must specify them, and a LimitRange default supplies them automatically."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: team-a-quota\n  namespace: team-a\nspec:\n  hard:\n    requests.cpu: \"4\"\n    requests.memory: 8Gi\n    limits.cpu: \"8\"\n    limits.memory: 16Gi\n    pods: \"20\"\n    persistentvolumeclaims: \"5\"\n    requests.storage: 100Gi\n    services.loadbalancers: \"1\"",
+       "title": "ResourceQuota",
+       "output": null,
+       "note": "Quota is enforced at admission time. Existing Pods are never evicted when a quota is lowered."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: LimitRange\nmetadata:\n  name: container-defaults\n  namespace: team-a\nspec:\n  limits:\n  - type: Container\n    defaultRequest:\n      cpu: 100m\n      memory: 128Mi\n    default:\n      cpu: 500m\n      memory: 512Mi\n    min:\n      cpu: 50m\n      memory: 64Mi\n    max:\n      cpu: \"2\"\n      memory: 2Gi",
+       "title": "LimitRange",
+       "output": null,
+       "note": "`defaultRequest` and `default` fill in missing requests and limits; `min`/`max` reject Pods outside the bounds."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl create namespace team-a\nkubectl apply -f quota.yaml -f limitrange.yaml\nkubectl describe resourcequota team-a-quota -n team-a\nkubectl describe limitrange container-defaults -n team-a\nkubectl get events -n team-a --field-selector reason=FailedCreate",
+       "title": "Checking usage",
+       "output": null,
+       "note": "`describe resourcequota` shows Used versus Hard for each resource."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Rejected Pods look like missing Pods",
+       "body": "When a quota is exceeded, the API rejects the Pod (a bare Pod errors on create). With a Deployment the Pod is never created and the ReplicaSet records a `FailedCreate` event such as `exceeded quota`. Check `kubectl describe rs` and the namespace events."
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Always pair them",
+       "body": "Apply a LimitRange alongside every compute quota. Without defaults, Pods that omit requests/limits are refused with `must specify limits.cpu`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Inspect quota usage",
+       "prompt": "Show Used and Hard values for all quotas in a namespace.",
+       "command": "kubectl describe resourcequota -n team-a",
+       "expected": "A table of resources with Used and Hard columns.",
+       "hint": "Use describe, not get.",
+       "solution": null
+      },
+      {
+       "title": "Observe defaults",
+       "prompt": "Create a Pod in team-a without resources and print its container resources.",
+       "command": "kubectl run probe -n team-a --image=nginx:alpine && kubectl get pod probe -n team-a -o jsonpath='{.spec.containers[0].resources}'",
+       "expected": "The defaultRequest and default values from the LimitRange.",
+       "hint": "The LimitRange admission plugin injects them at creation.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which object sets default container limits?",
+        "options": [
+         "ResourceQuota",
+         "LimitRange",
+         "StorageClass",
+         "PodDisruptionBudget"
+        ],
+        "answer": 1,
+        "explain": "LimitRange supplies defaults and min/max per object."
+       },
+       {
+        "question": "A ResourceQuota constrains...",
+        "options": [
+         "A single container",
+         "The aggregate usage of a namespace",
+         "A node",
+         "A cluster role"
+        ],
+        "answer": 1,
+        "explain": "Quotas cap total consumption and object counts in a namespace."
+       },
+       {
+        "question": "A quota on limits.memory exists and a Pod omits memory limits with no LimitRange. What happens?",
+        "options": [
+         "It runs unlimited",
+         "The Pod is rejected",
+         "It gets 1Gi",
+         "It is evicted later"
+        ],
+        "answer": 1,
+        "explain": "Pods must specify the quota-tracked resources, or a LimitRange must default them."
+       },
+       {
+        "question": "You lower a quota below current usage. What happens to running Pods?",
+        "options": [
+         "They are evicted",
+         "They keep running; new ones are rejected",
+         "They are paused",
+         "The quota is refused"
+        ],
+        "answer": 1,
+        "explain": "Quota is enforced only at admission; existing objects are untouched."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-persistent-storage"
+     ],
+     "tags": [
+      "quota",
+      "limitrange",
+      "governance"
+     ],
+     "commands": [
+      "kubectl describe resourcequota",
+      "kubectl describe limitrange",
+      "kubectl get events"
+     ],
+     "sources": [
+      {
+       "title": "Resource Quotas",
+       "url": "https://kubernetes.io/docs/concepts/policy/resource-quotas/"
+      },
+      {
+       "title": "Limit Ranges",
+       "url": "https://kubernetes.io/docs/concepts/policy/limit-range/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-workloads"
+ ],
+ "track": "kubernetes"
+}

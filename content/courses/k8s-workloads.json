@@ -1,0 +1,774 @@
+{
+ "id": "k8s-workloads",
+ "order": 21,
+ "title": "Kubernetes Workloads",
+ "subtitle": "Deployments, StatefulSets, DaemonSets, Jobs and healthy Pods",
+ "level": "Beginner",
+ "duration": "2h 30m",
+ "icon": "layers",
+ "accent": "blue",
+ "description": "Pick the right controller for each workload, roll out changes safely, run batch jobs and tell Kubernetes how healthy and how large your containers are.",
+ "outcomes": [
+  "Choose between Deployment, StatefulSet, DaemonSet and Job",
+  "Roll out and roll back releases with controlled strategy",
+  "Configure probes and resources to keep Pods stable"
+ ],
+ "modules": [
+  {
+   "id": "k8s-controllers",
+   "title": "Long-running workloads",
+   "summary": "Deployments, StatefulSets and DaemonSets.",
+   "lessons": [
+    {
+     "id": "k8s-deployments",
+     "title": "Deployments and ReplicaSets",
+     "duration": "30 min",
+     "summary": "Run stateless apps declaratively: replicas, rolling updates, rollback and the knobs that control rollout speed.",
+     "objectives": [
+      "Explain how a Deployment manages ReplicaSets and Pods",
+      "Scale and update a Deployment and watch the rollout",
+      "Tune maxSurge and maxUnavailable and roll back a bad release"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Deployment, ReplicaSet, Pod",
+       "body": "A **Deployment** declares the desired state of a stateless app. It creates a **ReplicaSet**, which keeps the requested number of identical Pods running. You almost never create ReplicaSets directly: when the Pod template changes, the Deployment creates a *new* ReplicaSet and gradually shifts Pods from the old one to the new one.\n\nOld ReplicaSets are kept (scaled to 0) so you can roll back. `revisionHistoryLimit` (default 10) controls how many are retained."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1\n      maxUnavailable: 0\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx:1.27\n          ports:\n            - containerPort: 80",
+       "title": "deployment.yaml",
+       "output": null,
+       "note": "`spec.selector` must match the template labels and is immutable after creation."
+      },
+      {
+       "type": "table",
+       "title": "Rolling update parameters",
+       "head": [
+        "Field",
+        "Meaning",
+        "Default"
+       ],
+       "rows": [
+        [
+         "`maxSurge`",
+         "Extra Pods allowed above `replicas` during the update (number or %)",
+         "25%"
+        ],
+        [
+         "`maxUnavailable`",
+         "Pods that may be unavailable during the update",
+         "25%"
+        ],
+        [
+         "`Recreate` strategy",
+         "Kill all old Pods, then start new ones (downtime)",
+         "n/a"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "Why maxUnavailable: 0 matters",
+       "body": "With `maxSurge: 1` and `maxUnavailable: 0`, Kubernetes starts one new Pod, waits for it to become **Ready**, and only then terminates an old one. Capacity never drops, but the rollout is only as safe as your readiness probe: without one, a Pod counts as ready the moment its container starts."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl apply -f deployment.yaml\nkubectl scale deployment/web --replicas=5\nkubectl set image deployment/web web=nginx:1.28\nkubectl rollout status deployment/web\nkubectl rollout history deployment/web\nkubectl rollout undo deployment/web\nkubectl rollout undo deployment/web --to-revision=1\nkubectl rollout pause deployment/web",
+       "title": null,
+       "output": null,
+       "note": "`rollout status` exits non-zero if the rollout fails to progress within `progressDeadlineSeconds` (default 600s), which makes it useful in CI."
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Record why you changed things",
+       "body": "Use `kubectl annotate deployment/web kubernetes.io/change-cause=\"upgrade to nginx 1.28\"` so `rollout history` shows a meaningful CHANGE-CAUSE column."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Scale and observe",
+       "prompt": "Create a Deployment with 2 replicas of nginx, then scale to 4 and list the ReplicaSet.",
+       "command": "kubectl create deployment web --image=nginx:1.27 --replicas=2",
+       "expected": "After `kubectl scale deployment/web --replicas=4`, `kubectl get rs` shows DESIRED 4 and READY 4.",
+       "hint": "Use `kubectl get rs -l app=web`.",
+       "solution": "kubectl scale deployment/web --replicas=4 && kubectl get rs -l app=web"
+      },
+      {
+       "title": "Break and roll back",
+       "prompt": "Deploy a non-existent image tag, watch it stall, then roll back.",
+       "command": "kubectl set image deployment/web nginx=nginx:does-not-exist",
+       "expected": "New Pods show ErrImagePull/ImagePullBackOff while old Pods keep serving; `kubectl rollout undo deployment/web` restores a healthy state.",
+       "hint": "The container name is `nginx` when created with `kubectl create deployment`.",
+       "solution": "kubectl rollout status deployment/web --timeout=30s; kubectl rollout undo deployment/web"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What creates the Pods in a Deployment?",
+        "options": [
+         "The Deployment directly",
+         "A ReplicaSet owned by the Deployment",
+         "The kubelet",
+         "The Service"
+        ],
+        "answer": 1,
+        "explain": "The Deployment controller manages ReplicaSets, and each ReplicaSet creates its Pods."
+       },
+       {
+        "question": "Which settings guarantee no loss of serving capacity during a rolling update?",
+        "options": [
+         "maxSurge: 0, maxUnavailable: 1",
+         "maxSurge: 1, maxUnavailable: 0",
+         "strategy: Recreate",
+         "replicas: 1"
+        ],
+        "answer": 1,
+        "explain": "Surging first and allowing zero unavailable means new Pods become Ready before old ones are removed."
+       },
+       {
+        "question": "What does `kubectl rollout undo deployment/web` do?",
+        "options": [
+         "Deletes the Deployment",
+         "Scales to zero",
+         "Reverts the Pod template to the previous revision",
+         "Restarts all Pods in place"
+        ],
+        "answer": 2,
+        "explain": "It restores the previous ReplicaSet's template, creating a new rollout."
+       },
+       {
+        "question": "Why can a rollout with no readiness probe be dangerous?",
+        "options": [
+         "It is slower",
+         "Pods are considered ready as soon as the container starts",
+         "It disables rollback",
+         "It ignores maxSurge"
+        ],
+        "answer": 1,
+        "explain": "Without readiness, traffic and the rollout advance to Pods that may not be able to serve yet."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-probes-resources",
+      "k8s-statefulsets"
+     ],
+     "tags": [
+      "deployment",
+      "replicaset",
+      "rollout"
+     ],
+     "commands": [
+      "kubectl scale",
+      "kubectl set image",
+      "kubectl rollout",
+      "kubectl rollout undo"
+     ],
+     "sources": [
+      {
+       "title": "Deployments",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+      },
+      {
+       "title": "ReplicaSet",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-statefulsets",
+     "title": "StatefulSets",
+     "duration": "30 min",
+     "summary": "Run stateful apps with stable network identity and per-Pod persistent storage.",
+     "objectives": [
+      "Explain what a StatefulSet guarantees that a Deployment does not",
+      "Define a headless Service and volumeClaimTemplates",
+      "Predict ordering and storage behaviour on scale and delete"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Stable identity",
+       "body": "A **StatefulSet** gives each Pod a sticky identity: a predictable name (`db-0`, `db-1`, ...), a stable DNS name, and its own PersistentVolumeClaim. If `db-1` is rescheduled it comes back as `db-1` and reattaches to the same volume.\n\nBy default Pods are created in order (0, 1, 2) and terminated in reverse order. Use `podManagementPolicy: Parallel` if your app does not need ordering."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: db\nspec:\n  clusterIP: None\n  selector:\n    app: db\n  ports:\n    - port: 5432\n---\napiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: db\nspec:\n  serviceName: db\n  replicas: 3\n  selector:\n    matchLabels:\n      app: db\n  template:\n    metadata:\n      labels:\n        app: db\n    spec:\n      containers:\n        - name: postgres\n          image: postgres:16\n          env:\n            - name: POSTGRES_PASSWORD\n              value: example\n            - name: PGDATA\n              value: /var/lib/postgresql/data/pgdata\n          volumeMounts:\n            - name: data\n              mountPath: /var/lib/postgresql/data\n  volumeClaimTemplates:\n    - metadata:\n        name: data\n      spec:\n        accessModes: [\"ReadWriteOnce\"]\n        resources:\n          requests:\n            storage: 5Gi",
+       "title": "statefulset.yaml",
+       "output": null,
+       "note": "`clusterIP: None` makes the Service headless: DNS returns individual Pod IPs instead of one virtual IP. Use a Secret for the password in real clusters."
+      },
+      {
+       "type": "text",
+       "title": "DNS names",
+       "body": "A headless Service gives each Pod a DNS record of the form `<pod>.<service>.<namespace>.svc.cluster.local`, for example `db-0.db.default.svc.cluster.local`. Clients such as replicas of a database use these names to find a specific primary or peer."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "PVCs are not deleted automatically",
+       "body": "Deleting or scaling down a StatefulSet does **not** delete the PVCs created from `volumeClaimTemplates`, protecting your data. Delete them explicitly, or set `persistentVolumeClaimRetentionPolicy` to opt in to automatic cleanup."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get sts,pods -l app=db\nkubectl get pvc\nkubectl scale sts/db --replicas=2\nkubectl exec db-0 -- hostname\nkubectl delete pod db-1\nkubectl get pod db-1 -w",
+       "title": null,
+       "output": null,
+       "note": "After deleting `db-1` it is recreated with the same name and the same PVC."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Inspect identity",
+       "prompt": "List the Pods and PVCs of a StatefulSet named db.",
+       "command": "kubectl get pods,pvc -l app=db",
+       "expected": "Pods db-0..db-2 and PVCs data-db-0..data-db-2, one per Pod.",
+       "hint": "PVC names are `<template>-<pod>`.",
+       "solution": null
+      },
+      {
+       "title": "Prove stickiness",
+       "prompt": "Delete db-1 and confirm it returns with the same name and volume.",
+       "command": "kubectl delete pod db-1",
+       "expected": "A new Pod named db-1 starts and mounts PVC data-db-1 (check `kubectl describe pod db-1`).",
+       "hint": null,
+       "solution": "kubectl get pod db-1 -o jsonpath='{.spec.volumes[*].persistentVolumeClaim.claimName}'"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which resource is required for stable per-Pod DNS names?",
+        "options": [
+         "Ingress",
+         "A headless Service",
+         "ConfigMap",
+         "NetworkPolicy"
+        ],
+        "answer": 1,
+        "explain": "serviceName must reference a headless Service."
+       },
+       {
+        "question": "What happens to PVCs when you scale a StatefulSet down?",
+        "options": [
+         "They are deleted",
+         "They are retained by default",
+         "They are resized",
+         "They become ReadOnlyMany"
+        ],
+        "answer": 1,
+        "explain": "Retention protects data; cleanup is manual unless a retention policy is set."
+       },
+       {
+        "question": "In what order are Pods terminated with OrderedReady?",
+        "options": [
+         "Random",
+         "Ascending",
+         "Reverse ordinal order",
+         "All at once"
+        ],
+        "answer": 2,
+        "explain": "Highest ordinal first, so db-2 stops before db-1."
+       },
+       {
+        "question": "Why use volumeClaimTemplates instead of one shared PVC?",
+        "options": [
+         "Each Pod gets its own volume",
+         "It is faster",
+         "It enables autoscaling",
+         "It encrypts data"
+        ],
+        "answer": 0,
+        "explain": "The template creates a separate PVC per replica."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-deployments",
+      "k8s-daemonsets"
+     ],
+     "tags": [
+      "statefulset",
+      "storage",
+      "headless-service"
+     ],
+     "commands": [
+      "kubectl get sts",
+      "kubectl scale",
+      "kubectl get pvc"
+     ],
+     "sources": [
+      {
+       "title": "StatefulSets",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/"
+      },
+      {
+       "title": "StatefulSet basics tutorial",
+       "url": "https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-daemonsets",
+     "title": "DaemonSets",
+     "duration": "20 min",
+     "summary": "Run one Pod per node for agents such as log shippers, monitors and network plugins.",
+     "objectives": [
+      "Describe when a DaemonSet is the right controller",
+      "Restrict a DaemonSet with nodeSelector and tolerations",
+      "Update a DaemonSet safely"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "One Pod per node",
+       "body": "A **DaemonSet** ensures a copy of a Pod runs on every (or selected) node. When a node joins, the Pod is added; when it leaves, the Pod is garbage collected. Typical uses are log collectors (Fluent Bit), node metrics exporters, CNI plugins and storage drivers."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-exporter\nspec:\n  selector:\n    matchLabels:\n      app: node-exporter\n  updateStrategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxUnavailable: 1\n  template:\n    metadata:\n      labels:\n        app: node-exporter\n    spec:\n      tolerations:\n        - key: node-role.kubernetes.io/control-plane\n          operator: Exists\n          effect: NoSchedule\n      containers:\n        - name: exporter\n          image: quay.io/prometheus/node-exporter:v1.8.2\n          ports:\n            - containerPort: 9100\n              hostPort: 9100",
+       "title": null,
+       "output": null,
+       "note": "The toleration lets the Pod run on control-plane nodes, which are tainted by default."
+      },
+      {
+       "type": "text",
+       "title": "Targeting nodes",
+       "body": "Add `nodeSelector` or `nodeAffinity` in the Pod template to run only on matching nodes, for example GPU nodes. Taints repel Pods; a DaemonSet must tolerate a node's taints to be scheduled there."
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "Updates",
+       "body": "`RollingUpdate` replaces Pods node by node, `maxUnavailable` at a time. `OnDelete` only recreates a Pod after you delete it manually, giving full control for sensitive agents."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get ds -n kube-system\nkubectl get pods -o wide -l app=node-exporter\nkubectl rollout status ds/node-exporter\nkubectl set image ds/node-exporter exporter=quay.io/prometheus/node-exporter:v1.8.2",
+       "title": null,
+       "output": null,
+       "note": null
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Count the daemons",
+       "prompt": "Check that DESIRED equals the node count for kube-proxy or your own DaemonSet.",
+       "command": "kubectl get ds -n kube-system",
+       "expected": "DESIRED, CURRENT and READY match the number of eligible nodes.",
+       "hint": "Compare with `kubectl get nodes`.",
+       "solution": null
+      },
+      {
+       "title": "Spread check",
+       "prompt": "Show which node each DaemonSet Pod runs on.",
+       "command": "kubectl get pods -o wide -l app=node-exporter",
+       "expected": "Exactly one Pod per node in the NODE column.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "A DaemonSet is best for…",
+        "options": [
+         "Stateless web apps",
+         "One agent per node",
+         "Batch tasks",
+         "Databases with stable identity"
+        ],
+        "answer": 1,
+        "explain": "It guarantees node-level coverage."
+       },
+       {
+        "question": "Why might a DaemonSet Pod not appear on control-plane nodes?",
+        "options": [
+         "DaemonSets ignore them",
+         "A taint without a matching toleration",
+         "Insufficient replicas",
+         "Missing Service"
+        ],
+        "answer": 1,
+        "explain": "Control-plane nodes carry a NoSchedule taint."
+       },
+       {
+        "question": "Which update strategy needs manual Pod deletion?",
+        "options": [
+         "RollingUpdate",
+         "Recreate",
+         "OnDelete",
+         "Blue/green"
+        ],
+        "answer": 2,
+        "explain": "OnDelete waits for you to delete Pods before replacing them."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-statefulsets",
+      "k8s-jobs-cronjobs"
+     ],
+     "tags": [
+      "daemonset",
+      "node"
+     ],
+     "commands": [
+      "kubectl get ds",
+      "kubectl rollout"
+     ],
+     "sources": [
+      {
+       "title": "DaemonSet",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-batch-health",
+   "title": "Batch work and Pod health",
+   "summary": "Jobs, CronJobs, probes and resources.",
+   "lessons": [
+    {
+     "id": "k8s-jobs-cronjobs",
+     "title": "Jobs and CronJobs",
+     "duration": "30 min",
+     "summary": "Run work to completion once or on a schedule, with retries, parallelism and overlap control.",
+     "objectives": [
+      "Configure completions, parallelism and backoffLimit on a Job",
+      "Write a CronJob schedule and choose a concurrencyPolicy",
+      "Clean up finished Jobs automatically"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Jobs run to completion",
+       "body": "A **Job** creates Pods and retries them until a number of them succeed. Unlike a Deployment, a successful Pod is not restarted. Pods in a Job must use `restartPolicy: OnFailure` or `Never`.\n\n`completions` is how many successful Pods are needed, `parallelism` how many run at once, and `backoffLimit` (default 6) how many failures are tolerated before the Job is marked Failed, with exponential back-off between retries."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: report\nspec:\n  completions: 5\n  parallelism: 2\n  backoffLimit: 3\n  activeDeadlineSeconds: 600\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      containers:\n        - name: report\n          image: busybox:1.36\n          command: [\"sh\", \"-c\", \"echo generating report; sleep 5\"]",
+       "title": null,
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "CronJobs",
+       "body": "A **CronJob** creates Jobs on a cron schedule (`minute hour day-of-month month day-of-week`). `concurrencyPolicy` decides what happens if the previous run is still going: `Allow` (default), `Forbid` (skip the new run) or `Replace` (cancel the old one). `startingDeadlineSeconds` limits how late a missed run may start."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: nightly-backup\nspec:\n  schedule: \"0 2 * * *\"\n  timeZone: \"Europe/Berlin\"\n  concurrencyPolicy: Forbid\n  successfulJobsHistoryLimit: 3\n  failedJobsHistoryLimit: 1\n  jobTemplate:\n    spec:\n      backoffLimit: 2\n      template:\n        spec:\n          restartPolicy: OnFailure\n          containers:\n            - name: backup\n              image: busybox:1.36\n              command: [\"sh\", \"-c\", \"echo backing up\"]",
+       "title": null,
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Make jobs idempotent",
+       "body": "A CronJob may rarely run a task twice or skip a run. Design tasks so repeating them is harmless."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl create job once --image=busybox -- echo hello\nkubectl get jobs\nkubectl logs job/once\nkubectl create job manual-run --from=cronjob/nightly-backup\nkubectl patch cronjob nightly-backup -p '{\"spec\":{\"suspend\":true}}'",
+       "title": null,
+       "output": null,
+       "note": null
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Run a Job",
+       "prompt": "Create a Job that prints a message and read its logs.",
+       "command": "kubectl create job once --image=busybox -- echo hello",
+       "expected": "`kubectl get jobs` shows COMPLETIONS 1/1 and `kubectl logs job/once` prints hello.",
+       "hint": null,
+       "solution": null
+      },
+      {
+       "title": "Trigger a CronJob now",
+       "prompt": "Start a manual run of a CronJob without waiting for its schedule.",
+       "command": "kubectl create job manual-run --from=cronjob/nightly-backup",
+       "expected": "A new Job manual-run appears and completes.",
+       "hint": "Use `--from=cronjob/NAME`.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does backoffLimit control?",
+        "options": [
+         "Parallel Pods",
+         "Retries before the Job is marked Failed",
+         "Schedule delay",
+         "History size"
+        ],
+        "answer": 1,
+        "explain": "After that many failures the Job fails."
+       },
+       {
+        "question": "Which concurrencyPolicy skips a new run if the previous one is still running?",
+        "options": [
+         "Allow",
+         "Forbid",
+         "Replace",
+         "Suspend"
+        ],
+        "answer": 1,
+        "explain": "Forbid skips the new run."
+       },
+       {
+        "question": "Valid restartPolicy for Job Pods?",
+        "options": [
+         "Always",
+         "Never or OnFailure",
+         "Any",
+         "None"
+        ],
+        "answer": 1,
+        "explain": "Always is not allowed in Jobs."
+       },
+       {
+        "question": "How do you auto-delete finished Jobs?",
+        "options": [
+         "ttlSecondsAfterFinished",
+         "backoffLimit",
+         "parallelism",
+         "suspend"
+        ],
+        "answer": 0,
+        "explain": "The TTL controller removes the Job and its Pods after the delay."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-daemonsets",
+      "k8s-probes-resources"
+     ],
+     "tags": [
+      "job",
+      "cronjob",
+      "batch"
+     ],
+     "commands": [
+      "kubectl create job",
+      "kubectl get jobs",
+      "kubectl logs"
+     ],
+     "sources": [
+      {
+       "title": "Jobs",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/job/"
+      },
+      {
+       "title": "CronJob",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-probes-resources",
+     "title": "Health probes and resource requests/limits",
+     "duration": "40 min",
+     "summary": "Teach Kubernetes when your app is alive, ready and how much CPU and memory it needs.",
+     "objectives": [
+      "Choose between liveness, readiness and startup probes",
+      "Set requests and limits and derive the QoS class",
+      "Diagnose OOMKilled and CPU throttling"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Three probes, three jobs",
+       "body": "**Startup** probe: has the app finished booting? Other probes are disabled until it passes. **Readiness** probe: should this Pod receive traffic? Failure removes it from Service endpoints but does not restart it. **Liveness** probe: is the process stuck? Failure makes the kubelet restart the container.\n\nProbes can be `httpGet`, `tcpSocket`, `exec` or `grpc`."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "containers:\n  - name: api\n    image: myorg/api:2.1\n    startupProbe:\n      httpGet: {path: /healthz, port: 8080}\n      failureThreshold: 30\n      periodSeconds: 2\n    readinessProbe:\n      httpGet: {path: /ready, port: 8080}\n      periodSeconds: 5\n    livenessProbe:\n      httpGet: {path: /healthz, port: 8080}\n      periodSeconds: 10\n      failureThreshold: 3\n    resources:\n      requests: {cpu: 250m, memory: 256Mi}\n      limits: {memory: 512Mi}",
+       "title": null,
+       "output": null,
+       "note": "This startup probe allows up to 60 seconds to boot."
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Do not check dependencies in liveness",
+       "body": "If liveness depends on a database and the database blips, every Pod restarts at once and turns a small outage into a large one. Keep liveness local; put dependency checks in readiness."
+      },
+      {
+       "type": "text",
+       "title": "Requests, limits and QoS",
+       "body": "The scheduler places Pods using **requests**. **Limits** are enforced at runtime: exceeding a CPU limit causes throttling, exceeding the memory limit gets the container **OOMKilled** (exit code 137).\n\nThe QoS class is derived from the settings: **Guaranteed** (requests equal limits for every container's CPU and memory), **Burstable** (some request or limit set), **BestEffort** (none). Under node pressure BestEffort Pods are evicted first, then Burstable."
+      },
+      {
+       "type": "table",
+       "title": "QoS classes",
+       "head": [
+        "Class",
+        "Condition",
+        "Eviction order"
+       ],
+       "rows": [
+        [
+         "Guaranteed",
+         "requests == limits for CPU and memory, all containers",
+         "Last"
+        ],
+        [
+         "Burstable",
+         "At least one request or limit set",
+         "Middle"
+        ],
+        [
+         "BestEffort",
+         "No requests or limits",
+         "First"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl describe pod api-7d9f | grep -A5 \"Last State\"\nkubectl get pod api-7d9f -o jsonpath='{.status.qosClass}'\nkubectl top pod\nkubectl get events --field-selector involvedObject.name=api-7d9f",
+       "title": null,
+       "output": null,
+       "note": "`Reason: OOMKilled` and `Exit Code: 137` in Last State confirm a memory-limit kill."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Find the QoS class",
+       "prompt": "Print the QoS class of a Pod.",
+       "command": "kubectl get pod NAME -o jsonpath='{.status.qosClass}'",
+       "expected": "One of Guaranteed, Burstable or BestEffort.",
+       "hint": "Replace NAME with a real Pod.",
+       "solution": null
+      },
+      {
+       "title": "Diagnose a restart",
+       "prompt": "Find out why a container restarted.",
+       "command": "kubectl describe pod NAME",
+       "expected": "Last State shows Terminated with Reason OOMKilled (exit 137) or Error, and Restart Count above 0.",
+       "hint": "Look under Containers > Last State.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What happens when a readiness probe fails?",
+        "options": [
+         "Container restarts",
+         "Pod is removed from Service endpoints",
+         "Pod is deleted",
+         "Node drains"
+        ],
+        "answer": 1,
+        "explain": "Readiness only affects traffic routing."
+       },
+       {
+        "question": "Exceeding a container's memory limit results in…",
+        "options": [
+         "Throttling",
+         "OOMKilled",
+         "Eviction to another node",
+         "Nothing"
+        ],
+        "answer": 1,
+        "explain": "The kernel kills the process; Kubernetes reports OOMKilled."
+       },
+       {
+        "question": "Which Pod is Guaranteed QoS?",
+        "options": [
+         "No resources set",
+         "Only requests set",
+         "Requests equal limits for CPU and memory",
+         "Only limits for memory"
+        ],
+        "answer": 2,
+        "explain": "Equal requests and limits on all containers give Guaranteed."
+       },
+       {
+        "question": "What is the startup probe for?",
+        "options": [
+         "Slow-starting apps so liveness does not kill them early",
+         "Load balancing",
+         "Image pulls",
+         "Logging"
+        ],
+        "answer": 0,
+        "explain": "It delays liveness and readiness checks until the app has started."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-deployments",
+      "k8s-jobs-cronjobs"
+     ],
+     "tags": [
+      "probes",
+      "resources",
+      "qos"
+     ],
+     "commands": [
+      "kubectl describe",
+      "kubectl top",
+      "kubectl get events"
+     ],
+     "sources": [
+      {
+       "title": "Probes",
+       "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+      },
+      {
+       "title": "Resource management",
+       "url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+      },
+      {
+       "title": "Pod QoS",
+       "url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-fundamentals"
+ ],
+ "track": "kubernetes"
+}

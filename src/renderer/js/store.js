@@ -55,6 +55,7 @@
     const motion = settings?.motion || 'full';
     document.documentElement.dataset.motion = motion === 'reduced' ? 'reduced' : 'full';
     applyTheme();
+    OD.i18n?.setLang(settings?.uiLanguage);
     document.documentElement.dataset.reduceTransparency = settings?.reduceTransparency ? 'true' : 'false';
   }
 
@@ -73,7 +74,7 @@
   async function setSetting(key, value) {
     state.settings = { ...state.settings, [key]: value };
     if (key === 'sidebarCollapsed') state.sidebarCollapsed = value === true;
-    if (key === 'theme' || key === 'motion' || key === 'reduceTransparency') applySettings(state.settings);
+    if (key === 'theme' || key === 'motion' || key === 'reduceTransparency' || key === 'uiLanguage') applySettings(state.settings);
     try {
       const res = await api.academy.setSetting({ key, value });
       return res;

@@ -1,0 +1,699 @@
+{
+ "id": "k8s-networking",
+ "order": 22,
+ "title": "Kubernetes Networking",
+ "subtitle": "Pod networking, Services, Ingress and NetworkPolicies",
+ "level": "Intermediate",
+ "duration": "2h",
+ "icon": "network",
+ "accent": "cyan",
+ "description": "Understand how traffic flows in a cluster: the Pod network and DNS, Services, Ingress routing with TLS, and NetworkPolicies to lock it down.",
+ "outcomes": [
+  "Explain the Kubernetes network model and cluster DNS",
+  "Expose workloads with Services and Ingress",
+  "Restrict and debug traffic with NetworkPolicies"
+ ],
+ "modules": [
+  {
+   "id": "k8s-net-foundations",
+   "title": "Pod networking and Services",
+   "summary": "The network model, DNS and Service types.",
+   "lessons": [
+    {
+     "id": "k8s-network-model",
+     "title": "The network model and cluster DNS",
+     "duration": "28 min",
+     "summary": "Every Pod gets its own IP, Pods reach each other without NAT, and CoreDNS turns Service names into addresses.",
+     "objectives": [
+      "State the four rules of the Kubernetes network model",
+      "Explain the role of the CNI plugin",
+      "Resolve Services and Pods through cluster DNS names"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Flat, NAT-free Pod networking",
+       "body": "Kubernetes imposes a simple model: every **Pod gets its own IP address**, every Pod can reach every other Pod **without NAT**, and agents on a node (such as the kubelet) can reach all Pods on that node. Containers in the same Pod share one network namespace, so they talk over `localhost` and must not bind the same port.\n\nKubernetes does not implement this itself. A **CNI plugin** (Calico, Cilium, Flannel and others) wires up each Pod's network interface and routes between nodes. Without a working CNI, Pods stay in `ContainerCreating`."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get pods -o wide\nkubectl get nodes -o custom-columns=NAME:.metadata.name,PODCIDR:.spec.podCIDR\nkubectl exec web -- ip addr show eth0",
+       "title": "Inspect Pod IPs and nodes",
+       "output": null,
+       "note": "Pod IPs are ephemeral: a replaced Pod gets a new address. That is why Services exist."
+      },
+      {
+       "type": "text",
+       "title": "Cluster DNS with CoreDNS",
+       "body": "CoreDNS runs as a Deployment in `kube-system` and is exposed by the `kube-dns` Service. The kubelet writes its address into each Pod's `/etc/resolv.conf`, together with a **search path** so short names work.\n\nA Service `api` in namespace `shop` is resolvable as `api` (same namespace), `api.shop`, or the full name `api.shop.svc.cluster.local`."
+      },
+      {
+       "type": "table",
+       "title": "DNS name patterns",
+       "head": [
+        "Resource",
+        "Name",
+        "Notes"
+       ],
+       "rows": [
+        [
+         "Service",
+         "`<svc>.<ns>.svc.cluster.local`",
+         "Resolves to the ClusterIP"
+        ],
+        [
+         "Headless Service",
+         "`<svc>.<ns>.svc.cluster.local`",
+         "Resolves to the Pod IPs"
+        ],
+        [
+         "StatefulSet Pod",
+         "`<pod>.<svc>.<ns>.svc.cluster.local`",
+         "Stable per-Pod name via headless Service"
+        ],
+        [
+         "Pod",
+         "`10-1-2-3.<ns>.pod.cluster.local`",
+         "IP with dashes; rarely used"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl run dns-test --rm -it --image=busybox:1.36 --restart=Never -- sh\n# inside the Pod:\ncat /etc/resolv.conf\nnslookup kubernetes.default\nnslookup api.shop.svc.cluster.local",
+       "title": "Look at resolv.conf and query DNS",
+       "output": null,
+       "note": "`ndots:5` means names with fewer than five dots are tried against the search path first."
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "CoreDNS health",
+       "body": "If name resolution fails cluster-wide, check `kubectl -n kube-system get pods -l k8s-app=kube-dns` and read the logs with `kubectl -n kube-system logs -l k8s-app=kube-dns`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Find Pod IPs",
+       "prompt": "List all Pods in every namespace with their IPs and nodes.",
+       "command": "kubectl get pods -A -o wide",
+       "expected": "A table with IP and NODE columns for every Pod.",
+       "hint": "Use -A and -o wide.",
+       "solution": null
+      },
+      {
+       "title": "Resolve a Service",
+       "prompt": "Run a temporary busybox Pod and resolve the built-in kubernetes Service.",
+       "command": "kubectl run dns-test --rm -it --image=busybox:1.36 --restart=Never -- nslookup kubernetes.default",
+       "expected": "The name resolves to the ClusterIP of the API server, typically 10.96.0.1.",
+       "hint": null,
+       "solution": "Name: kubernetes.default.svc.cluster.local"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which statement matches the Kubernetes network model?",
+        "options": [
+         "Pods must use NAT to reach other nodes",
+         "Every Pod has its own IP and can reach all Pods without NAT",
+         "Only Services have IP addresses",
+         "Pods on different nodes cannot communicate by default"
+        ],
+        "answer": 1,
+        "explain": "The model requires a flat, NAT-free Pod network."
+       },
+       {
+        "question": "What component actually implements Pod networking?",
+        "options": [
+         "kube-proxy",
+         "The CNI plugin",
+         "etcd",
+         "The scheduler"
+        ],
+        "answer": 1,
+        "explain": "The CNI plugin configures Pod interfaces and inter-node routing."
+       },
+       {
+        "question": "From namespace shop, which name resolves Service api in namespace billing?",
+        "options": [
+         "api",
+         "api.billing",
+         "billing.api",
+         "api.svc"
+        ],
+        "answer": 1,
+        "explain": "Use <svc>.<namespace>; the search path completes it to the full FQDN."
+       },
+       {
+        "question": "Which Pod runs cluster DNS?",
+        "options": [
+         "kubelet",
+         "CoreDNS in kube-system",
+         "etcd",
+         "ingress-nginx"
+        ],
+        "answer": 1,
+        "explain": "CoreDNS serves the kube-dns Service in kube-system."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [],
+     "tags": [
+      "networking",
+      "dns",
+      "cni"
+     ],
+     "commands": [
+      "kubectl get pods -o wide",
+      "kubectl exec",
+      "kubectl run"
+     ],
+     "sources": [
+      {
+       "title": "Cluster Networking",
+       "url": "https://kubernetes.io/docs/concepts/cluster-administration/networking/"
+      },
+      {
+       "title": "DNS for Services and Pods",
+       "url": "https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-services",
+     "title": "Services: ClusterIP, NodePort, LoadBalancer",
+     "duration": "32 min",
+     "summary": "Give a changing set of Pods one stable address, and expose it inside or outside the cluster.",
+     "objectives": [
+      "Write a Service that selects Pods by label",
+      "Choose between ClusterIP, NodePort, LoadBalancer and headless",
+      "Diagnose a Service with no endpoints"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "A stable front for ephemeral Pods",
+       "body": "A **Service** gives a set of Pods a stable virtual IP and DNS name. Membership is defined by a **label selector**; the control plane keeps an EndpointSlice with the ready Pod IPs, and `kube-proxy` on each node programs rules that load-balance traffic to them.\n\n`port` is what clients connect to, `targetPort` is the container port, and `nodePort` (when used) is the port opened on every node."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  type: ClusterIP\n  selector:\n    app: web\n  ports:\n    - name: http\n      port: 80\n      targetPort: 8080",
+       "title": "A ClusterIP Service",
+       "output": null,
+       "note": "ClusterIP is the default type and is reachable only inside the cluster."
+      },
+      {
+       "type": "table",
+       "title": "Service types",
+       "head": [
+        "Type",
+        "Reachable from",
+        "Use for"
+       ],
+       "rows": [
+        [
+         "ClusterIP",
+         "Inside the cluster",
+         "Internal service-to-service traffic"
+        ],
+        [
+         "NodePort",
+         "`<nodeIP>:30000-32767`",
+         "Simple external access, dev clusters"
+        ],
+        [
+         "LoadBalancer",
+         "Cloud load balancer IP",
+         "Production external traffic on cloud providers"
+        ],
+        [
+         "ExternalName",
+         "DNS CNAME",
+         "Alias to an external hostname"
+        ],
+        [
+         "Headless (`clusterIP: None`)",
+         "Pod IPs via DNS",
+         "StatefulSets, client-side balancing"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl expose deployment web --port=80 --target-port=8080\nkubectl get svc web\nkubectl get endpointslices -l kubernetes.io/service-name=web\nkubectl describe svc web",
+       "title": "Create and inspect",
+       "output": null,
+       "note": "If Endpoints is empty, the selector matches no ready Pods."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Selector mismatches and readiness",
+       "body": "A Service with no endpoints is almost always a label typo or Pods failing their readiness probe. Pods that are not Ready are removed from the Service by design."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl patch svc web -p '{\"spec\":{\"type\":\"NodePort\"}}'\nkubectl get svc web\n# headless: set clusterIP: None in the manifest, then\nkubectl run t --rm -it --image=busybox:1.36 --restart=Never -- nslookup web-headless",
+       "title": "NodePort and headless variants",
+       "output": null,
+       "note": "A headless Service returns one A record per ready Pod instead of a single virtual IP."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Expose a Deployment",
+       "prompt": "Create a Deployment of nginx and expose it as a ClusterIP Service on port 80.",
+       "command": "kubectl create deployment web --image=nginx:1.27 && kubectl expose deployment web --port=80",
+       "expected": "service/web exposed",
+       "hint": null,
+       "solution": "kubectl get svc web shows a CLUSTER-IP."
+      },
+      {
+       "title": "Check endpoints",
+       "prompt": "Show the Pod IPs backing the web Service.",
+       "command": "kubectl get endpoints web",
+       "expected": "One IP:80 entry per ready web Pod.",
+       "hint": "If empty, compare kubectl get svc web -o wide selector with Pod labels.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does a Service use to choose its Pods?",
+        "options": [
+         "Pod name prefix",
+         "A label selector",
+         "The node name",
+         "The image tag"
+        ],
+        "answer": 1,
+        "explain": "Selectors match Pod labels."
+       },
+       {
+        "question": "Which Service type opens a port on every node?",
+        "options": [
+         "ClusterIP",
+         "NodePort",
+         "ExternalName",
+         "Headless"
+        ],
+        "answer": 1,
+        "explain": "NodePort opens a port in 30000-32767 on each node."
+       },
+       {
+        "question": "A Service has no endpoints. Likely cause?",
+        "options": [
+         "DNS is down",
+         "Selector matches no Ready Pods",
+         "Wrong CNI",
+         "Too many replicas"
+        ],
+        "answer": 1,
+        "explain": "Empty endpoints mean no Ready Pod matches the selector."
+       },
+       {
+        "question": "What does clusterIP: None create?",
+        "options": [
+         "A NodePort",
+         "A headless Service returning Pod IPs",
+         "A LoadBalancer",
+         "An ExternalName"
+        ],
+        "answer": 1,
+        "explain": "Headless Services skip the virtual IP and expose Pod IPs through DNS."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-network-model"
+     ],
+     "tags": [
+      "services",
+      "kube-proxy"
+     ],
+     "commands": [
+      "kubectl expose",
+      "kubectl get svc",
+      "kubectl get endpoints",
+      "kubectl describe svc"
+     ],
+     "sources": [
+      {
+       "title": "Service",
+       "url": "https://kubernetes.io/docs/concepts/services-networking/service/"
+      },
+      {
+       "title": "Connecting Applications with Services",
+       "url": "https://kubernetes.io/docs/tutorials/services/connect-applications-service/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-net-traffic",
+   "title": "Ingress and traffic control",
+   "summary": "External routing, TLS, policies and debugging.",
+   "lessons": [
+    {
+     "id": "k8s-ingress",
+     "title": "Ingress and ingress controllers",
+     "duration": "30 min",
+     "summary": "Route HTTP and HTTPS traffic by host and path through one entry point.",
+     "objectives": [
+      "Explain why an Ingress needs a controller",
+      "Write host and path routing rules",
+      "Terminate TLS with a Secret"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Layer 7 routing",
+       "body": "A **Service** of type LoadBalancer costs one cloud load balancer per Service. An **Ingress** instead describes HTTP routing rules, and an **ingress controller** (ingress-nginx, Traefik, HAProxy and others) watches those objects and configures a shared proxy.\n\nAn Ingress object does nothing on its own. If no controller is installed, requests are never routed. Select the controller with `ingressClassName`."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: shop\nspec:\n  ingressClassName: nginx\n  tls:\n    - hosts: [shop.example.com]\n      secretName: shop-tls\n  rules:\n    - host: shop.example.com\n      http:\n        paths:\n          - path: /api\n            pathType: Prefix\n            backend:\n              service:\n                name: api\n                port:\n                  number: 80\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: web\n                port:\n                  number: 80",
+       "title": "Host, path and TLS routing",
+       "output": null,
+       "note": "`pathType: Prefix` matches `/api` and `/api/users`; `Exact` matches only the identical path."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl create secret tls shop-tls --cert=tls.crt --key=tls.key\nkubectl get ingressclass\nkubectl get ingress shop\nkubectl describe ingress shop\ncurl -H 'Host: shop.example.com' http://<controller-ip>/api",
+       "title": "Create the TLS Secret and verify",
+       "output": null,
+       "note": "The Secret must be in the same namespace as the Ingress."
+      },
+      {
+       "type": "steps",
+       "title": "When a route returns 404 or 503",
+       "items": [
+        {
+         "title": "Confirm the controller",
+         "body": "`kubectl get pods -n ingress-nginx` and `kubectl get ingressclass`."
+        },
+        {
+         "title": "Check the backend Service",
+         "body": "`kubectl get endpoints api` must list Pod IPs."
+        },
+        {
+         "title": "Match host and path",
+         "body": "The Host header must match a rule, and the pathType must cover the path."
+        },
+        {
+         "title": "Read controller logs",
+         "body": "`kubectl logs -n ingress-nginx deploy/ingress-nginx-controller`."
+        }
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "Gateway API",
+       "body": "The Gateway API is the more expressive successor to Ingress, with roles for infrastructure and application teams. Ingress remains widely used and stable."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "List classes and Ingresses",
+       "prompt": "Show available ingress classes and all Ingresses in the cluster.",
+       "command": "kubectl get ingressclass && kubectl get ingress -A",
+       "expected": "The installed controllers' classes and each Ingress with its ADDRESS.",
+       "hint": null,
+       "solution": null
+      },
+      {
+       "title": "Create a TLS Secret",
+       "prompt": "Create a TLS Secret named shop-tls from tls.crt and tls.key.",
+       "command": "kubectl create secret tls shop-tls --cert=tls.crt --key=tls.key",
+       "expected": "secret/shop-tls created",
+       "hint": "Generate a test pair with openssl req -x509 -nodes -newkey rsa:2048 -keyout tls.key -out tls.crt -subj /CN=shop.example.com",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What happens if you create an Ingress with no controller installed?",
+        "options": [
+         "It works through kube-proxy",
+         "Nothing routes traffic",
+         "The API rejects it",
+         "A controller is auto-installed"
+        ],
+        "answer": 1,
+        "explain": "The Ingress is only configuration; a controller must act on it."
+       },
+       {
+        "question": "Where does TLS get its certificate in an Ingress?",
+        "options": [
+         "A ConfigMap",
+         "A kubernetes.io/tls Secret",
+         "The Service",
+         "An env var"
+        ],
+        "answer": 1,
+        "explain": "tls.secretName references a TLS Secret in the same namespace."
+       },
+       {
+        "question": "Which field selects the controller?",
+        "options": [
+         "kind",
+         "ingressClassName",
+         "serviceType",
+         "nodeSelector"
+        ],
+        "answer": 1,
+        "explain": "ingressClassName references an IngressClass."
+       },
+       {
+        "question": "Which pathType matches /api/users for path /api?",
+        "options": [
+         "Exact",
+         "Prefix",
+         "None",
+         "Regex only"
+        ],
+        "answer": 1,
+        "explain": "Prefix matches on path segments, so /api/users matches /api."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-services"
+     ],
+     "tags": [
+      "ingress",
+      "tls",
+      "http"
+     ],
+     "commands": [
+      "kubectl get ingress",
+      "kubectl describe ingress",
+      "kubectl create secret tls"
+     ],
+     "sources": [
+      {
+       "title": "Ingress",
+       "url": "https://kubernetes.io/docs/concepts/services-networking/ingress/"
+      },
+      {
+       "title": "Ingress Controllers",
+       "url": "https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-network-policies",
+     "title": "NetworkPolicies and debugging connectivity",
+     "duration": "30 min",
+     "summary": "Restrict Pod traffic with default-deny and explicit allow rules, then debug when traffic fails.",
+     "objectives": [
+      "Apply a default-deny policy",
+      "Write allow rules with pod and namespace selectors",
+      "Debug connectivity systematically"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Open by default, closed by policy",
+       "body": "By default all Pods accept traffic from anywhere. A **NetworkPolicy** selects Pods and, once any policy selects a Pod for a direction, only traffic **explicitly allowed** is permitted for that direction. Policies are additive; there are no deny rules.\n\nPolicies are enforced by the CNI plugin. Calico and Cilium enforce them; plain Flannel does not, and the objects are silently ignored."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny-ingress\n  namespace: shop\nspec:\n  podSelector: {}\n  policyTypes: [Ingress]",
+       "title": "Default deny all ingress in a namespace",
+       "output": null,
+       "note": "`podSelector: {}` selects every Pod in the namespace. Add `Egress` to policyTypes to also block outbound traffic, and remember to allow DNS if you do."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-web-to-api\n  namespace: shop\nspec:\n  podSelector:\n    matchLabels:\n      app: api\n  policyTypes: [Ingress]\n  ingress:\n    - from:\n        - podSelector:\n            matchLabels:\n              app: web\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: monitoring\n      ports:\n        - protocol: TCP\n          port: 8080",
+       "title": "Allow web and monitoring to reach the API",
+       "output": null,
+       "note": "Entries under `from` are OR'd. Putting `podSelector` and `namespaceSelector` in the same entry would AND them."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Egress and DNS",
+       "body": "When you default-deny egress, Pods can no longer resolve names. Add an egress rule allowing UDP and TCP port 53 to the kube-dns Pods in kube-system."
+      },
+      {
+       "type": "steps",
+       "title": "Debugging connectivity",
+       "items": [
+        {
+         "title": "Is the Pod Ready?",
+         "body": "`kubectl get pods -o wide` and `kubectl describe pod`."
+        },
+        {
+         "title": "Does DNS resolve?",
+         "body": "`kubectl exec` into a Pod and run `nslookup <svc>`."
+        },
+        {
+         "title": "Does the Service have endpoints?",
+         "body": "`kubectl get endpoints <svc>`."
+        },
+        {
+         "title": "Hit the Pod IP directly",
+         "body": "`curl http://<podIP>:<port>` bypasses the Service to isolate the layer."
+        },
+        {
+         "title": "Check policies",
+         "body": "`kubectl get networkpolicy -A` and `kubectl describe networkpolicy`."
+        }
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl run netshoot --rm -it --image=nicolaka/netshoot --restart=Never -- bash\nkubectl debug -it pod/api-0 --image=busybox:1.36 --target=api",
+       "title": "Throwaway debug tools",
+       "output": null,
+       "note": "`kubectl debug` attaches an ephemeral container for images that lack shell tools."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Default deny",
+       "prompt": "Apply a default-deny ingress policy to namespace shop and list policies.",
+       "command": "kubectl apply -f default-deny.yaml && kubectl get networkpolicy -n shop",
+       "expected": "networkpolicy.networking.k8s.io/default-deny-ingress created",
+       "hint": null,
+       "solution": null
+      },
+      {
+       "title": "Test blocked traffic",
+       "prompt": "From a Pod without the allowed label, try to reach the api Service with a short timeout.",
+       "command": "kubectl run probe -n shop --rm -it --image=busybox:1.36 --restart=Never -- wget -qO- -T 3 http://api",
+       "expected": "wget: download timed out",
+       "hint": "A timeout, not a refusal, indicates a policy drop.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What is the effect of a policy with podSelector {} and no ingress rules?",
+        "options": [
+         "Allows all ingress",
+         "Denies all ingress to every Pod in the namespace",
+         "Deletes Pods",
+         "Affects only the default namespace"
+        ],
+        "answer": 1,
+        "explain": "An empty selector matches all Pods; with no allow rules nothing is permitted."
+       },
+       {
+        "question": "Can you write an explicit deny rule?",
+        "options": [
+         "Yes, action: Deny",
+         "No, policies are allow-only and additive",
+         "Yes, with egress only",
+         "Only in Calico"
+        ],
+        "answer": 1,
+        "explain": "Standard NetworkPolicies only allow; denial comes from selection without a matching allow."
+       },
+       {
+        "question": "A policy has a podSelector and a namespaceSelector as separate list items under from. How are they combined?",
+        "options": [
+         "AND",
+         "OR",
+         "XOR",
+         "Ignored"
+        ],
+        "answer": 1,
+        "explain": "Separate list items are OR'd; in one item they are AND'd."
+       },
+       {
+        "question": "Policies have no effect on your cluster. Likely cause?",
+        "options": [
+         "Wrong namespace label",
+         "CNI plugin does not enforce NetworkPolicy",
+         "Too many Pods",
+         "No Ingress"
+        ],
+        "answer": 1,
+        "explain": "Enforcement is a CNI feature."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-services",
+      "k8s-network-model"
+     ],
+     "tags": [
+      "networkpolicy",
+      "security",
+      "debugging"
+     ],
+     "commands": [
+      "kubectl get networkpolicy",
+      "kubectl debug",
+      "kubectl describe networkpolicy"
+     ],
+     "sources": [
+      {
+       "title": "Network Policies",
+       "url": "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+      },
+      {
+       "title": "Debug Services",
+       "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-workloads"
+ ],
+ "track": "kubernetes"
+}

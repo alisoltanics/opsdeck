@@ -1,0 +1,47 @@
+/* Sidebar help buttons and the Help page. */
+.nav-row { position: relative; }
+.nav-row .nav-item { width: 100%; }
+.nav-help {
+  position: absolute; inset-inline-end: 6px; top: 50%; transform: translateY(-50%);
+  display: grid; place-items: center; width: 22px; height: 22px;
+  border-radius: var(--r-sm); color: var(--muted);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--fast), background var(--fast), color var(--fast);
+}
+.nav-row:hover .nav-help, .nav-row:focus-within .nav-help { opacity: 1; pointer-events: auto; }
+.nav-help:hover { background: var(--surface-3); color: var(--accent-text); text-decoration: none; }
+.nav-row:hover .nav-badge, .nav-row:focus-within .nav-badge { visibility: hidden; }
+.app[data-collapsed='true'] .nav-help { display: none; }
+
+.help-page { max-width: 920px; display: flex; flex-direction: column; gap: 14px; }
+.help-page .help-list { margin: 0; padding-inline-start: 18px; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; }
+.help-page p { line-height: 1.6; margin: 0 0 8px; }
+.help-part { padding: 10px 0; border-top: 1px solid var(--border-soft); }
+.help-part:first-child { border-top: 0; padding-top: 0; }
+.help-part h3 { margin: 0 0 4px; font-size: 13px; }
+.help-items { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.help-items li { padding-inline-start: 12px; border-inline-start: 2px solid var(--border); line-height: 1.5; }
+.help-items strong { color: var(--text); }
+.help-example { color: var(--muted); font-size: 11.5px; }
+.help-steps { margin: 0; padding-inline-start: 20px; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; }
+
+.help-page[dir='rtl'] { font-family: 'Vazirmatn', 'Noto Sans Arabic', 'Segoe UI', Tahoma, system-ui, sans-serif; }
+.help-page[dir='rtl'] .help-list, .help-page[dir='rtl'] .help-steps { padding-inline-start: 0; padding-inline-end: 20px; }
+.help-page[dir='rtl'] .help-items li { padding-inline-start: 0; padding-inline-end: 12px; border-inline-start: 0; border-inline-end: 2px solid var(--border); }
+.help-page[dir='rtl'] .data-table th, .help-page[dir='rtl'] .data-table td { text-align: end !important; }
+.help-page[dir='rtl'] .page-head-left { text-align: end; }
+
+.main-body { flex: 1; min-height: 0; display: flex; position: relative; z-index: 1; }
+.main-body > .content { flex: 1 1 0; min-width: 0; }
+.help-dock {
+  flex: 0 0 min(420px, 42%); min-width: 300px; display: flex; flex-direction: column;
+  border-inline-start: 1px solid var(--border-strong); background: var(--bg-soft);
+}
+.help-dock[hidden] { display: none; }
+.help-dock-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); font-weight: 600; font-size: 12.5px; }
+.help-dock-head span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.help-dock-body { flex: 1; overflow-y: auto; padding: 14px; }
+.help-dock .help-page { max-width: none; }
+.help-dock .help-page .page-head { display: none; }
+.help-dock .help-dock-title { margin: 0 0 4px; font-size: 16px; }
+.help-dock .help-dock-sub { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }

@@ -1943,6 +1943,7 @@
           ${U.card({
             title: 'Appearance', icon: 'palette', sub: 'Dark is the default. Light mode is designed, not inverted.',
             body: `<div class="stack-3">
+              <div><div class="rail-progress-label"><span>Language</span></div><div class="filter-row">${[['en', 'English'], ['fa', 'فارسی']].map(([v, label]) => `<button type="button" class="chip ${(s.uiLanguage || 'en') === v ? 'active' : ''}" data-ui-lang="${v}">${label}</button>`).join('')}</div></div>
               <div><div class="rail-progress-label"><span>Theme</span></div><div class="filter-row">${themes.map(([v, label, ic]) => `<button type="button" class="chip ${(s.theme || 'dark') === v ? 'active' : ''}" data-theme-set="${v}">${icon(ic, 13)}${label}</button>`).join('')}</div></div>
               <div>
                 <div class="rail-progress-label"><span>Interface scale</span><span class="mono text-xs" data-zoom-value>${Math.round((OD.store.state.zoomFactor || 1) * 100)}%</span></div>
@@ -2399,6 +2400,11 @@
 
   function mountSettings(root) {
     if (OD.ai) OD.ai.mountSettings(root);
+    root.querySelectorAll('[data-ui-lang]').forEach((chip) => chip.addEventListener('click', async () => {
+      await OD.store.setSetting('uiLanguage', chip.dataset.uiLang);
+      root.querySelectorAll('[data-ui-lang]').forEach((c) => c.classList.toggle('active', c === chip));
+      OD.app?.rerender?.();
+    }));
     root.querySelectorAll('[data-theme-set]').forEach((chip) => chip.addEventListener('click', async () => {
       await OD.store.setSetting('theme', chip.dataset.themeSet);
       root.querySelectorAll('[data-theme-set]').forEach((c) => c.classList.toggle('active', c === chip));

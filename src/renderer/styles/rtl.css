@@ -1,0 +1,40 @@
+/* Persian / right-to-left layout. Applied when <html dir="rtl">. */
+:root[dir='rtl'] { --font: 'Vazirmatn var', 'Inter var', 'Segoe UI', Tahoma, sans-serif; }
+:root[dir='rtl'] body { font-family: var(--font); }
+
+/* Terminals, code and machine values keep their natural left-to-right flow. */
+:root[dir='rtl'] pre, :root[dir='rtl'] code, :root[dir='rtl'] kbd, :root[dir='rtl'] samp,
+:root[dir='rtl'] .mono, :root[dir='rtl'] .xterm, :root[dir='rtl'] textarea.code,
+:root[dir='rtl'] .code-block, :root[dir='rtl'] .cmd-line, :root[dir='rtl'] .lab-editor,
+:root[dir='rtl'] .topo-canvas, :root[dir='rtl'] .window-controls,
+:root[dir='rtl'] .kbd, :root[dir='rtl'] .chart, :root[dir='rtl'] svg.chart {
+  direction: ltr; unicode-bidi: isolate; text-align: left;
+}
+:root[dir='rtl'] .mono, :root[dir='rtl'] code { text-align: start; }
+:root[dir='rtl'] pre, :root[dir='rtl'] .xterm { text-align: left; }
+
+/* Text always flows from the right, even when a line starts with English.
+   Embedded Latin words keep their own order through the Unicode bidi algorithm. */
+:root[dir='rtl'] body, :root[dir='rtl'] .sidebar, :root[dir='rtl'] .topbar, :root[dir='rtl'] .content,
+:root[dir='rtl'] .card, :root[dir='rtl'] .overlay, :root[dir='rtl'] .toast, :root[dir='rtl'] .palette {
+  direction: rtl; unicode-bidi: normal;
+}
+:root[dir='rtl'] .nav-item, :root[dir='rtl'] .nav-label, :root[dir='rtl'] .workspace-btn, :root[dir='rtl'] .workspace-name,
+:root[dir='rtl'] .workspace-menu-item, :root[dir='rtl'] .data-table th, :root[dir='rtl'] .data-table td,
+:root[dir='rtl'] .card-title, :root[dir='rtl'] .page-title, :root[dir='rtl'] .page-sub, :root[dir='rtl'] .btn,
+:root[dir='rtl'] .chip, :root[dir='rtl'] .badge { direction: rtl; text-align: start; unicode-bidi: normal; }
+:root[dir='rtl'] .data-table th, :root[dir='rtl'] .data-table td { text-align: right !important; }
+:root[dir='rtl'] .nav-label { text-align: right; }
+:root[dir='rtl'] .sidebar-section-label { text-align: right; }
+:root[dir='rtl'] input, :root[dir='rtl'] select, :root[dir='rtl'] textarea { direction: rtl; text-align: right; }
+:root[dir='rtl'] input::placeholder, :root[dir='rtl'] textarea::placeholder { direction: rtl; text-align: right; }
+:root[dir='rtl'] input.mono, :root[dir='rtl'] input[type='url'], :root[dir='rtl'] input[type='password'],
+:root[dir='rtl'] textarea.code, :root[dir='rtl'] .lab-editor { direction: ltr; text-align: left; }
+:root[dir='rtl'] .stat-value, :root[dir='rtl'] .num { unicode-bidi: isolate; }
+
+/* Directional icons and motion mirror with the layout. */
+:root[dir='rtl'] .icon-dir { transform: scaleX(-1); }
+:root[dir='rtl'] .drawer { border-inline-start: 0; border-inline-end: 1px solid var(--border-strong); transform: translateX(-24px); box-shadow: 24px 0 70px rgba(0,0,0,.38); }
+:root[dir='rtl'] .overlay.open .drawer { transform: none; }
+:root[dir='rtl'] select.input { background-position: 12px 50%, 17px 50%; }
+:root[dir='rtl'] .stat-value, :root[dir='rtl'] .num { unicode-bidi: isolate; }

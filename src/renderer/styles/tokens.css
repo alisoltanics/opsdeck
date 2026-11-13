@@ -193,3 +193,11 @@
   --shadow-xl: 0 32px 90px rgba(15,23,42,.16);
   --shadow-accent: 0 8px 24px rgba(20,121,204,.18);
 }
+
+@font-face {
+  font-family: 'Vazirmatn var';
+  src: url('../../../assets/fonts/Vazirmatn-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}

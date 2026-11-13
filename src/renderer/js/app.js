@@ -310,7 +310,10 @@
     else if (route?.name === 'databases') id = 'databases';
     else if (route?.name === 'observability') id = 'observability';
     else if (route?.name === 'intelligence') id = 'intelligence';
-    else if (route?.name !== 'settings') id = 'docker';
+    else if (route?.name === 'help') {
+      const target = route.parts?.[0];
+      if (['docker', 'kubernetes', 'databases', 'observability', 'intelligence'].includes(target)) id = target;
+    } else if (route?.name !== 'settings') id = 'docker';
     if (id !== currentWorkspace) {
       currentWorkspace = id;
       try { localStorage.setItem(WORKSPACE_KEY, id); } catch { /* optional */ }
@@ -319,6 +322,7 @@
   }
 
   function routeLabel(route) {
+    if (route.name === 'help') return OD.views?.help?.label?.(route) || 'Help';
     if (route.name === 'kubernetes') {
       return OD.views?.kubernetes?.label?.(route.parts[0] || 'overview') || titleCase(route.parts[0] || 'overview');
     }
@@ -345,6 +349,9 @@
   }
 
   function breadcrumbs(route) {
+    if (route.name === 'help') {
+      return `<span class="crumb">Help</span>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route))}</span>`;
+    }
     if (route.name === 'kubernetes') {
       const section = route.parts[0] || 'overview';
       return `<a class="crumb" href="#/kubernetes/overview">Kubernetes</a>${icon('chevron-right', 11)}<span class="crumb current">${esc(routeLabel(route) || titleCase(section))}</span>`;
@@ -430,7 +437,7 @@
     }
     currentView = null;
 
-    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && route.name !== 'observability' && route.name !== 'intelligence' && !isDockerRoute(route.name)) {
+    if (typeof route.name === 'string' && route.name !== 'academy' && route.name !== 'kubernetes' && route.name !== 'databases' && route.name !== 'observability' && route.name !== 'intelligence' && route.name !== 'help' && !isDockerRoute(route.name)) {
       host.innerHTML = `<div class="page">${U.empty({ icon: 'compass', title: 'Page not found', body: `There is no view for “${route.raw}”. Use the sidebar or the command palette to continue.`, action: `<a class="btn btn-primary btn-sm" href="#/overview">Open overview</a>` })}</div>`;
       applyChrome();
       return;
@@ -439,6 +446,8 @@
     // In-page refreshes keep the current content until the new render is ready,
     // so a click never blanks the page. Real navigation shows a named loader.
     if (options.scroll === false && previous && previous.childElementCount) {
+      // A refresh of the same page must not replay the page entrance animation.
+      host.dataset.refresh = 'true';
       host.innerHTML = previous.innerHTML;
     } else {
       const label = routeLabel(route) || titleCase(route.name);
@@ -454,7 +463,8 @@
         : route.name === 'databases' ? OD.views.databases
           : route.name === 'observability' ? OD.views.observability
             : route.name === 'intelligence' ? OD.views.intelligence
-              : OD.views.docker;
+              : route.name === 'help' ? OD.views.help
+                : OD.views.docker;
     if (!currentView) {
       host.innerHTML = renderError(new Error('The view module did not load. Check the script order in index.html.'), route);
       applyChrome();
@@ -484,6 +494,7 @@
     }
     applyChrome();
     paintZoom();
+    OD.views.help?.syncDock?.(route);
   }
 
   const rerender = debounce(() => { renderRoute({ scroll: false }); }, 20);
@@ -593,9 +604,10 @@
         const active = (item.id === 'academy' && route.name === 'academy')
           || (item.id === route.name && (!item.section || item.section === section));
         const badge = item.badge === 'academy' ? `${stats.percent}%` : '';
-        return `<a class="nav-item ${active ? 'active' : ''}" href="${item.href}" title="${esc(item.label)}" aria-current="${active ? 'page' : 'false'}">
+        const helpKey = item.id === 'academy' || !item.section ? `docker/${item.id}` : `${item.id}/${item.section}`;
+        return `<div class="nav-row"><a class="nav-item ${active ? 'active' : ''}" href="${item.href}" title="${esc(item.label)}" aria-current="${active ? 'page' : 'false'}">
           ${icon(item.icon, 16)}<span class="nav-label">${esc(item.label)}</span>${badge ? `<span class="nav-badge accent">${badge}</span>` : ''}
-        </a>`;
+        </a><a class="nav-help" href="#/help/${helpKey}" title="Help: ${esc(item.label)}" aria-label="Help for ${esc(item.label)}">${icon('help-circle', 13)}</a></div>`;
       }).join('')}</div>
     </div>`;
 
@@ -627,9 +639,9 @@
       </nav>
       ${workspaceId === 'kubernetes' ? kubernetesMini() : workspaceId === 'databases' ? databasesMini() : workspaceId === 'observability' ? observabilityMini() : workspaceId === 'intelligence' ? intelligenceMini() : engineMini()}
       <div class="sidebar-footer">
-        <a class="nav-item ${route.name === 'settings' ? 'active' : ''}" href="#/settings" title="Settings">
+        <div class="nav-row"><a class="nav-item ${route.name === 'settings' ? 'active' : ''}" href="#/settings" title="Settings">
           ${icon('settings', 16)}<span class="nav-label">Settings</span>
-        </a>
+        </a><a class="nav-help" href="#/help/app/settings" title="Help: Settings" aria-label="Help for Settings">${icon('help-circle', 13)}</a></div>
         <div class="sidebar-footer-text" style="padding:8px 10px 0;font-size:9.5px;color:var(--faint)">v${esc(store.state.info?.version || '1.0.0')} · local-first</div>
       </div>`;
 

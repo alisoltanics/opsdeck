@@ -13,6 +13,7 @@
 
   const state = {
     courseLevel: 'All',
+    courseTrack: 'All',
     courseQuery: '',
     refQuery: '',
     refKind: 'engine',
@@ -382,14 +383,15 @@
     const courses = OD.store.state.academy.courses;
     const levels = ['All', 'Beginner', 'Intermediate', 'Advanced', 'Expert'];
     const q = state.courseQuery.trim().toLowerCase();
-    const filtered = courses.filter((c) => (state.courseLevel === 'All' || c.level === state.courseLevel) && (!q || `${c.title} ${c.subtitle} ${c.description}`.toLowerCase().includes(q)));
+    const filtered = courses.filter((c) => (state.courseLevel === 'All' || c.level === state.courseLevel) && (state.courseTrack === 'All' || (c.track || 'docker') === state.courseTrack) && (!q || `${c.title} ${c.subtitle} ${c.description}`.toLowerCase().includes(q)));
     return `<div class="page">
       ${academyNav('courses')}
       <div class="page-head">
-        <div class="page-head-left"><div class="eyebrow">${icon('graduation-cap', 12)}Curriculum</div><h1 class="page-title">Docker Academy</h1><p class="page-sub">Eighteen courses from first principles to expert operations. Every lesson has objectives, real commands, a knowledge check and a next step.</p></div>
+        <div class="page-head-left"><div class="eyebrow">${icon('graduation-cap', 12)}Curriculum</div><h1 class="page-title">Academy</h1><p class="page-sub">Docker and Kubernetes courses from first principles to expert operations. Every lesson has objectives, real commands, a knowledge check and a next step.</p></div>
         <div class="page-actions"><span class="badge tone-accent">${courses.length} courses</span><span class="badge tone-slate">${OD.store.allLessons().length} lessons</span>${OD.ai ? OD.ai.button({ kind: 'academy' }, { label: 'Ask AI about the Academy' }) : ''}</div>
       </div>
       <div class="toolbar">
+        <div class="filter-row">${[['All', 'All tracks'], ['docker', 'Docker'], ['kubernetes', 'Kubernetes']].map(([v, l]) => `<button type="button" class="chip ${state.courseTrack === v ? 'active' : ''}" data-track="${v}">${l}</button>`).join('')}</div>
         <label class="search-box">${icon('search', 14)}<input id="course-search" type="search" placeholder="Find a course…" value="${esc(state.courseQuery)}" /></label>
         <div class="filter-row">${levels.map((l) => `<button type="button" class="chip ${state.courseLevel === l ? 'active' : ''}" data-level="${l}">${l}</button>`).join('')}</div>
         <div class="toolbar-spacer"></div><span class="muted text-xs">${filtered.length} shown</span>
@@ -1814,6 +1816,15 @@
     const parts = route.parts || [];
     const section = parts[0] || '';
     switch (section) {
+      case 'courses':
+        root.querySelectorAll('[data-level]').forEach((chip) => chip.addEventListener('click', () => { state.courseLevel = chip.dataset.level; rerender(); }));
+        root.querySelectorAll('[data-track]').forEach((chip) => chip.addEventListener('click', () => { state.courseTrack = chip.dataset.track; rerender(); }));
+        root.querySelector('#course-search')?.addEventListener('input', (event) => {
+          state.courseQuery = event.target.value;
+          rerender();
+          setTimeout(() => { const input = document.getElementById('course-search'); if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } }, 60);
+        });
+        return;
       case 'course':
         root.querySelectorAll('[data-module-toggle]').forEach((head) => head.addEventListener('click', () => {
           head.closest('.module')?.classList.toggle('open');

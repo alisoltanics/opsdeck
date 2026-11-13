@@ -1,0 +1,723 @@
+{
+ "id": "k8s-fundamentals",
+ "order": 20,
+ "title": "Kubernetes Fundamentals",
+ "subtitle": "Architecture, kubectl, Pods and cluster organization",
+ "level": "Beginner",
+ "duration": "2h",
+ "icon": "boxes",
+ "accent": "blue",
+ "description": "Understand why Kubernetes exists, how its components fit together, and how to operate a cluster with kubectl, Pods, namespaces and labels.",
+ "outcomes": [
+  "Explain control plane and node components",
+  "Work declaratively with kubectl and kubeconfig contexts",
+  "Run and debug Pods with probes and init containers",
+  "Organize workloads with namespaces and labels"
+ ],
+ "modules": [
+  {
+   "id": "k8s-architecture-kubectl",
+   "title": "Architecture and kubectl",
+   "summary": "How a cluster is built and how you talk to it.",
+   "lessons": [
+    {
+     "id": "k8s-why-and-architecture",
+     "title": "Why Kubernetes and its architecture",
+     "duration": "30 min",
+     "summary": "What problem Kubernetes solves and how the control plane and worker nodes cooperate to run your workloads.",
+     "objectives": [
+      "Explain what an orchestrator adds on top of a container runtime",
+      "Name every control plane and node component and its job",
+      "Trace what happens when a workload is submitted to the cluster"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "From one container to a fleet",
+       "body": "Running `docker run` on one host is easy. Running hundreds of containers across many machines is not: who restarts a crashed container, where does a new one fit, how do replicas find each other, how do you roll out a new version without downtime?\n\nKubernetes is a **container orchestrator**. You declare the **desired state** (\"three replicas of this image, reachable on port 80\") and the cluster continuously works to make reality match it. It provides scheduling, self-healing, service discovery, rolling updates and scaling as built-in primitives."
+      },
+      {
+       "type": "table",
+       "title": "Cluster components",
+       "head": [
+        "Component",
+        "Where",
+        "Job"
+       ],
+       "rows": [
+        [
+         "`kube-apiserver`",
+         "Control plane",
+         "The only front door: validates and stores objects, serves every client (kubectl, kubelet, controllers)."
+        ],
+        [
+         "`etcd`",
+         "Control plane",
+         "Consistent key-value store holding all cluster state. Only the API server talks to it."
+        ],
+        [
+         "`kube-scheduler`",
+         "Control plane",
+         "Picks a node for each unscheduled Pod based on resources, affinity and taints."
+        ],
+        [
+         "`kube-controller-manager`",
+         "Control plane",
+         "Runs control loops (Deployment, Node, Job...) that drive actual state toward desired state."
+        ],
+        [
+         "`kubelet`",
+         "Every node",
+         "Agent that starts the Pod's containers through the runtime and reports status."
+        ],
+        [
+         "`kube-proxy`",
+         "Every node",
+         "Programs node networking rules so Service addresses reach the right Pods."
+        ],
+        [
+         "Container runtime",
+         "Every node",
+         "Actually runs containers, e.g. `containerd` or `CRI-O`, via the CRI interface."
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "Everything goes through the API server",
+       "body": "Controllers, the scheduler and kubelets never talk to each other directly. They watch the API server for changes and write results back to it. That is why the API server and etcd are the heart of the cluster."
+      },
+      {
+       "type": "steps",
+       "title": "What happens when you create a Deployment",
+       "items": [
+        {
+         "title": "kubectl sends the request",
+         "body": "kubectl authenticates and POSTs the object to the API server, which validates it and persists it in etcd."
+        },
+        {
+         "title": "Controllers react",
+         "body": "The Deployment controller creates a ReplicaSet, which creates Pod objects with no node assigned."
+        },
+        {
+         "title": "Scheduler assigns nodes",
+         "body": "The scheduler sees unscheduled Pods and binds each one to a suitable node."
+        },
+        {
+         "title": "Kubelet runs them",
+         "body": "The kubelet on that node sees a Pod bound to it, asks the runtime to pull the image and start containers, and reports status back."
+        }
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get nodes -o wide\nkubectl get pods -n kube-system\nkubectl cluster-info",
+       "title": "Inspect a running cluster",
+       "output": null,
+       "note": "On most clusters the control plane components appear as Pods in `kube-system`; on managed services (EKS, GKE, AKS) the control plane is hidden from you."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "List the nodes",
+       "prompt": "Show every node in your cluster with its internal IP and container runtime.",
+       "command": "kubectl get nodes -o wide",
+       "expected": "A table with NAME, STATUS Ready, ROLES, VERSION, INTERNAL-IP and CONTAINER-RUNTIME columns (for example containerd://1.7.x).",
+       "hint": "Use the -o wide output format.",
+       "solution": null
+      },
+      {
+       "title": "Find system components",
+       "prompt": "List the Pods that run cluster components.",
+       "command": "kubectl get pods -n kube-system",
+       "expected": "Pods such as coredns, kube-proxy and, on self-managed clusters, etcd, kube-apiserver, kube-scheduler.",
+       "hint": "Components live in the kube-system namespace.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which component is the only one that reads and writes etcd?",
+        "options": [
+         "kube-scheduler",
+         "kubelet",
+         "kube-apiserver",
+         "kube-proxy"
+        ],
+        "answer": 2,
+        "explain": "All state flows through the API server; other components use its API."
+       },
+       {
+        "question": "What does the scheduler decide?",
+        "options": [
+         "Which image to pull",
+         "Which node a Pod runs on",
+         "How many replicas exist",
+         "Which namespace a Pod is in"
+        ],
+        "answer": 1,
+        "explain": "The scheduler binds unscheduled Pods to nodes; the kubelet then runs them."
+       },
+       {
+        "question": "Which component runs on every node and starts containers for Pods?",
+        "options": [
+         "kubelet",
+         "etcd",
+         "controller manager",
+         "API server"
+        ],
+        "answer": 0,
+        "explain": "The kubelet is the node agent that drives the container runtime."
+       },
+       {
+        "question": "Declarative desired state means you...",
+        "options": [
+         "Run each step manually",
+         "Describe the result and controllers converge on it",
+         "Must restart pods by hand",
+         "Cannot change running workloads"
+        ],
+        "answer": 1,
+        "explain": "Controllers continuously reconcile actual state toward the declared state."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-kubectl-and-declarative"
+     ],
+     "tags": [
+      "architecture",
+      "control-plane"
+     ],
+     "commands": [
+      "kubectl get",
+      "kubectl cluster-info"
+     ],
+     "sources": [
+      {
+       "title": "Kubernetes components",
+       "url": "https://kubernetes.io/docs/concepts/overview/components/"
+      },
+      {
+       "title": "Cluster architecture",
+       "url": "https://kubernetes.io/docs/concepts/architecture/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-kubectl-and-declarative",
+     "title": "kubectl, contexts and the declarative model",
+     "duration": "30 min",
+     "summary": "Use kubectl to talk to clusters, manage kubeconfig contexts, and work declaratively with apply.",
+     "objectives": [
+      "Switch between clusters and namespaces with contexts",
+      "Use apply, get, describe, logs and exec fluently",
+      "Contrast imperative commands with declarative manifests"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "kubeconfig and contexts",
+       "body": "`kubectl` reads `~/.kube/config` (or the files in `$KUBECONFIG`). It holds **clusters** (API server address and CA), **users** (credentials) and **contexts**, each pairing a cluster, a user and a default namespace.\n\nThe **current context** decides which cluster every command hits, so check it before anything destructive."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl config get-contexts\nkubectl config current-context\nkubectl config use-context dev-cluster\nkubectl config set-context --current --namespace=shop",
+       "title": "Working with contexts",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "Imperative versus declarative",
+       "body": "Imperative commands (`kubectl run`, `kubectl create`) tell the cluster what to do now. The declarative approach stores a manifest in Git and runs `kubectl apply -f`, which compares it with the live object and patches the difference. Re-running it is safe, which makes it the standard for real work."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\nspec:\n  containers:\n    - name: nginx\n      image: nginx:1.27\n      ports:\n        - containerPort: 80",
+       "title": "web-pod.yaml",
+       "output": null,
+       "note": "Every object has apiVersion, kind, metadata and (usually) spec. The cluster fills in status."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl apply -f web-pod.yaml\nkubectl get pod web -o wide\nkubectl describe pod web\nkubectl logs web\nkubectl exec -it web -- sh\nkubectl delete -f web-pod.yaml",
+       "title": "The daily loop",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Preview before you change",
+       "body": "Use `kubectl diff -f file.yaml` to see what apply would change, and `--dry-run=client -o yaml` to generate a manifest skeleton without creating anything."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Mind the current context",
+       "body": "Running `kubectl delete` against the wrong context is a classic outage. Show the context in your shell prompt or pass `--context` explicitly."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Generate a manifest",
+       "prompt": "Produce Pod YAML for nginx without creating it.",
+       "command": "kubectl run web --image=nginx:1.27 --dry-run=client -o yaml",
+       "expected": "YAML output with kind: Pod and the nginx:1.27 image; nothing is created in the cluster.",
+       "hint": "Combine --dry-run=client with -o yaml.",
+       "solution": null
+      },
+      {
+       "title": "Inspect and debug",
+       "prompt": "Apply a Pod, then read its events and logs.",
+       "command": "kubectl describe pod web",
+       "expected": "The Events section at the bottom shows Scheduled, Pulling, Pulled, Created and Started.",
+       "hint": "Events are the last section of describe output.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does a kubeconfig context combine?",
+        "options": [
+         "Image, tag and port",
+         "Cluster, user and namespace",
+         "Node, pod and container",
+         "Role and binding"
+        ],
+        "answer": 1,
+        "explain": "A context pairs a cluster and user with a default namespace."
+       },
+       {
+        "question": "Why is kubectl apply preferred for real workloads?",
+        "options": [
+         "It is faster",
+         "It reconciles declared manifests and is safe to repeat",
+         "It skips validation",
+         "It works only on Pods"
+        ],
+        "answer": 1,
+        "explain": "Apply compares desired and live state and patches only the difference."
+       },
+       {
+        "question": "Which command shows the events for a Pod?",
+        "options": [
+         "kubectl logs",
+         "kubectl describe pod",
+         "kubectl config",
+         "kubectl top"
+        ],
+        "answer": 1,
+        "explain": "describe lists conditions and recent events such as scheduling and image pulls."
+       },
+       {
+        "question": "How do you run a shell in a running Pod?",
+        "options": [
+         "kubectl exec -it POD -- sh",
+         "kubectl attach --new",
+         "kubectl shell POD",
+         "kubectl run sh"
+        ],
+        "answer": 0,
+        "explain": "exec runs a command in an existing container."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-pods-in-depth"
+     ],
+     "tags": [
+      "kubectl",
+      "kubeconfig"
+     ],
+     "commands": [
+      "kubectl apply",
+      "kubectl get",
+      "kubectl describe",
+      "kubectl logs",
+      "kubectl exec",
+      "kubectl config"
+     ],
+     "sources": [
+      {
+       "title": "kubectl overview",
+       "url": "https://kubernetes.io/docs/reference/kubectl/"
+      },
+      {
+       "title": "Organizing cluster access with kubeconfig",
+       "url": "https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/"
+      },
+      {
+       "title": "Declarative management of objects",
+       "url": "https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-pods-organization",
+   "title": "Pods and organization",
+   "summary": "The Pod in depth and how to group and select objects.",
+   "lessons": [
+    {
+     "id": "k8s-pods-in-depth",
+     "title": "Pods in depth",
+     "duration": "35 min",
+     "summary": "The Pod lifecycle, multi-container patterns, init containers, restart policy and basic probes.",
+     "objectives": [
+      "Describe Pod phases and container states",
+      "Use init containers and understand restartPolicy",
+      "Configure liveness, readiness and startup probes"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "The Pod is the unit of scheduling",
+       "body": "A **Pod** is one or more containers that share a network namespace (one IP, `localhost` between them) and can share volumes. All containers in a Pod land on the same node and live and die together. Pods are **ephemeral**: when one is deleted or its node fails, it is replaced by a new Pod with a new IP, which is why you rarely create bare Pods in production and use controllers like Deployments instead."
+      },
+      {
+       "type": "table",
+       "title": "Pod phases",
+       "head": [
+        "Phase",
+        "Meaning"
+       ],
+       "rows": [
+        [
+         "`Pending`",
+         "Accepted, but not yet scheduled or images still pulling."
+        ],
+        [
+         "`Running`",
+         "Bound to a node and at least one container is running or restarting."
+        ],
+        [
+         "`Succeeded`",
+         "All containers exited with code 0 and will not restart."
+        ],
+        [
+         "`Failed`",
+         "All containers terminated and at least one failed."
+        ],
+        [
+         "`Unknown`",
+         "Node state cannot be determined."
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "Restart policy and init containers",
+       "body": "`restartPolicy` (`Always` default, `OnFailure`, `Never`) controls whether the kubelet restarts containers that exit. Repeated crashes are delayed with exponential back-off, shown as `CrashLoopBackOff`.\n\n**Init containers** run to completion one at a time before app containers start, useful for waiting on a dependency or preparing files."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: api\nspec:\n  restartPolicy: Always\n  initContainers:\n    - name: wait-db\n      image: busybox:1.36\n      command: ['sh', '-c', 'until nc -z db 5432; do sleep 2; done']\n  containers:\n    - name: api\n      image: ghcr.io/example/api:1.4\n      ports:\n        - containerPort: 8080\n      readinessProbe:\n        httpGet:\n          path: /ready\n          port: 8080\n        periodSeconds: 5\n      livenessProbe:\n        httpGet:\n          path: /healthz\n          port: 8080\n        initialDelaySeconds: 10\n        periodSeconds: 10",
+       "title": "Init container and probes",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Probes",
+       "head": [
+        "Probe",
+        "Failure means"
+       ],
+       "rows": [
+        [
+         "`startupProbe`",
+         "App still starting; other probes are held off until it passes."
+        ],
+        [
+         "`livenessProbe`",
+         "Container is stuck: the kubelet restarts it."
+        ],
+        [
+         "`readinessProbe`",
+         "Not ready for traffic: removed from Service endpoints, not restarted."
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Do not make liveness depend on other services",
+       "body": "A liveness probe that checks the database will restart healthy app containers whenever the database blips. Keep liveness local to the process."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get pod api -w\nkubectl describe pod api\nkubectl logs api -c api --previous\nkubectl get pod api -o jsonpath='{.status.phase}'",
+       "title": "Debugging a Pod",
+       "output": null,
+       "note": "`--previous` shows logs of the last crashed container instance."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Watch a Pod start",
+       "prompt": "Apply the Pod and watch it move through states.",
+       "command": "kubectl get pod api -w",
+       "expected": "Status progresses Init:0/1, PodInitializing, Running.",
+       "hint": "Init containers show as Init:N/M.",
+       "solution": null
+      },
+      {
+       "title": "Read a crash",
+       "prompt": "Fetch logs from the previous container instance of a crash-looping Pod.",
+       "command": "kubectl logs api --previous",
+       "expected": "Output from the last terminated container, explaining why it exited.",
+       "hint": "Add --previous to logs.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What do containers in the same Pod share?",
+        "options": [
+         "Filesystem root",
+         "Network namespace",
+         "Process IDs by default",
+         "Node-independent IPs"
+        ],
+        "answer": 1,
+        "explain": "They share one IP and can reach each other on localhost."
+       },
+       {
+        "question": "A failing readiness probe causes...",
+        "options": [
+         "Container restart",
+         "Pod deletion",
+         "Removal from Service endpoints",
+         "Node drain"
+        ],
+        "answer": 2,
+        "explain": "Readiness only controls traffic; liveness triggers restarts."
+       },
+       {
+        "question": "When do init containers run?",
+        "options": [
+         "In parallel with app containers",
+         "After app containers",
+         "Sequentially, to completion, before app containers",
+         "Only on failure"
+        ],
+        "answer": 2,
+        "explain": "Each init container must succeed before the next, and before app containers start."
+       },
+       {
+        "question": "What does CrashLoopBackOff mean?",
+        "options": [
+         "Image not found",
+         "Container keeps crashing and restarts are delayed",
+         "Node is down",
+         "Probe not defined"
+        ],
+        "answer": 1,
+        "explain": "The kubelet applies exponential back-off between restarts of a failing container."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-namespaces-labels"
+     ],
+     "tags": [
+      "pods",
+      "probes"
+     ],
+     "commands": [
+      "kubectl get",
+      "kubectl describe",
+      "kubectl logs"
+     ],
+     "sources": [
+      {
+       "title": "Pods",
+       "url": "https://kubernetes.io/docs/concepts/workloads/pods/"
+      },
+      {
+       "title": "Pod lifecycle",
+       "url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+      },
+      {
+       "title": "Configure probes",
+       "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-namespaces-labels",
+     "title": "Namespaces, labels, selectors and annotations",
+     "duration": "25 min",
+     "summary": "Organize and select objects with namespaces, labels and selectors, and attach metadata with annotations.",
+     "objectives": [
+      "Isolate resources with namespaces",
+      "Label objects and query them with selectors",
+      "Know when to use annotations instead of labels"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Namespaces",
+       "body": "A **namespace** is a scope for names and for policy. Two teams can each have a Pod called `web` in different namespaces. Quotas, RBAC and network policies attach to namespaces. Default ones are `default`, `kube-system`, `kube-public` and `kube-node-lease`. Namespaces are not a hard security boundary on their own, and some objects (Nodes, PersistentVolumes) are cluster-scoped."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl create namespace staging\nkubectl get pods -n staging\nkubectl get pods -A\nkubectl config set-context --current --namespace=staging",
+       "title": "Namespace commands",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "Labels and selectors",
+       "body": "**Labels** are key/value pairs on objects, used for identification and grouping. **Selectors** query them, and this is how Services find Pods and Deployments find their ReplicaSets. Labels are the glue of Kubernetes."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-1\n  namespace: staging\n  labels:\n    app: web\n    tier: frontend\n    env: staging\n  annotations:\n    owner: team-shop@example.com\n    build-url: https://ci.example.com/job/412\nspec:\n  containers:\n    - name: nginx\n      image: nginx:1.27",
+       "title": "Labels and annotations",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get pods -l app=web\nkubectl get pods -l 'env in (staging,prod),tier!=backend'\nkubectl get pods --show-labels\nkubectl label pod web-1 version=v2\nkubectl annotate pod web-1 note='checked'",
+       "title": "Selecting and editing",
+       "output": null,
+       "note": "Equality (`=`, `!=`) and set-based (`in`, `notin`, existence) selectors are both supported."
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "Labels versus annotations",
+       "body": "Use labels for data you will select on. Annotations hold non-identifying metadata (URLs, owners, tool config) and cannot be used in selectors. Label values are limited to 63 characters."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Select by label",
+       "prompt": "List Pods in all namespaces whose label app equals web.",
+       "command": "kubectl get pods -A -l app=web",
+       "expected": "Only Pods carrying app=web, with a NAMESPACE column.",
+       "hint": "Use -A and -l together.",
+       "solution": null
+      },
+      {
+       "title": "Add a label",
+       "prompt": "Add the label version=v2 to the Pod web-1 and confirm it.",
+       "command": "kubectl label pod web-1 version=v2",
+       "expected": "pod/web-1 labeled; kubectl get pod web-1 --show-labels shows version=v2.",
+       "hint": "Use kubectl label.",
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which object type is cluster-scoped, not namespaced?",
+        "options": [
+         "Pod",
+         "Service",
+         "Node",
+         "ConfigMap"
+        ],
+        "answer": 2,
+        "explain": "Nodes and PersistentVolumes exist outside any namespace."
+       },
+       {
+        "question": "How does a Service typically find its Pods?",
+        "options": [
+         "By name",
+         "By label selector",
+         "By IP range",
+         "By annotation"
+        ],
+        "answer": 1,
+        "explain": "Services use a label selector to build their endpoint list."
+       },
+       {
+        "question": "Which statement about annotations is true?",
+        "options": [
+         "They can be used in selectors",
+         "They hold non-identifying metadata",
+         "They are required on every object",
+         "They replace labels"
+        ],
+        "answer": 1,
+        "explain": "Annotations are arbitrary metadata and are not queryable by selectors."
+       },
+       {
+        "question": "What does kubectl get pods -A do?",
+        "options": [
+         "Lists all Pod annotations",
+         "Lists Pods across all namespaces",
+         "Lists only active Pods",
+         "Lists Pods on all nodes only"
+        ],
+        "answer": 1,
+        "explain": "-A is shorthand for --all-namespaces."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-pods-in-depth"
+     ],
+     "tags": [
+      "namespaces",
+      "labels"
+     ],
+     "commands": [
+      "kubectl label",
+      "kubectl annotate",
+      "kubectl get",
+      "kubectl create namespace"
+     ],
+     "sources": [
+      {
+       "title": "Namespaces",
+       "url": "https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/"
+      },
+      {
+       "title": "Labels and selectors",
+       "url": "https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/"
+      },
+      {
+       "title": "Annotations",
+       "url": "https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [],
+ "track": "kubernetes"
+}

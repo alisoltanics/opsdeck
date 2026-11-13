@@ -14,6 +14,8 @@
   <link rel="stylesheet" href="./styles/databases.css">
   <link rel="stylesheet" href="./styles/observability.css">
   <link rel="stylesheet" href="./styles/intelligence.css">
+  <link rel="stylesheet" href="./styles/help.css">
+  <link rel="stylesheet" href="./styles/rtl.css">
   <link rel="stylesheet" href="./vendor/xterm.css">
 </head>
 <body>
@@ -21,6 +23,7 @@
     <aside class="sidebar" id="sidebar" aria-label="Primary navigation"></aside>
     <div class="main">
       <header class="topbar" id="topbar"></header>
+      <div class="main-body" id="main-body">
       <main class="content" id="content" tabindex="-1">
         <div class="content-inner" id="view">
           <div class="boot-screen">
@@ -33,6 +36,8 @@
           </div>
         </div>
       </main>
+      <aside class="help-dock" id="help-dock" aria-label="Help" hidden></aside>
+      </div>
     </div>
   </div>
 
@@ -40,6 +45,17 @@
   <div id="palette-root"></div>
   <div class="toast-root" id="toast-root" aria-live="polite" aria-atomic="false"></div>
 
+  <script src="./js/i18n.js" defer></script>
+  <script src="./js/i18n/fa-1.js" defer></script>
+  <script src="./js/i18n/fa-2.js" defer></script>
+  <script src="./js/i18n/fa-3.js" defer></script>
+  <script src="./js/i18n/fa-4.js" defer></script>
+  <script src="./js/i18n/fa-5.js" defer></script>
+  <script src="./js/i18n/fa-6.js" defer></script>
+  <script src="./js/i18n/fa-7.js" defer></script>
+  <script src="./js/i18n/fa-8.js" defer></script>
+  <script src="./js/i18n/fa-9.js" defer></script>
+  <script src="./js/i18n/fa-10.js" defer></script>
   <script src="./js/icons.js" defer></script>
   <script src="./js/utils.js" defer></script>
   <script src="./js/charts.js" defer></script>
@@ -56,6 +72,19 @@
   <script src="./js/intelligence-views.js" defer></script>
   <script src="./js/insights-views.js" defer></script>
   <script src="./js/academy-views.js" defer></script>
+  <script src="./js/help/docker.js" defer></script>
+  <script src="./js/help/kubernetes.js" defer></script>
+  <script src="./js/help/databases.js" defer></script>
+  <script src="./js/help/observability.js" defer></script>
+  <script src="./js/help/intelligence.js" defer></script>
+  <script src="./js/help-fa/docker.js" defer></script>
+  <script src="./js/help-fa/kubernetes-1.js" defer></script>
+  <script src="./js/help-fa/kubernetes-2.js" defer></script>
+  <script src="./js/help-fa/databases.js" defer></script>
+  <script src="./js/help-fa/observability-1.js" defer></script>
+  <script src="./js/help-fa/observability-2.js" defer></script>
+  <script src="./js/help-fa/intelligence.js" defer></script>
+  <script src="./js/help-views.js" defer></script>
   <script src="./js/app.js" defer></script>
 </body>
 </html>
