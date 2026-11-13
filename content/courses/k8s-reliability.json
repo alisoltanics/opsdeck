@@ -1,0 +1,1109 @@
+{
+  "id": "k8s-reliability",
+  "order": 29,
+  "title": "Observability and Reliability",
+  "subtitle": "Metrics, logs, SLOs, resilience and incident response",
+  "level": "Advanced",
+  "duration": "1h 8m",
+  "icon": "gauge",
+  "accent": "amber",
+  "description": "Build the monitoring pipeline, define SLOs with burn-rate alerts, make workloads survive disruption and run incidents with the right debugging tools.",
+  "outcomes": [
+    "Wire metrics-server, Prometheus, ServiceMonitors and kube-state-metrics",
+    "Collect structured logs and traces with OpenTelemetry",
+    "Alert on error-budget burn instead of raw thresholds",
+    "Shut down gracefully, use PDBs and debug with ephemeral containers"
+  ],
+  "modules": [
+    {
+      "id": "k8s-rel-observability",
+      "title": "Observability",
+      "summary": "Metrics, logs, traces and alerting on SLOs.",
+      "lessons": [
+        {
+          "id": "k8s-rel-metrics-pipeline",
+          "title": "The Kubernetes metrics pipeline",
+          "duration": "14 min",
+          "summary": "metrics-server for kubectl top and HPA, Prometheus for history, ServiceMonitor for discovery and kube-state-metrics for object state.",
+          "objectives": [
+            "Distinguish the resource metrics API from a full monitoring pipeline",
+            "Scrape an application with a ServiceMonitor",
+            "Explain what kube-state-metrics adds and write useful PromQL"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Two pipelines, two jobs",
+              "body": "Kubernetes has **two separate metrics paths**. The **resource metrics pipeline** is served by `metrics-server`: it scrapes the kubelet on every node, keeps only the latest sample in memory and exposes it through the `metrics.k8s.io` API. It powers `kubectl top` and the HorizontalPodAutoscaler, and nothing else. It has no history and no custom metrics.\n\nThe **full monitoring pipeline** is usually Prometheus (often installed with the kube-prometheus-stack Helm chart). It scrapes the kubelet/cAdvisor, your applications, and `kube-state-metrics` (which turns the state of API objects into metrics), stores time series and lets you query, graph and alert on them. In production you run both: metrics-server for autoscaling, Prometheus for everything else."
+            },
+            {
+              "type": "table",
+              "title": "What each component provides",
+              "head": [
+                "Component",
+                "Data source",
+                "Retention",
+                "Used for"
+              ],
+              "rows": [
+                [
+                  "metrics-server",
+                  "kubelet /metrics/resource (CPU, memory per pod and node)",
+                  "Latest sample only (~15s window)",
+                  "kubectl top, HPA, VPA"
+                ],
+                [
+                  "Prometheus",
+                  "Any /metrics endpoint: kubelet, cAdvisor, apps, exporters",
+                  "Days to weeks on local disk (default 15d)",
+                  "Dashboards, alerts, capacity planning"
+                ],
+                [
+                  "kube-state-metrics",
+                  "The Kubernetes API (Deployments, Pods, Nodes, Jobs...)",
+                  "None itself; Prometheus stores it",
+                  "Replica counts, pod phase, restart counts, requests/limits"
+                ],
+                [
+                  "node-exporter",
+                  "Node OS: disk, network, load, filesystem",
+                  "None itself",
+                  "Host-level saturation and failures"
+                ],
+                [
+                  "Prometheus Operator",
+                  "ServiceMonitor, PodMonitor and PrometheusRule CRDs",
+                  "n/a",
+                  "Declarative scrape and alert configuration"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: metrics-server in action",
+              "body": "The block below checks that the `metrics.k8s.io` API is registered and then reads live usage. Run it on any cluster where metrics-server is installed; the `AVAILABLE True` line proves the aggregated API works. In `kubectl top`, the CPU column is in millicores (`m`) and memory in mebibytes (`Mi`), averaged over the last scrape window, not a historic peak."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Verify metrics-server and read usage",
+              "code": "kubectl get apiservice v1beta1.metrics.k8s.io\nkubectl top nodes\nkubectl top pods -n shop --sort-by=memory",
+              "output": "NAME                     SERVICE                      AVAILABLE   AGE\nv1beta1.metrics.k8s.io   kube-system/metrics-server   True        41d\n\nNAME       CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%\nnode-a     412m         10%    3120Mi          41%\nnode-b     988m         24%    5410Mi          71%\n\nNAME                       CPU(cores)   MEMORY(bytes)\ncheckout-7d9c6b8f5-x2k4p   240m         512Mi\ncheckout-7d9c6b8f5-q8wzr   231m         498Mi\nweb-5f7b9d8c6-m4t2n        12m          64Mi",
+              "note": "If AVAILABLE shows False (MissingEndpoints), `kubectl top` fails with 'Metrics API not available'. On clusters with self-signed kubelet certificates, metrics-server needs --kubelet-insecure-tls only in test environments."
+            },
+            {
+              "type": "text",
+              "title": "About this example: scraping an app with a ServiceMonitor",
+              "body": "With the Prometheus Operator you do not edit prometheus.yml. A **ServiceMonitor** selects Services by label and tells Prometheus which named port and path to scrape. Apply this file with `kubectl apply -f servicemonitor.yaml`; look at `selector.matchLabels` (must match the Service labels), `port` (the Service port name, not number) and `release: kube-prometheus-stack`, which is the label the Prometheus instance uses to pick up monitors in the default Helm install."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "ServiceMonitor for the checkout service",
+              "code": "apiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: checkout\n  namespace: shop\n  labels:\n    release: kube-prometheus-stack\nspec:\n  selector:\n    matchLabels:\n      app: checkout\n  namespaceSelector:\n    matchNames:\n      - shop\n  endpoints:\n    - port: metrics\n      path: /metrics\n      interval: 30s\n      scrapeTimeout: 10s\n",
+              "output": null,
+              "note": "Requires the monitoring.coreos.com CRDs. Verify with: kubectl get servicemonitor -n shop. Then open Prometheus > Status > Targets and look for serviceMonitor/shop/checkout/0 in state UP."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Empty targets usually means a label mismatch",
+              "body": "If the target never appears, check three things in order: the ServiceMonitor carries the label your Prometheus `serviceMonitorSelector` expects, its `selector.matchLabels` matches the **Service** (not the Pod) labels, and the `port` is the Service's port **name**. A Service with an unnamed port cannot be scraped by a ServiceMonitor."
+            },
+            {
+              "type": "text",
+              "title": "About this example: PromQL against cAdvisor and kube-state-metrics",
+              "body": "These queries are what you type into the Prometheus expression browser (or Grafana). The first set uses cAdvisor series (`container_*`) from the kubelet, the second uses kube-state-metrics (`kube_*`). Each sample result is an instant vector: labels on the left, the current value on the right. Pay attention to `rate()` over counters and to `sum by` to collapse per-container series into per-pod or per-namespace totals."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "Useful PromQL with sample results",
+              "code": "# CPU cores used per pod (5m rate of a counter)\nsum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"shop\",container!=\"\"}[5m]))\n{pod=\"checkout-7d9c6b8f5-x2k4p\"}  0.241\n{pod=\"checkout-7d9c6b8f5-q8wzr\"}  0.233\n\n# Working-set memory vs limit (ratio near 1 means OOM risk)\nmax by (pod) (container_memory_working_set_bytes{namespace=\"shop\",container!=\"\"})\n  / max by (pod) (kube_pod_container_resource_limits{namespace=\"shop\",resource=\"memory\"})\n{pod=\"checkout-7d9c6b8f5-x2k4p\"}  0.94\n\n# Pods not ready per namespace\nsum by (namespace) (kube_pod_status_ready{condition=\"false\"})\n{namespace=\"shop\"}  2\n\n# Containers restarted in the last hour\nsum by (pod) (increase(kube_pod_container_status_restarts_total[1h])) > 0\n{pod=\"worker-6c4d-zq7lp\"}  7\n\n# Deployments with fewer available replicas than desired\nkube_deployment_spec_replicas - kube_deployment_status_replicas_available > 0\n{deployment=\"checkout\",namespace=\"shop\"}  1",
+              "output": null,
+              "note": "Use the working set (container_memory_working_set_bytes), not usage_bytes: it is what the kubelet compares against the limit when deciding to OOM-kill."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Read live resource usage",
+              "prompt": "Confirm the Metrics API is available, then list the five heaviest pods by memory across all namespaces.",
+              "command": "kubectl top pods -A --sort-by=memory | head -6",
+              "expected": "A header line plus five pods, sorted by memory descending, with CPU in millicores and memory in Mi.",
+              "hint": "Metrics need ~1 minute after pod creation to appear.",
+              "solution": "kubectl top pods -A --sort-by=memory | head -6"
+            },
+            {
+              "title": "Find crash-looping pods with PromQL",
+              "prompt": "In Prometheus, write a query returning pods that restarted more than 3 times in the last hour.",
+              "command": "sum by (namespace,pod) (increase(kube_pod_container_status_restarts_total[1h])) > 3",
+              "expected": "One series per qualifying pod with its restart count as value; empty if none.",
+              "hint": "Counters need increase() or rate(), never the raw value.",
+              "solution": "sum by (namespace,pod) (increase(kube_pod_container_status_restarts_total[1h])) > 3"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which component stores history and supports alerting?",
+                "options": [
+                  "metrics-server",
+                  "Prometheus",
+                  "kubelet",
+                  "kube-proxy"
+                ],
+                "answer": 1,
+                "explain": "metrics-server keeps only the latest sample; Prometheus stores time series and evaluates alert rules."
+              },
+              {
+                "question": "A ServiceMonitor target does not appear. What should you check first?",
+                "options": [
+                  "The node's kernel version",
+                  "Label selectors and the named Service port",
+                  "The Pod's image tag",
+                  "The namespace quota"
+                ],
+                "answer": 1,
+                "explain": "ServiceMonitors select Services by label and reference the port name, and Prometheus must select the monitor itself."
+              },
+              {
+                "question": "Why wrap container_cpu_usage_seconds_total in rate()?",
+                "options": [
+                  "It is a counter that only increases",
+                  "It is a histogram",
+                  "It reports bytes",
+                  "To convert to memory"
+                ],
+                "answer": 0,
+                "explain": "Counters grow monotonically; rate() converts them to per-second usage, i.e. CPU cores."
+              },
+              {
+                "question": "What does kube-state-metrics export?",
+                "options": [
+                  "Container CPU from cgroups",
+                  "Object state derived from the Kubernetes API",
+                  "Node disk IO",
+                  "Application logs"
+                ],
+                "answer": 1,
+                "explain": "It watches the API server and exposes replica counts, pod phases, restarts, requests and limits as metrics."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-autoscaling-maintenance",
+            "k8s-probes-resources"
+          ],
+          "tags": [
+            "metrics",
+            "prometheus",
+            "servicemonitor",
+            "promql"
+          ],
+          "commands": [
+            "kubectl top",
+            "kubectl get apiservice",
+            "helm install"
+          ],
+          "sources": [
+            {
+              "title": "Resource metrics pipeline",
+              "url": "https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/"
+            },
+            {
+              "title": "Resource usage monitoring",
+              "url": "https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-usage-monitoring/"
+            },
+            {
+              "title": "Prometheus Operator ServiceMonitor",
+              "url": "https://prometheus-operator.dev/docs/developer/getting-started/"
+            },
+            {
+              "title": "kube-state-metrics docs",
+              "url": "https://github.com/kubernetes/kube-state-metrics/tree/main/docs"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-rel-logging-tracing",
+          "title": "Logging and tracing",
+          "duration": "13 min",
+          "summary": "Log collection patterns, structured JSON logs and OpenTelemetry basics for following a request across services.",
+          "objectives": [
+            "Compare node-agent, sidecar and direct-push log collection",
+            "Emit structured logs that can be queried by field",
+            "Explain traces, spans and the OpenTelemetry Collector"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Containers write to stdout, something else ships it",
+              "body": "Kubernetes does not store logs long term. A container that writes to stdout/stderr has its output captured by the container runtime into a file on the node (`/var/log/pods/...`), which is what `kubectl logs` reads. When the pod is deleted or the node is rotated, those files go with it, and the kubelet rotates them by size (default 10Mi, 5 files).\n\nSo a logging architecture always needs a **collector** that moves logs off the node into a searchable store such as Loki, Elasticsearch or a cloud service. Metrics tell you *that* something is wrong; logs tell you *what happened*; traces tell you *where* in a chain of services the time went."
+            },
+            {
+              "type": "table",
+              "title": "Log collection patterns",
+              "head": [
+                "Pattern",
+                "How it works",
+                "Pros",
+                "Cons"
+              ],
+              "rows": [
+                [
+                  "Node agent (DaemonSet)",
+                  "Fluent Bit / Promtail / Vector tails /var/log/pods on each node",
+                  "One per node, no app change, standard choice",
+                  "Only sees stdout/stderr and mounted files"
+                ],
+                [
+                  "Sidecar",
+                  "A second container tails a file the app writes into a shared emptyDir",
+                  "Handles apps that only write files; per-app parsing",
+                  "Extra CPU/memory per pod"
+                ],
+                [
+                  "Direct push",
+                  "The app sends logs to the backend over the network",
+                  "No node component",
+                  "Couples app to backend; loses logs on outage"
+                ],
+                [
+                  "Cluster-level API only",
+                  "Rely on kubectl logs",
+                  "Zero setup",
+                  "No history, lost with the pod"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a node log agent as a DaemonSet",
+              "body": "This manifest runs Fluent Bit on every node and mounts the host's `/var/log` read-only so it can tail container logs. Apply it with `kubectl apply -f fluent-bit.yaml`. Look at the `hostPath` volume, the `tolerations` (so it also runs on tainted nodes) and the resource limits that stop the agent starving workloads. The ConfigMap with the pipeline is omitted here for brevity, so the pod will start but needs your output configuration."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "Fluent Bit DaemonSet",
+              "code": "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: fluent-bit\n  namespace: default\n  labels:\n    app: fluent-bit\nspec:\n  selector:\n    matchLabels:\n      app: fluent-bit\n  template:\n    metadata:\n      labels:\n        app: fluent-bit\n    spec:\n      tolerations:\n        - operator: Exists\n      containers:\n        - name: fluent-bit\n          image: cr.fluentbit.io/fluent/fluent-bit:3.1\n          resources:\n            requests: {cpu: 50m, memory: 64Mi}\n            limits: {memory: 128Mi}\n          volumeMounts:\n            - name: varlog\n              mountPath: /var/log\n              readOnly: true\n      volumes:\n        - name: varlog\n          hostPath:\n            path: /var/log\n",
+              "output": null,
+              "note": "Check rollout with: kubectl rollout status ds/fluent-bit. One pod per node should be Running."
+            },
+            {
+              "type": "text",
+              "title": "About this example: unstructured vs structured logs",
+              "body": "The block contrasts the same event written two ways. Free text needs a regex to extract fields and breaks when the message wording changes. A JSON line carries stable keys, so your log backend can filter by `level`, `status` or `trace_id` without parsing. The output of `kubectl logs` shows what the collector will ingest; the last command shows a LogQL query (Loki) filtering on those fields."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Structured logging and querying",
+              "code": "kubectl logs deploy/checkout -n shop --tail=2\n\n# LogQL (Loki): errors for one trace\n# {namespace=\"shop\", app=\"checkout\"} | json | level=\"error\" | trace_id=\"4bf92f3577b34da6a3ce929d0e0e4736\"",
+              "output": "{\"ts\":\"2026-11-13T09:14:02.113Z\",\"level\":\"info\",\"msg\":\"order created\",\"order_id\":\"o-8812\",\"duration_ms\":84,\"trace_id\":\"4bf92f3577b34da6a3ce929d0e0e4736\"}\n{\"ts\":\"2026-11-13T09:14:02.390Z\",\"level\":\"error\",\"msg\":\"payment declined\",\"order_id\":\"o-8813\",\"status\":402,\"trace_id\":\"9a1c0d44f1c14e5e8b2f6e1c7d3a9b10\"}\n\n# unstructured equivalent:\n# 09:14:02 ERROR payment declined for order o-8813 (402)",
+              "note": "Always log the trace_id: it is the join key between logs and traces. Never log secrets, tokens or full card numbers."
+            },
+            {
+              "type": "text",
+              "title": "About this example: OpenTelemetry Collector configuration",
+              "body": "A **trace** is the path of one request; each hop is a **span** with a start time, duration and parent. The OpenTelemetry Collector receives spans from applications (OTLP), batches them and exports to a backend such as Tempo or Jaeger. This file is a Collector config (not a Kubernetes object, so it uses language `text`) normally stored in a ConfigMap and mounted at `/etc/otelcol/config.yaml`. Read the three pipeline stages in order: `receivers`, `processors`, `exporters`, joined under `service.pipelines`."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "otel-collector config.yaml",
+              "code": "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_mib: 400\n  k8sattributes: {}\n  batch:\n    timeout: 5s\nexporters:\n  otlp/tempo:\n    endpoint: tempo.observability.svc:4317\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, k8sattributes, batch]\n      exporters: [otlp/tempo]",
+              "output": null,
+              "note": "The k8sattributes processor adds pod, namespace and node labels to every span, so you can pivot from a slow trace to the pod that served it. Applications only need OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317."
+            },
+            {
+              "type": "table",
+              "title": "The three signals compared",
+              "head": [
+                "Signal",
+                "Question it answers",
+                "Cardinality cost",
+                "Typical store"
+              ],
+              "rows": [
+                [
+                  "Metrics",
+                  "Is something wrong, and how much?",
+                  "Low (aggregated numbers)",
+                  "Prometheus, Mimir"
+                ],
+                [
+                  "Logs",
+                  "What exactly happened?",
+                  "High (every event)",
+                  "Loki, Elasticsearch"
+                ],
+                [
+                  "Traces",
+                  "Where did the time go across services?",
+                  "Medium (sampled)",
+                  "Tempo, Jaeger"
+                ]
+              ]
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Read logs of a crashed container",
+              "prompt": "Fetch the previous instance's logs of a pod that restarted and the last 20 lines with timestamps.",
+              "command": "kubectl logs POD --previous --tail=20 --timestamps",
+              "expected": "Time-prefixed lines from the container instance that crashed.",
+              "hint": "Use -c NAME when a pod has several containers.",
+              "solution": "kubectl logs POD --previous --tail=20 --timestamps"
+            },
+            {
+              "title": "Follow many pods at once",
+              "prompt": "Stream logs from all pods behind a label for the last 5 minutes.",
+              "command": "kubectl logs -l app=checkout -n shop --since=5m --prefix",
+              "expected": "Each line is prefixed with [pod/name/container].",
+              "hint": "--max-log-requests raises the default limit of 5 concurrent streams.",
+              "solution": "kubectl logs -l app=checkout -n shop --since=5m --prefix --max-log-requests=10"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Where does kubectl logs read from?",
+                "options": [
+                  "etcd",
+                  "The log file the runtime keeps on the node",
+                  "The Prometheus server",
+                  "The API server database"
+                ],
+                "answer": 1,
+                "explain": "The kubelet serves the file the container runtime writes under /var/log/pods on that node."
+              },
+              {
+                "question": "Which pattern is the standard way to collect stdout logs from every node?",
+                "options": [
+                  "A node agent DaemonSet",
+                  "One Deployment with 1 replica",
+                  "CronJob",
+                  "InitContainer"
+                ],
+                "answer": 0,
+                "explain": "A DaemonSet runs one collector per node and tails the node's container log files."
+              },
+              {
+                "question": "What links a log line to a distributed trace?",
+                "options": [
+                  "The pod IP",
+                  "A trace_id field logged with the event",
+                  "The node name",
+                  "The image digest"
+                ],
+                "answer": 1,
+                "explain": "Putting the trace id in each log line lets you jump between the two signals."
+              },
+              {
+                "question": "What does the OpenTelemetry Collector's batch processor do?",
+                "options": [
+                  "Encrypts spans",
+                  "Groups telemetry before export to reduce requests",
+                  "Deletes old traces",
+                  "Starts pods"
+                ],
+                "answer": 1,
+                "explain": "Batching reduces export overhead and smooths bursts."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-daemonsets",
+            "k8s-troubleshoot-pods"
+          ],
+          "tags": [
+            "logging",
+            "tracing",
+            "opentelemetry",
+            "fluent-bit"
+          ],
+          "commands": [
+            "kubectl logs",
+            "kubectl rollout status"
+          ],
+          "sources": [
+            {
+              "title": "Logging architecture",
+              "url": "https://kubernetes.io/docs/concepts/cluster-administration/logging/"
+            },
+            {
+              "title": "Traces for Kubernetes system components",
+              "url": "https://kubernetes.io/docs/concepts/cluster-administration/system-traces/"
+            },
+            {
+              "title": "OpenTelemetry Collector",
+              "url": "https://opentelemetry.io/docs/collector/"
+            },
+            {
+              "title": "Fluent Bit on Kubernetes",
+              "url": "https://docs.fluentbit.io/manual/installation/kubernetes"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-rel-slo-alerting",
+          "title": "Alerting, SLIs and SLOs",
+          "duration": "14 min",
+          "summary": "Define service level indicators, set SLOs and error budgets, and alert on burn rate with a PrometheusRule.",
+          "objectives": [
+            "Define an SLI, SLO and error budget with real numbers",
+            "Explain why burn-rate alerts beat static thresholds",
+            "Write a multi-window PrometheusRule and route it with Alertmanager"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Alert on user pain, not on causes",
+              "body": "A **Service Level Indicator (SLI)** is a measurement of user-visible quality, usually a ratio: good events divided by valid events (for example, requests answered without a 5xx in under 300 ms). A **Service Level Objective (SLO)** is the target for that ratio over a window, such as 99.9% over 30 days. The **error budget** is what remains: 100% minus the SLO.\n\nAlerting on CPU above 80% pages people for things users never notice. Alerting on **budget burn** pages people only when users are being hurt fast enough to threaten the objective. This is the approach of the Google SRE workbook and it works well with Prometheus."
+            },
+            {
+              "type": "table",
+              "title": "SLO targets and what they allow",
+              "head": [
+                "SLO (30 days)",
+                "Error budget",
+                "Allowed downtime",
+                "Meaning"
+              ],
+              "rows": [
+                [
+                  "99%",
+                  "1%",
+                  "7h 12m",
+                  "Internal tools, batch systems"
+                ],
+                [
+                  "99.9%",
+                  "0.1%",
+                  "43m 12s",
+                  "Typical customer-facing API"
+                ],
+                [
+                  "99.95%",
+                  "0.05%",
+                  "21m 36s",
+                  "Revenue-critical paths"
+                ],
+                [
+                  "99.99%",
+                  "0.01%",
+                  "4m 19s",
+                  "Needs multi-region and automation; very costly"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: recording the SLI",
+              "body": "These Prometheus recording rules turn raw request counters into an error ratio at several windows. They live inside a PrometheusRule object, applied with `kubectl apply -f`, and the operator loads them into Prometheus. Look at `rate(...[5m])` for the short window and `[1h]`, `[6h]` for long ones; the metric name `http_requests_total` and its `code` label are assumptions about your app. Recording the ratio once keeps the alert expressions cheap and readable."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "PrometheusRule: SLI recording rules",
+              "code": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: checkout-sli\n  namespace: shop\n  labels:\n    release: kube-prometheus-stack\nspec:\n  groups:\n    - name: checkout.sli\n      rules:\n        - record: job:http_errors:ratio_rate5m\n          expr: |\n            sum(rate(http_requests_total{job=\"checkout\",code=~\"5..\"}[5m]))\n            /\n            sum(rate(http_requests_total{job=\"checkout\"}[5m]))\n        - record: job:http_errors:ratio_rate1h\n          expr: |\n            sum(rate(http_requests_total{job=\"checkout\",code=~\"5..\"}[1h]))\n            /\n            sum(rate(http_requests_total{job=\"checkout\"}[1h]))\n",
+              "output": null,
+              "note": "Check that it loaded: kubectl get prometheusrule -n shop, then query job:http_errors:ratio_rate5m in Prometheus."
+            },
+            {
+              "type": "table",
+              "title": "Burn-rate alert tiers (SLO 99.9%, 30-day window)",
+              "head": [
+                "Severity",
+                "Burn rate",
+                "Long window",
+                "Short window",
+                "Budget consumed"
+              ],
+              "rows": [
+                [
+                  "Page (fast)",
+                  "14.4",
+                  "1h",
+                  "5m",
+                  "2% in 1 hour"
+                ],
+                [
+                  "Page (slow)",
+                  "6",
+                  "6h",
+                  "30m",
+                  "5% in 6 hours"
+                ],
+                [
+                  "Ticket",
+                  "1",
+                  "3d",
+                  "6h",
+                  "10% in 3 days"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: multi-window burn-rate alerts",
+              "body": "Burn rate is the observed error ratio divided by the budget (0.001 for a 99.9% SLO). A rate of 14.4 sustained for an hour burns 2% of the monthly budget. Requiring both the long and the short window to exceed the threshold gives fast detection and fast reset: the short window stops the alert firing long after the problem is fixed. This second rule file is applied the same way; read the `expr` threshold `14.4 * 0.001`, the `for` duration and the `severity` label that Alertmanager routes on."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "PrometheusRule: burn-rate alerts",
+              "code": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: checkout-slo-alerts\n  namespace: shop\n  labels:\n    release: kube-prometheus-stack\nspec:\n  groups:\n    - name: checkout.slo\n      rules:\n        - alert: CheckoutErrorBudgetBurnFast\n          expr: |\n            job:http_errors:ratio_rate1h > (14.4 * 0.001)\n            and\n            job:http_errors:ratio_rate5m > (14.4 * 0.001)\n          for: 2m\n          labels:\n            severity: page\n          annotations:\n            summary: Checkout is burning its 30d error budget 14x too fast\n            description: Error ratio {{ $value | humanizePercentage }} over the last hour.\n            runbook_url: https://runbooks.example.com/checkout-errors\n        - alert: CheckoutErrorBudgetBurnSlow\n          expr: |\n            job:http_errors:ratio_rate6h > (6 * 0.001)\n            and\n            job:http_errors:ratio_rate30m > (6 * 0.001)\n          for: 15m\n          labels:\n            severity: ticket\n          annotations:\n            summary: Checkout error budget is burning steadily\n",
+              "output": null,
+              "note": "The slow alert needs ratio_rate6h and ratio_rate30m recording rules defined the same way as the 5m and 1h ones above."
+            },
+            {
+              "type": "text",
+              "title": "About this example: Alertmanager routing",
+              "body": "Alertmanager receives firing alerts, groups, deduplicates and sends them to receivers. This is an `alertmanager.yaml` fragment (language `text`, as it is not a Kubernetes object; with kube-prometheus-stack it is supplied through Helm values or an AlertmanagerConfig). The `route` tree sends `severity=page` to the on-call receiver and everything else to chat; `inhibit_rules` silence a lesser alert while a bigger one for the same service is firing."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "alertmanager.yaml route",
+              "code": "route:\n  receiver: slack-default\n  group_by: [alertname, namespace]\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n    - matchers: [severity=\"page\"]\n      receiver: pagerduty-oncall\nreceivers:\n  - name: slack-default\n    slack_configs:\n      - channel: '#alerts'\n        api_url_file: /etc/alertmanager/secrets/slack-url\n  - name: pagerduty-oncall\n    pagerduty_configs:\n      - routing_key_file: /etc/alertmanager/secrets/pd-key\ninhibit_rules:\n  - source_matchers: [severity=\"page\"]\n    target_matchers: [severity=\"ticket\"]\n    equal: [namespace]",
+              "output": null,
+              "note": "Keep webhook URLs and keys in Secrets mounted as files, never in the config text."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Compute the error budget",
+              "prompt": "For a 99.9% SLO over 30 days, calculate the allowed downtime in minutes.",
+              "command": "python3 -c \"print(30*24*60*0.001)\"",
+              "expected": "43.2 minutes of full outage per 30 days.",
+              "hint": "Budget = (1 - SLO) x window.",
+              "solution": "python3 -c \"print(30*24*60*0.001)\""
+            },
+            {
+              "title": "List loaded alert rules",
+              "prompt": "Check which PrometheusRule objects exist and that Prometheus picked them up.",
+              "command": "kubectl get prometheusrule -A",
+              "expected": "A table of PrometheusRule objects with name and age; check Status > Rules in the Prometheus UI.",
+              "hint": "Rules also need the label Prometheus selects on.",
+              "solution": "kubectl get prometheusrule -A"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is an error budget?",
+                "options": [
+                  "CPU quota for a pod",
+                  "100% minus the SLO target",
+                  "The cost of monitoring",
+                  "Alert count per day"
+                ],
+                "answer": 1,
+                "explain": "It is the permitted amount of unreliability, e.g. 0.1% for a 99.9% SLO."
+              },
+              {
+                "question": "Why combine a long and a short window in a burn-rate alert?",
+                "options": [
+                  "To save disk",
+                  "Fast detection plus quick reset after recovery",
+                  "To avoid Alertmanager",
+                  "To raise CPU"
+                ],
+                "answer": 1,
+                "explain": "The long window shows significance; the short window ensures the problem is still happening."
+              },
+              {
+                "question": "A burn rate of 1 means...",
+                "options": [
+                  "Budget is used exactly over the whole SLO window",
+                  "Budget is gone in an hour",
+                  "No errors at all",
+                  "Double the allowed errors"
+                ],
+                "answer": 0,
+                "explain": "Burn rate 1 spends the budget exactly by the end of the window."
+              },
+              {
+                "question": "Which is the best paging condition?",
+                "options": [
+                  "Node CPU > 80%",
+                  "Pod restarted once",
+                  "Fast error-budget burn affecting users",
+                  "Disk 50% full"
+                ],
+                "answer": 2,
+                "explain": "Page on user-visible symptoms that threaten the SLO."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-rel-metrics-pipeline",
+            "k8s-rel-resilience"
+          ],
+          "tags": [
+            "slo",
+            "alerting",
+            "prometheusrule",
+            "alertmanager"
+          ],
+          "commands": [
+            "kubectl get prometheusrule"
+          ],
+          "sources": [
+            {
+              "title": "Prometheus alerting rules",
+              "url": "https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/"
+            },
+            {
+              "title": "Alertmanager configuration",
+              "url": "https://prometheus.io/docs/alerting/latest/configuration/"
+            },
+            {
+              "title": "Prometheus Operator API",
+              "url": "https://prometheus-operator.dev/docs/api-reference/api/"
+            },
+            {
+              "title": "Google SRE Workbook: Alerting on SLOs",
+              "url": "https://sre.google/workbook/alerting-on-slos/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-rel-reliability",
+      "title": "Reliability and incidents",
+      "summary": "Resilient workloads and calm incident response.",
+      "lessons": [
+        {
+          "id": "k8s-rel-resilience",
+          "title": "Resilience: probes, shutdown and disruption",
+          "duration": "14 min",
+          "summary": "Probes done right, graceful shutdown, PodDisruptionBudgets, retries and timeouts, and small chaos experiments.",
+          "objectives": [
+            "Choose liveness, readiness and startup probes that do not cause outages",
+            "Shut pods down gracefully with preStop and terminationGracePeriodSeconds",
+            "Protect availability with a PDB and validate with a chaos experiment"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Failure is normal; losing requests is not",
+              "body": "Pods are deleted constantly: rollouts, node drains, autoscaling, spot reclaim. A resilient service handles each of those without dropping requests. Four mechanisms cooperate: **probes** decide when a pod receives traffic and when it is restarted, **graceful shutdown** lets in-flight requests finish, **PodDisruptionBudgets** limit voluntary disruption, and **client retries with timeouts** hide the rest.\n\nThe common failure is a probe that makes things worse: a liveness probe that checks the database restarts every pod when the database blips, turning a partial outage into a total one."
+            },
+            {
+              "type": "table",
+              "title": "Probes: use each for one purpose",
+              "head": [
+                "Probe",
+                "Question",
+                "On failure",
+                "Good check"
+              ],
+              "rows": [
+                [
+                  "startupProbe",
+                  "Has the app finished booting?",
+                  "Container restarted after failureThreshold",
+                  "Same endpoint as liveness, long budget (e.g. 30 x 10s)"
+                ],
+                [
+                  "readinessProbe",
+                  "Can it serve traffic now?",
+                  "Removed from Service endpoints; not restarted",
+                  "Local dependencies it needs for requests"
+                ],
+                [
+                  "livenessProbe",
+                  "Is the process wedged for good?",
+                  "Container restarted",
+                  "Cheap in-process check; never external dependencies"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a Deployment with careful probes and shutdown",
+              "body": "This complete Deployment combines the settings of this lesson. Apply it with `kubectl apply -f web.yaml` and watch a rollout with `kubectl rollout status`. Look at three things: the `startupProbe` that gives slow boots up to 150 seconds, the `preStop` sleep that keeps the pod serving while endpoint removal propagates through kube-proxy and ingress, and `terminationGracePeriodSeconds`, which must be longer than preStop plus the app's own drain time."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "Deployment with probes and graceful shutdown",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  labels:\n    app: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  strategy:\n    rollingUpdate:\n      maxUnavailable: 0\n      maxSurge: 1\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      terminationGracePeriodSeconds: 45\n      containers:\n        - name: web\n          image: nginx:1.27-alpine\n          ports:\n            - containerPort: 80\n          startupProbe:\n            httpGet: {path: /, port: 80}\n            periodSeconds: 5\n            failureThreshold: 30\n          readinessProbe:\n            httpGet: {path: /, port: 80}\n            periodSeconds: 5\n            failureThreshold: 2\n          livenessProbe:\n            httpGet: {path: /, port: 80}\n            periodSeconds: 10\n            failureThreshold: 3\n          lifecycle:\n            preStop:\n              exec:\n                command: [\"sh\", \"-c\", \"sleep 10; nginx -s quit\"]\n          resources:\n            requests: {cpu: 50m, memory: 64Mi}\n            limits: {memory: 128Mi}\n",
+              "output": null,
+              "note": "Shutdown timeline: pod marked Terminating, endpoints removed (in parallel), preStop runs 10s, then SIGTERM, then SIGKILL at 45s from the start."
+            },
+            {
+              "type": "steps",
+              "title": "What happens when a pod is deleted",
+              "items": [
+                {
+                  "title": "Terminating and endpoint removal",
+                  "body": "The API marks the pod Terminating. The endpoints controller removes it from Services, but kube-proxy, ingress and DNS caches learn about this with a delay, so traffic still arrives for a few seconds."
+                },
+                {
+                  "title": "preStop hook",
+                  "body": "The kubelet runs preStop first. A short sleep keeps the app serving while the removal propagates."
+                },
+                {
+                  "title": "SIGTERM",
+                  "body": "The container gets SIGTERM. The app must stop accepting new connections, finish in-flight work and exit. Make sure PID 1 receives the signal (use exec form, not a shell wrapper)."
+                },
+                {
+                  "title": "SIGKILL",
+                  "body": "After terminationGracePeriodSeconds (default 30, counted from step 1) the kubelet sends SIGKILL. Exit code 137 on a routine rollout means the grace period was too short."
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: PodDisruptionBudget and observing it",
+              "body": "A **PDB** tells the eviction API how many pods of a set may be down during voluntary disruptions such as `kubectl drain` or cluster upgrades. This one keeps at least 2 of the 3 `web` pods available. Apply it, then try to drain; the `ALLOWED DISRUPTIONS` column shows how many evictions are currently permitted. PDBs do not guard against involuntary failures such as a node crash."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "PodDisruptionBudget for web",
+              "code": "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: web-pdb\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: web\n",
+              "output": null,
+              "note": "After applying: kubectl get pdb  ->  NAME web-pdb, MIN AVAILABLE 2, MAX UNAVAILABLE N/A, ALLOWED DISRUPTIONS 1, AGE 8s. Never set minAvailable equal to replicas: the node can then never be drained."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a chaos experiment",
+              "body": "Chaos engineering means breaking things on purpose in a controlled way to confirm your assumptions. This session kills one pod while a loop of requests measures the effect. Run the loop in one terminal and the delete in another; the hypothesis is that no request fails. Look at the `HTTP 200` counts and at how quickly the replacement pod becomes `Ready`. Tools such as Chaos Mesh and LitmusChaos automate network delay, pod kill and node faults on a schedule."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Kill a pod while sending traffic",
+              "code": "kubectl delete pod web-6d8f9c7b5-k2m8x --wait=false\nkubectl get pods -l app=web -w",
+              "output": "pod \"web-6d8f9c7b5-k2m8x\" deleted\nNAME                   READY   STATUS        RESTARTS   AGE\nweb-6d8f9c7b5-k2m8x    1/1     Terminating   0          12m\nweb-6d8f9c7b5-p7n4d    0/1     Running       0          3s\nweb-6d8f9c7b5-r5c2h    1/1     Running       0          12m\nweb-6d8f9c7b5-w9x6t    1/1     Running       0          12m\nweb-6d8f9c7b5-p7n4d    1/1     Running       0          9s",
+              "note": "Start with one pod in staging, write the hypothesis first, define an abort condition, and only then widen the blast radius."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Inspect a PDB",
+              "prompt": "Apply the PDB and read how many disruptions are allowed.",
+              "command": "kubectl get pdb web-pdb",
+              "expected": "MIN AVAILABLE 2 and ALLOWED DISRUPTIONS 1 with three ready replicas.",
+              "hint": "ALLOWED DISRUPTIONS = healthy pods - minAvailable.",
+              "solution": "kubectl get pdb web-pdb"
+            },
+            {
+              "title": "Check the grace period",
+              "prompt": "Print the terminationGracePeriodSeconds of the web Deployment's pod template.",
+              "command": "kubectl get deploy web -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}'",
+              "expected": "45",
+              "hint": "Use -o jsonpath to read single fields.",
+              "solution": "kubectl get deploy web -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}'"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "A liveness probe should check...",
+                "options": [
+                  "The database connection",
+                  "The process is not wedged, without external dependencies",
+                  "Every downstream API",
+                  "Disk space of the node"
+                ],
+                "answer": 1,
+                "explain": "External dependency checks in liveness cause cascading restarts."
+              },
+              {
+                "question": "Why add a preStop sleep?",
+                "options": [
+                  "Speeds up deletion",
+                  "Lets endpoint removal propagate while still serving",
+                  "Frees memory",
+                  "Disables SIGTERM"
+                ],
+                "answer": 1,
+                "explain": "Traffic still arrives briefly after a pod becomes Terminating."
+              },
+              {
+                "question": "Which does a PDB protect against?",
+                "options": [
+                  "Node hardware crash",
+                  "Voluntary evictions like drain",
+                  "OOM kill",
+                  "Image pull errors"
+                ],
+                "answer": 1,
+                "explain": "PDBs apply to the eviction API, used by drains and upgrades."
+              },
+              {
+                "question": "Exit code 137 during every rollout suggests...",
+                "options": [
+                  "Success",
+                  "The grace period is too short and SIGKILL was sent",
+                  "Bad image",
+                  "A liveness success"
+                ],
+                "answer": 1,
+                "explain": "The app did not finish within terminationGracePeriodSeconds."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-probes-resources",
+            "k8s-autoscaling-maintenance",
+            "k8s-deployments"
+          ],
+          "tags": [
+            "resilience",
+            "probes",
+            "pdb",
+            "chaos"
+          ],
+          "commands": [
+            "kubectl get pdb",
+            "kubectl rollout status",
+            "kubectl delete pod"
+          ],
+          "sources": [
+            {
+              "title": "Pod lifecycle: termination",
+              "url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination"
+            },
+            {
+              "title": "Configure liveness, readiness and startup probes",
+              "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+            },
+            {
+              "title": "Disruptions and PDBs",
+              "url": "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/"
+            },
+            {
+              "title": "Container lifecycle hooks",
+              "url": "https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-rel-incident-response",
+          "title": "Incident response and debugging",
+          "duration": "13 min",
+          "summary": "Debug with ephemeral containers, recognise node, etcd and API server symptoms, and write a blameless postmortem.",
+          "objectives": [
+            "Attach an ephemeral debug container with kubectl debug",
+            "Diagnose NotReady nodes and control-plane symptoms",
+            "Run an incident from mitigation to postmortem"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Mitigate first, understand later",
+              "body": "During an incident the goal is to **restore service**, not to find root cause. A reliable order is: acknowledge and declare severity, assign roles (incident commander, communications, operators), mitigate (roll back, scale, fail over, disable a flag), verify recovery with the SLI, and only then investigate. Keep a timeline in a shared document as you go; it becomes the postmortem.\n\nKubernetes adds its own tooling for the investigation step. Minimal images have no shell or `curl`, so you cannot `kubectl exec` into them to look around. **Ephemeral containers** solve this by attaching a temporary debug container to the running pod."
+            },
+            {
+              "type": "text",
+              "title": "About this example: kubectl debug",
+              "body": "These commands add a throwaway `busybox` container to a running pod, sharing the target container's process namespace, so you can see its processes and network without restarting it. The second command copies a crashing pod with a different command so you can inspect it, and the third opens a shell on a node via a privileged pod with the host filesystem mounted at `/host`. Note the `Defaulting debug container name` line: that is the ephemeral container you are now inside."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Ephemeral, copied and node debugging",
+              "code": "kubectl debug -it checkout-7d9c6b8f5-x2k4p -n shop --image=busybox:1.36 --target=checkout\nkubectl debug checkout-7d9c6b8f5-x2k4p -n shop --copy-to=checkout-debug --container=checkout -it -- sh\nkubectl debug node/node-b -it --image=busybox:1.36",
+              "output": "Targeting container \"checkout\". If you don't see processes from this container it may be because the container runtime doesn't support this feature.\nDefaulting debug container name to debugger-8xk2p.\nIf you don't see a command prompt, try pressing enter.\n/ # ps\nPID   USER     COMMAND\n    1 app      /app/checkout --port=8080\n   27 root     sh\n/ # wget -qO- localhost:8080/healthz\nok\n\nCreating debugging pod node-debugger-node-b-q7h5m with container debugger on node node-b.\n/ # chroot /host",
+              "note": "Ephemeral containers cannot be removed or restarted; they disappear when the pod does. Node debugging needs permission to create privileged pods, so restrict it with RBAC."
+            },
+            {
+              "type": "table",
+              "title": "Symptoms and likely causes",
+              "head": [
+                "Symptom",
+                "Likely cause",
+                "First check"
+              ],
+              "rows": [
+                [
+                  "Node NotReady",
+                  "kubelet down, network partition, disk or memory pressure",
+                  "kubectl describe node (Conditions), journalctl -u kubelet"
+                ],
+                [
+                  "Pods Evicted",
+                  "Node DiskPressure or MemoryPressure",
+                  "kubectl describe node; df -h, crictl images"
+                ],
+                [
+                  "kubectl times out / 5xx",
+                  "API server overloaded, etcd slow, admission webhook failing",
+                  "kubectl get --raw='/readyz?verbose', API server logs"
+                ],
+                [
+                  "Pods stuck Pending, no new objects persist",
+                  "etcd out of quota or no leader",
+                  "etcdctl endpoint status, etcd_server_has_leader"
+                ],
+                [
+                  "Many Terminating pods",
+                  "Node lost, finalizer stuck, volume detach hung",
+                  "kubectl get pod -o yaml (finalizers), node status"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking node and control-plane health",
+              "body": "This session answers 'is the problem the workload or the platform?'. `kubectl get nodes` shows the Ready state, `describe node` shows the Conditions table (look for `MemoryPressure`, `DiskPressure`, `Ready`), and `/readyz?verbose` lists each API server health check. On managed clusters you cannot reach etcd or the control-plane hosts, so these API queries and your provider's status page are the main tools."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Node conditions and API server readiness",
+              "code": "kubectl get nodes\nkubectl describe node node-c | sed -n '/Conditions:/,/Addresses:/p'\nkubectl get --raw='/readyz?verbose' | head -8",
+              "output": "NAME     STATUS     ROLES           AGE   VERSION\nnode-a   Ready      control-plane   41d   v1.31.2\nnode-b   Ready      <none>          41d   v1.31.2\nnode-c   NotReady   <none>          41d   v1.31.2\n\nConditions:\n  Type             Status    Reason                    Message\n  MemoryPressure   False     KubeletHasSufficientMemory\n  DiskPressure     True      KubeletHasDiskPressure    ephemeral-storage threshold crossed\n  Ready            Unknown   NodeStatusUnknown         Kubelet stopped posting node status.\nAddresses:\n\n[+]ping ok\n[+]log ok\n[+]etcd ok\n[+]etcd-readiness ok\n[+]informer-sync ok\n[+]poststarthook/start-kubernetes-api-server-informers ok\n[+]poststarthook/start-apiservice-informers ok\n[+]shutdown ok",
+              "note": "A node that stops posting status turns NotReady after node-monitor-grace-period (40s), and its pods are evicted after the taint toleration of 300s by default."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "etcd is the cluster's memory",
+              "body": "Back up etcd regularly (`etcdctl snapshot save`) and practice the restore. etcd needs fast disks (latency under 10 ms fsync) and an odd number of members; its default 2 GiB backend quota raises an alarm when full, after which the cluster becomes read-only until compaction and defrag."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a postmortem template",
+              "body": "A postmortem is a blameless written record of an incident that produces concrete follow-up work. This file is a plain-text template (language `text`); copy it into your wiki for each incident of severity 2 or higher, and fill it within a few days while memory is fresh. Fields to focus on: the impact measured with the SLI, the timeline with timestamps, contributing factors (plural, never 'human error') and action items with owners and due dates."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "postmortem.md template",
+              "code": "# Postmortem: <short title>   Severity: SEV2   Date: 2026-11-13\n\n## Summary\nOne paragraph: what broke, for whom, for how long.\n\n## Impact\n- 31 minutes of elevated 5xx on checkout (peak 18%)\n- Error budget consumed: 62% of the monthly budget\n\n## Timeline (UTC)\n09:02  Alert CheckoutErrorBudgetBurnFast fires\n09:06  On-call acknowledges, declares SEV2\n09:14  Cause suspected: new release 4.12\n09:19  Rollback started (kubectl rollout undo)\n09:33  Error ratio back under SLO\n\n## Root cause and contributing factors\n- ...\n\n## What went well / what went badly / where we got lucky\n- ...\n\n## Action items\n| Action | Owner | Due | Ticket |\n|--------|-------|-----|--------|\n| Add canary stage to the pipeline | alice | 2026-11-27 | OPS-412 |",
+              "output": null,
+              "note": "Blameless means asking how the system allowed the mistake, not who made it."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Attach a debug container",
+              "prompt": "Open an ephemeral busybox container in a running pod and list its processes.",
+              "command": "kubectl debug -it POD --image=busybox:1.36 --target=CONTAINER",
+              "expected": "A shell prompt where ps shows the target container's processes.",
+              "hint": "--target shares the process namespace of that container.",
+              "solution": "kubectl debug -it POD --image=busybox:1.36 --target=CONTAINER -- sh"
+            },
+            {
+              "title": "Check node conditions",
+              "prompt": "Find out which nodes are NotReady and why.",
+              "command": "kubectl get nodes",
+              "expected": "STATUS column; NotReady nodes need describe node and checking Conditions.",
+              "hint": "describe node shows the Conditions and Events blocks.",
+              "solution": "kubectl describe node NODE"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why use an ephemeral container?",
+                "options": [
+                  "To change resource limits",
+                  "To debug a pod whose image has no shell without restarting it",
+                  "To schedule a pod",
+                  "To mount a PVC"
+                ],
+                "answer": 1,
+                "explain": "It adds a temporary container with tools to a running pod."
+              },
+              {
+                "question": "What is the first priority in an incident?",
+                "options": [
+                  "Find the root cause",
+                  "Mitigate and restore service",
+                  "Write the postmortem",
+                  "Assign blame"
+                ],
+                "answer": 1,
+                "explain": "Restore service first; investigate after the impact has stopped."
+              },
+              {
+                "question": "Which condition indicates a node is short on disk?",
+                "options": [
+                  "MemoryPressure",
+                  "DiskPressure",
+                  "PIDPressure",
+                  "NetworkUnavailable"
+                ],
+                "answer": 1,
+                "explain": "DiskPressure True triggers eviction of pods."
+              },
+              {
+                "question": "A good postmortem is...",
+                "options": [
+                  "Blameless with action items and owners",
+                  "A list of who erred",
+                  "Only for outages > 1 day",
+                  "Secret"
+                ],
+                "answer": 0,
+                "explain": "The goal is learning and concrete follow-ups."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-troubleshoot-pods",
+            "k8s-rel-slo-alerting",
+            "k8s-production-checklist"
+          ],
+          "tags": [
+            "incident",
+            "debugging",
+            "kubectl-debug",
+            "postmortem"
+          ],
+          "commands": [
+            "kubectl debug",
+            "kubectl describe node",
+            "kubectl get nodes"
+          ],
+          "sources": [
+            {
+              "title": "Debug running Pods (ephemeral containers)",
+              "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/"
+            },
+            {
+              "title": "Debugging Kubernetes nodes with kubectl",
+              "url": "https://kubernetes.io/docs/tasks/debug/debug-cluster/kubectl-node-debug/"
+            },
+            {
+              "title": "Operating etcd clusters",
+              "url": "https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/"
+            },
+            {
+              "title": "Node status",
+              "url": "https://kubernetes.io/docs/reference/node/node-status/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "k8s-operations"
+  ],
+  "track": "kubernetes"
+}

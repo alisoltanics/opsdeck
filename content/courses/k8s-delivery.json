@@ -1,0 +1,1085 @@
+{
+ "id": "k8s-delivery",
+ "order": 28,
+ "title": "Delivery: Helm, Kustomize and GitOps",
+ "subtitle": "Charts, overlays, GitOps, progressive delivery and CI for Kubernetes",
+ "level": "Advanced",
+ "duration": "1h 5m",
+ "icon": "rocket",
+ "accent": "green",
+ "description": "Ship to Kubernetes the way production teams do: write robust Helm charts, layer environments with Kustomize, reconcile from Git with Argo CD or Flux, roll out gradually with canaries, and gate everything in CI.",
+ "outcomes": [
+  "Author and publish Helm charts with schema, hooks and tests",
+  "Structure Kustomize bases and overlays per environment",
+  "Run GitOps with Argo CD or Flux and handle drift and pruning",
+  "Release progressively and validate manifests in CI"
+ ],
+ "modules": [
+  {
+   "id": "k8s-delivery-packaging",
+   "title": "Packaging: Helm and Kustomize",
+   "summary": "Package and customize manifests for many environments.",
+   "lessons": [
+    {
+     "id": "k8s-helm-templates",
+     "title": "Helm in depth: templates, hooks and dependencies",
+     "duration": "14 min",
+     "summary": "Write real charts: named templates, values schema, hooks, tests, subchart dependencies and OCI registries.",
+     "objectives": [
+      "Write templates with helpers, conditionals and required values",
+      "Validate values with values.schema.json",
+      "Use hooks and helm test, and publish charts to an OCI registry"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "About this example: helpers and a deployment template",
+       "body": "This is a fragment of `templates/_helpers.tpl` followed by the use of those helpers in `templates/deployment.yaml`. It is not a standalone manifest, so it is shown as text. Look at `define`/`include` for reusable names and labels, `required` which fails the render if a value is missing, and `toYaml | nindent` which splices a values block with the right indentation."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "_helpers.tpl and deployment.yaml",
+       "code": "{{- define \"shop-api.fullname\" -}}\n{{- printf \"%s-%s\" .Release.Name .Chart.Name | trunc 63 | trimSuffix \"-\" -}}\n{{- end -}}\n\n{{- define \"shop-api.labels\" -}}\napp.kubernetes.io/name: {{ .Chart.Name }}\napp.kubernetes.io/instance: {{ .Release.Name }}\napp.kubernetes.io/version: {{ .Chart.AppVersion | quote }}\napp.kubernetes.io/managed-by: {{ .Release.Service }}\n{{- end -}}\n\n# templates/deployment.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ include \"shop-api.fullname\" . }}\n  labels: {{- include \"shop-api.labels\" . | nindent 4 }}\nspec:\n  replicas: {{ .Values.replicaCount }}\n  selector:\n    matchLabels:\n      app.kubernetes.io/instance: {{ .Release.Name }}\n  template:\n    metadata:\n      labels: {{- include \"shop-api.labels\" . | nindent 8 }}\n      annotations:\n        checksum/config: {{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}\n    spec:\n      containers:\n        - name: api\n          image: \"{{ required \"image.repository is required\" .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}\"\n          {{- with .Values.resources }}\n          resources: {{- toYaml . | nindent 12 }}\n          {{- end }}",
+       "output": null,
+       "note": "The `checksum/config` annotation changes whenever the ConfigMap changes, which forces a rollout - Helm does not restart pods on ConfigMap changes by itself."
+      },
+      {
+       "type": "text",
+       "title": "About this example: values and schema",
+       "body": "Two files are shown: `values.yaml` with safe defaults and `values.schema.json`, a JSON Schema that constrains them. The schema is checked by every Helm command that reads values, so a typo such as `replicaCount: \"three\"` fails before rendering. Look at `required`, `enum`, `minimum` and `additionalProperties: false`, which catches misspelled keys."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "values.yaml and values.schema.json",
+       "code": "# values.yaml\nreplicaCount: 2\nimage:\n  repository: registry.example.com/shop/api\n  tag: \"\"\n  pullPolicy: IfNotPresent\nresources:\n  requests: {cpu: 100m, memory: 128Mi}\n  limits: {memory: 256Mi}\n\n# values.schema.json\n{\n  \"$schema\": \"https://json-schema.org/draft-07/schema#\",\n  \"type\": \"object\",\n  \"required\": [\"image\"],\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"replicaCount\": {\"type\": \"integer\", \"minimum\": 1},\n    \"image\": {\n      \"type\": \"object\",\n      \"required\": [\"repository\"],\n      \"properties\": {\n        \"repository\": {\"type\": \"string\"},\n        \"tag\": {\"type\": \"string\"},\n        \"pullPolicy\": {\"enum\": [\"Always\", \"IfNotPresent\", \"Never\"]}\n      }\n    },\n    \"resources\": {\"type\": \"object\"}\n  }\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Chart building blocks",
+       "head": [
+        "Piece",
+        "Purpose",
+        "Example"
+       ],
+       "rows": [
+        [
+         "Chart.yaml",
+         "Metadata, version, dependencies",
+         "version: 0.4.0, appVersion: 1.8.2"
+        ],
+        [
+         "values.yaml",
+         "Defaults, the chart's public API",
+         "replicaCount: 2"
+        ],
+        [
+         "_helpers.tpl",
+         "Named templates reused everywhere",
+         "include \"shop-api.labels\" ."
+        ],
+        [
+         "values.schema.json",
+         "Type and shape validation",
+         "Rejects replicaCount: \"three\""
+        ],
+        [
+         "templates/tests/",
+         "Pods run by helm test",
+         "wget the Service, exit 0 = pass"
+        ],
+        [
+         "Chart.lock + charts/",
+         "Pinned subchart versions",
+         "postgresql 15.5.9 from an OCI repo"
+        ],
+        [
+         "Hook annotation",
+         "Run a resource at a lifecycle point",
+         "helm.sh/hook: pre-upgrade"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: hook, test and dependency commands",
+       "body": "This is a pre-upgrade migration Job (a complete manifest, so it gets a Run button) using Helm hook annotations. A hook resource is not part of the release: Helm creates it at the named moment, waits for completion, then deletes it according to the delete policy. Look at `helm.sh/hook`, `hook-weight` for ordering and `hook-delete-policy`, which is what keeps old Jobs from piling up."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "templates/migrate-job.yaml rendered",
+       "code": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: shop-api-migrate\n  annotations:\n    helm.sh/hook: pre-install,pre-upgrade\n    helm.sh/hook-weight: \"0\"\n    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\nspec:\n  backoffLimit: 1\n  template:\n    spec:\n      restartPolicy: Never\n      containers:\n        - name: migrate\n          image: registry.example.com/shop/api:1.8.2\n          command: [\"./migrate\", \"up\"]",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: the release workflow",
+       "body": "These commands run on a workstation with `helm` and cluster access. `helm dependency update` resolves `Chart.yaml` dependencies into `charts/` and writes `Chart.lock`; `helm lint --strict` and `helm test` verify the chart; `helm push` publishes it to an OCI registry. Read the `STATUS` and `REVISION` columns in the upgrade output, and note that OCI charts are referenced as `oci://` with no `helm repo add`."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Dependencies, lint, upgrade, test and OCI push",
+       "code": "helm dependency update shop-api\nhelm lint shop-api --strict -f values-prod.yaml\nhelm upgrade --install shop shop-api -n shop --create-namespace -f values-prod.yaml --atomic --timeout 5m\nhelm test shop -n shop\nhelm package shop-api\nhelm push shop-api-0.4.0.tgz oci://registry.example.com/charts",
+       "output": "Saving chart to charts/postgresql-15.5.9.tgz\nDeleting outdated charts\n==> Linting shop-api\n1 chart(s) linted, 0 chart(s) failed\nRelease \"shop\" has been upgraded. Happy Helming!\nNAME: shop\nLAST DEPLOYED: Fri Nov 13 10:42:11 2026\nNAMESPACE: shop\nSTATUS: deployed\nREVISION: 7\nTEST SUITE:     shop-api-test-connection\nPhase:          Succeeded\nSuccessfully packaged chart and saved it to: ./shop-api-0.4.0.tgz\nPushed: registry.example.com/charts/shop-api:0.4.0\nDigest: sha256:3b1f0e8c9d52a7f4c8b6e1d0a9f27c43e5b8d6a1c0f9e2b7d4a3c8e1f6b50a92",
+       "note": "`--atomic` rolls back automatically if the upgrade fails. In CI, pin the chart by digest or version, never `latest`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Render and inspect",
+       "prompt": "Render the chart locally with production values and show only the Deployment image line.",
+       "command": "helm template shop shop-api -f values-prod.yaml | grep image:",
+       "expected": "One line such as image: \"registry.example.com/shop/api:1.8.2\"",
+       "hint": "Pipe through grep; no cluster is needed.",
+       "solution": "helm template shop shop-api -f values-prod.yaml | grep 'image:'"
+      },
+      {
+       "title": "Trip the schema",
+       "prompt": "Set replicaCount to a string and confirm lint rejects it.",
+       "command": "helm lint shop-api --set replicaCount=three",
+       "expected": "Lint fails with: replicaCount: Invalid type. Expected: integer, given: string",
+       "hint": "--set parses numbers; use --set-string for text.",
+       "solution": "helm lint shop-api --set-string replicaCount=three"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What is the purpose of values.schema.json?",
+        "options": [
+         "Defines Kubernetes CRDs",
+         "Validates user-supplied values before rendering",
+         "Stores release history",
+         "Signs the chart"
+        ],
+        "answer": 1,
+        "explain": "Helm validates values against the schema in lint, template, install and upgrade."
+       },
+       {
+        "question": "Which annotation makes a Job run before every upgrade?",
+        "options": [
+         "helm.sh/hook: pre-upgrade",
+         "helm.sh/test: true",
+         "helm.sh/resource-policy: keep",
+         "helm.sh/job: pre"
+        ],
+        "answer": 0,
+        "explain": "The helm.sh/hook annotation lists the lifecycle events at which the resource is created."
+       },
+       {
+        "question": "Why add a checksum/config annotation to the pod template?",
+        "options": [
+         "To sign the image",
+         "To roll pods when the ConfigMap content changes",
+         "To speed up pulls",
+         "To pin the chart"
+        ],
+        "answer": 1,
+        "explain": "Changing a pod template annotation triggers a rollout; Helm does not restart pods when only a ConfigMap changes."
+       },
+       {
+        "question": "How do you reference a chart in an OCI registry?",
+        "options": [
+         "helm repo add oci",
+         "oci://host/path with install/pull/push",
+         "helm oci login only",
+         "kubectl apply -f oci://"
+        ],
+        "answer": 1,
+        "explain": "OCI charts use oci:// URLs directly; helm registry login handles auth."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-basics",
+      "k8s-configmaps"
+     ],
+     "tags": [
+      "helm",
+      "templates",
+      "hooks",
+      "oci"
+     ],
+     "commands": [
+      "helm template",
+      "helm lint",
+      "helm upgrade",
+      "helm test",
+      "helm push"
+     ],
+     "sources": [
+      {
+       "title": "Helm chart template guide",
+       "url": "https://helm.sh/docs/chart_template_guide/"
+      },
+      {
+       "title": "Helm chart hooks",
+       "url": "https://helm.sh/docs/topics/charts_hooks/"
+      },
+      {
+       "title": "Helm and OCI registries",
+       "url": "https://helm.sh/docs/topics/registries/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-kustomize",
+     "title": "Kustomize: bases, overlays and patches",
+     "duration": "12 min",
+     "summary": "Customize plain manifests without templates: bases, overlays, strategic merge and JSON patches, generators and per-environment config.",
+     "objectives": [
+      "Structure a base and per-environment overlays",
+      "Apply strategic-merge and JSON 6902 patches",
+      "Use configMapGenerator and images to drive environment config"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Template-free customization",
+       "body": "Kustomize works on valid YAML. A **base** holds complete manifests; an **overlay** points at the base and layers changes on top - a different replica count, image tag, namespace or extra labels. Nothing is parameterized with placeholders, so the base can still be applied on its own. It is built into kubectl: `kubectl kustomize` renders and `kubectl apply -k` applies.\n\nThis fits teams that want to read exactly what will be deployed, and it pairs naturally with GitOps because the overlay directory is the environment."
+      },
+      {
+       "type": "text",
+       "title": "About this example: the base",
+       "body": "This is the base `deployment.yaml`, a complete valid manifest, so it can be applied directly with the Run button. The base `kustomization.yaml` that lists it appears in the next example. Look at the image tag `latest` placeholder and the single replica: both are meant to be overridden by overlays rather than edited here."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "base/deployment.yaml",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: shop-api\n  labels:\n    app: shop-api\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: shop-api\n  template:\n    metadata:\n      labels:\n        app: shop-api\n    spec:\n      containers:\n        - name: api\n          image: registry.example.com/shop/api:latest\n          ports:\n            - containerPort: 8080\n          envFrom:\n            - configMapRef:\n                name: shop-api-config",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: the production overlay",
+       "body": "This is `overlays/prod/kustomization.yaml` with its patch file, shown together as text since they are separate files. Look at `resources` pulling in the base, `images` rewriting the tag without a patch, `configMapGenerator` producing a hashed ConfigMap name, and the two kinds of patch: a strategic-merge file and an inline JSON 6902 operation that targets one object by kind and name."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "overlays/prod/kustomization.yaml and replicas-patch.yaml",
+       "code": "# overlays/prod/kustomization.yaml\napiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamespace: shop-prod\nnamePrefix: prod-\nresources:\n  - ../../base\n  - ingress.yaml\nimages:\n  - name: registry.example.com/shop/api\n    newTag: 1.8.2\ncommonLabels:\n  env: prod\nconfigMapGenerator:\n  - name: shop-api-config\n    behavior: create\n    literals:\n      - LOG_LEVEL=info\n      - FEATURE_X=on\npatches:\n  - path: replicas-patch.yaml\n  - target:\n      kind: Deployment\n      name: shop-api\n    patch: |-\n      - op: add\n        path: /spec/template/spec/containers/0/resources\n        value:\n          requests: {cpu: 250m, memory: 256Mi}\n          limits: {memory: 512Mi}\n\n# overlays/prod/replicas-patch.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: shop-api\nspec:\n  replicas: 4",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: render, diff and apply",
+       "body": "These commands render the prod overlay, preview the change against the live cluster, then apply it. `kubectl kustomize` is read-only; `kubectl diff -k` asks the API server to compute the difference; `apply -k` sends it. In the output look at the generated ConfigMap name with a content hash suffix, which makes a config change roll the Deployment automatically."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Render, diff and apply an overlay",
+       "code": "kubectl kustomize overlays/prod | grep -E '^(kind|  name|  replicas)|image:'\nkubectl diff -k overlays/prod\nkubectl apply -k overlays/prod",
+       "output": "kind: ConfigMap\n  name: prod-shop-api-config-7b2k9fd8t5\nkind: Deployment\n  name: prod-shop-api\n  replicas: 4\n        image: registry.example.com/shop/api:1.8.2\ndiff -u -N /tmp/LIVE-1203/apps.v1.Deployment.shop-prod.prod-shop-api /tmp/MERGED-1203/apps.v1.Deployment.shop-prod.prod-shop-api\n-  replicas: 2\n+  replicas: 4\nconfigmap/prod-shop-api-config-7b2k9fd8t5 created\ndeployment.apps/prod-shop-api configured\nservice/prod-shop-api unchanged",
+       "note": "`kubectl diff` exits 1 when differences exist, which is normal and useful in CI."
+      },
+      {
+       "type": "table",
+       "title": "kustomization.yaml fields",
+       "head": [
+        "Field",
+        "What it does",
+        "Example"
+       ],
+       "rows": [
+        [
+         "resources",
+         "Files, directories or remote bases to include",
+         "- ../../base"
+        ],
+        [
+         "namespace / namePrefix",
+         "Set namespace and prefix names for every object",
+         "shop-prod / prod-"
+        ],
+        [
+         "images",
+         "Change image name or tag without a patch",
+         "newTag: 1.8.2"
+        ],
+        [
+         "patches",
+         "Strategic-merge or JSON 6902 changes, optionally targeted",
+         "target: {kind: Deployment}"
+        ],
+        [
+         "configMapGenerator / secretGenerator",
+         "Build ConfigMaps/Secrets from literals or files with a hash suffix",
+         "literals: [LOG_LEVEL=info]"
+        ],
+        [
+         "components",
+         "Reusable optional feature bundles",
+         "- ../../components/monitoring"
+        ],
+        [
+         "replacements",
+         "Copy a field value from one object to another",
+         "Service name into an env var"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Keep overlays small and avoid secrets in Git",
+       "body": "If an overlay needs more than a few patches, the base is probably missing a concept. `secretGenerator` only base64-encodes data; commit encrypted references (Sealed Secrets, SOPS or External Secrets) instead of raw values."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Render staging",
+       "prompt": "Render the staging overlay and list the kinds produced.",
+       "command": "kubectl kustomize overlays/staging | grep '^kind:'",
+       "expected": "kind: ConfigMap, kind: Deployment, kind: Service",
+       "hint": "Output is multi-document YAML.",
+       "solution": "kubectl kustomize overlays/staging | grep '^kind:'"
+      },
+      {
+       "title": "Override an image",
+       "prompt": "Change the image tag for staging from the CLI and render.",
+       "command": "kustomize edit set image registry.example.com/shop/api=registry.example.com/shop/api:1.9.0-rc1",
+       "expected": "kustomization.yaml now has an images entry with newTag 1.9.0-rc1",
+       "hint": "Run it inside overlays/staging.",
+       "solution": "cd overlays/staging && kustomize edit set image registry.example.com/shop/api=registry.example.com/shop/api:1.9.0-rc1"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does an overlay reference to reuse manifests?",
+        "options": [
+         "A Helm chart",
+         "A base via resources",
+         "A Secret",
+         "A CRD"
+        ],
+        "answer": 1,
+        "explain": "Overlays list the base directory under resources."
+       },
+       {
+        "question": "Why does configMapGenerator append a hash to the name?",
+        "options": [
+         "To encrypt data",
+         "So a content change updates references and rolls pods",
+         "To avoid namespaces",
+         "To compress data"
+        ],
+        "answer": 1,
+        "explain": "A new name triggers a rollout in referencing workloads."
+       },
+       {
+        "question": "Which command previews changes against the live cluster?",
+        "options": [
+         "kubectl kustomize",
+         "kubectl diff -k",
+         "kubectl get -k",
+         "kubectl explain"
+        ],
+        "answer": 1,
+        "explain": "kubectl diff -k computes the server-side difference without applying."
+       },
+       {
+        "question": "Which is a JSON 6902 patch feature?",
+        "options": [
+         "op/path/value operations",
+         "Go templates",
+         "Hooks",
+         "Schema"
+        ],
+        "answer": 0,
+        "explain": "JSON patches use op, path and value targeted at specific objects."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-deployments",
+      "k8s-configmaps",
+      "k8s-helm-basics"
+     ],
+     "tags": [
+      "kustomize",
+      "overlays",
+      "patches"
+     ],
+     "commands": [
+      "kubectl kustomize",
+      "kubectl apply -k",
+      "kubectl diff -k"
+     ],
+     "sources": [
+      {
+       "title": "Kustomize in Kubernetes docs",
+       "url": "https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/"
+      },
+      {
+       "title": "Kustomize reference",
+       "url": "https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-delivery-pipelines",
+   "title": "Pipelines: GitOps, rollout and CI",
+   "summary": "Reconcile from Git, release gradually and gate with CI.",
+   "lessons": [
+    {
+     "id": "k8s-gitops",
+     "title": "GitOps with Argo CD and Flux",
+     "duration": "13 min",
+     "summary": "Make Git the source of truth: pull-based reconciliation, sync, drift detection and pruning with Argo CD and Flux.",
+     "objectives": [
+      "Explain the pull-based GitOps loop",
+      "Write an Argo CD Application and Flux GitRepository plus Kustomization",
+      "Control drift, self-heal and pruning safely"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Git as the source of truth",
+       "body": "GitOps means the desired state lives in Git and an in-cluster controller continuously **pulls** it and reconciles the cluster. CI never needs cluster credentials: it commits an image tag, and the controller applies it. A rollback is a `git revert`, and an audit trail is the commit history.\n\nTwo tools dominate. **Argo CD** gives an Application model with a UI and diff view. **Flux** is a set of controllers (source, kustomize, helm, notification) driven entirely by CRDs. Both detect **drift** - live state differing from Git - and can correct it."
+      },
+      {
+       "type": "text",
+       "title": "About this example: an Argo CD Application",
+       "body": "This is a complete Argo CD `Application`, applied with `kubectl apply` in the `argocd` namespace (the Argo CD CRDs must be installed). It tells Argo CD which repo path to render and where to deploy it. Look at `source.path` and `targetRevision`, and at `syncPolicy`: `automated` with `prune` deletes resources removed from Git and `selfHeal` reverts manual edits."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "argocd Application",
+       "code": "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: shop-api-prod\n  namespace: argocd\n  finalizers:\n    - resources-finalizer.argocd.argoproj.io\nspec:\n  project: shop\n  source:\n    repoURL: https://git.example.com/platform/shop-deploy.git\n    targetRevision: main\n    path: overlays/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: shop-prod\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\n    syncOptions:\n      - CreateNamespace=true\n      - PruneLast=true\n    retry:\n      limit: 3\n      backoff: {duration: 10s, factor: 2, maxDuration: 3m}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: Flux sources and Kustomization",
+       "body": "These two complete Flux objects work together: a `GitRepository` that fetches the repo every minute and a `Kustomization` that builds a path from it and applies it. Look at `interval` (poll and reconcile period), `prune: true`, `wait`/`timeout` for health gating, and `sourceRef` linking the two. Flux's Kustomization is not the same kind as Kustomize's kustomization.yaml, but it runs it."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "Flux GitRepository and Kustomization",
+       "code": "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: shop-deploy\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://git.example.com/platform/shop-deploy.git\n  ref:\n    branch: main\n  secretRef:\n    name: git-readonly-token\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: shop-prod\n  namespace: flux-system\nspec:\n  interval: 10m\n  path: ./overlays/prod\n  prune: true\n  wait: true\n  timeout: 5m\n  targetNamespace: shop-prod\n  sourceRef:\n    kind: GitRepository\n    name: shop-deploy",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: observing sync state",
+       "body": "These commands show what each tool believes about the cluster. `argocd app get` prints sync status (does live match Git) and health (are workloads running); `flux get kustomizations` shows the last applied revision. Look at `OutOfSync`, which signals drift or an unsynced commit, and at the revision hash, which should match the commit you merged."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Check sync status and force a reconcile",
+       "code": "argocd app get shop-api-prod\nargocd app diff shop-api-prod\nflux get kustomizations\nflux reconcile kustomization shop-prod --with-source",
+       "output": "Name:               argocd/shop-api-prod\nProject:            shop\nSync Status:        OutOfSync from main (a1b2c3d)\nHealth Status:      Healthy\n\nGROUP  KIND        NAMESPACE  NAME      STATUS     HEALTH\napps   Deployment  shop-prod  shop-api  OutOfSync  Healthy\n\n===== apps/Deployment shop-prod/shop-api ======\n< replicas: 6\n---\n> replicas: 4\n\nNAME       REVISION            SUSPENDED  READY  MESSAGE\nshop-prod  main@sha1:a1b2c3d4  False      True   Applied revision: main@sha1:a1b2c3d4\n► annotating GitRepository shop-deploy in flux-system namespace\n✔ applied revision main@sha1:a1b2c3d4",
+       "note": "Here someone ran `kubectl scale` by hand; with selfHeal the replica count would be reset to 4."
+      },
+      {
+       "type": "table",
+       "title": "Sync and drift controls",
+       "head": [
+        "Setting",
+        "Argo CD",
+        "Flux",
+        "Effect"
+       ],
+       "rows": [
+        [
+         "Auto sync",
+         "syncPolicy.automated",
+         "Kustomization interval",
+         "Apply Git changes without clicking"
+        ],
+        [
+         "Pruning",
+         "automated.prune: true",
+         "prune: true",
+         "Delete resources removed from Git"
+        ],
+        [
+         "Drift correction",
+         "selfHeal: true",
+         "Reconcile each interval",
+         "Revert manual kubectl edits"
+        ],
+        [
+         "Ignore a field",
+         "ignoreDifferences",
+         "spec.patches / driftDetection",
+         "Tolerate HPA-managed replicas"
+        ],
+        [
+         "Health gating",
+         "Resource health checks, sync waves",
+         "wait, healthChecks, dependsOn",
+         "Order and verify rollout"
+        ],
+        [
+         "Pause",
+         "Disable auto-sync",
+         "suspend: true",
+         "Freeze during an incident"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Prune and self-heal are sharp tools",
+       "body": "Enable `prune` only after the repo path is correct: pointing an app at an empty directory deletes everything it owns. Protect stateful resources with `argocd.argoproj.io/sync-options: Prune=false`, keep Secrets out of plain Git, and separate the app repo from the deploy (config) repo so image bumps do not trigger app builds."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Find drift",
+       "prompt": "Show whether the Argo CD app matches Git.",
+       "command": "argocd app get shop-api-prod --refresh",
+       "expected": "Sync Status line reads Synced or OutOfSync",
+       "hint": "--refresh re-reads Git first.",
+       "solution": "argocd app get shop-api-prod --refresh | grep 'Sync Status'"
+      },
+      {
+       "title": "Force Flux",
+       "prompt": "Reconcile the prod Kustomization immediately.",
+       "command": "flux reconcile kustomization shop-prod --with-source",
+       "expected": "applied revision main@sha1:<commit>",
+       "hint": "--with-source fetches the Git revision first.",
+       "solution": "flux reconcile kustomization shop-prod --with-source"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "In pull-based GitOps, who applies manifests?",
+        "options": [
+         "The CI runner via kubectl",
+         "A controller inside the cluster",
+         "The developer laptop",
+         "The registry"
+        ],
+        "answer": 1,
+        "explain": "The in-cluster controller pulls from Git, so CI needs no cluster credentials."
+       },
+       {
+        "question": "What does selfHeal do?",
+        "options": [
+         "Retries image pulls",
+         "Reverts manual changes that drift from Git",
+         "Restarts nodes",
+         "Encrypts Secrets"
+        ],
+        "answer": 1,
+        "explain": "selfHeal reapplies Git state when live objects are edited."
+       },
+       {
+        "question": "What does prune do?",
+        "options": [
+         "Deletes resources removed from Git",
+         "Deletes old images",
+         "Trims logs",
+         "Removes namespaces always"
+        ],
+        "answer": 0,
+        "explain": "Pruning deletes cluster objects no longer present in the source."
+       },
+       {
+        "question": "Best way to roll back in GitOps?",
+        "options": [
+         "kubectl edit",
+         "Revert the Git commit",
+         "Delete the Application",
+         "Restart the controller"
+        ],
+        "answer": 1,
+        "explain": "The Git history is the source of truth; revert the commit and let it reconcile."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-kustomize",
+      "k8s-helm-templates",
+      "k8s-autoscaling-maintenance"
+     ],
+     "tags": [
+      "gitops",
+      "argocd",
+      "flux"
+     ],
+     "commands": [
+      "argocd app get",
+      "argocd app diff",
+      "flux get kustomizations",
+      "flux reconcile"
+     ],
+     "sources": [
+      {
+       "title": "Argo CD declarative setup",
+       "url": "https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/"
+      },
+      {
+       "title": "Argo CD automated sync",
+       "url": "https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/"
+      },
+      {
+       "title": "Flux Kustomization",
+       "url": "https://fluxcd.io/flux/components/kustomize/kustomizations/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-progressive-delivery",
+     "title": "Progressive delivery: rolling, blue/green and canary",
+     "duration": "13 min",
+     "summary": "Compare release strategies and implement canary and blue/green with Argo Rollouts and Gateway API traffic splitting.",
+     "objectives": [
+      "Compare rolling, blue/green and canary on risk and cost",
+      "Write an Argo Rollout with analysis-gated steps",
+      "Split traffic by weight with a Gateway API HTTPRoute"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Choosing how much risk to take",
+       "body": "A **rolling update** replaces pods gradually and is built into Deployments, but traffic shifts in proportion to pod counts and rollback means another rollout. **Blue/green** runs the new version beside the old and flips a Service or route at once, giving instant rollback at double the capacity. A **canary** sends a small, measured share of traffic to the new version and promotes only if metrics stay healthy.\n\nProgressive delivery adds automation to canaries: weights, pauses and metric checks decide whether to continue or abort."
+      },
+      {
+       "type": "table",
+       "title": "Strategy comparison",
+       "head": [
+        "Strategy",
+        "Traffic shift",
+        "Rollback",
+        "Extra cost",
+        "Needs"
+       ],
+       "rows": [
+        [
+         "Rolling update",
+         "By pod count, no control",
+         "Another rollout",
+         "Surge pods only",
+         "Deployment (built in)"
+        ],
+        [
+         "Blue/green",
+         "All at once at the switch",
+         "Flip back, seconds",
+         "2x capacity during release",
+         "Rollouts or two Deployments"
+        ],
+        [
+         "Canary",
+         "Weighted: 5%, 25%, 50%, 100%",
+         "Set weight to 0",
+         "Small",
+         "Rollouts + mesh/ingress/Gateway"
+        ],
+        [
+         "Shadow / mirror",
+         "Copy of traffic, no responses used",
+         "N/A",
+         "Duplicate load",
+         "Service mesh or Gateway mirror"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: an Argo Rollout",
+       "body": "This is a complete Argo Rollouts `Rollout` (the Argo Rollouts controller and CRD must be installed), a drop-in replacement for a Deployment. It runs a canary with weights and pauses, and uses an analysis between steps. Look at `strategy.canary.steps`, at `trafficRouting` which hands weight control to the Gateway API plugin, and at `stableService`/`canaryService` that identify the two sets of pods."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "Rollout with canary steps",
+       "code": "apiVersion: argoproj.io/v1alpha1\nkind: Rollout\nmetadata:\n  name: shop-api\n  namespace: shop-prod\nspec:\n  replicas: 6\n  selector:\n    matchLabels:\n      app: shop-api\n  template:\n    metadata:\n      labels:\n        app: shop-api\n    spec:\n      containers:\n        - name: api\n          image: registry.example.com/shop/api:1.9.0\n          ports:\n            - containerPort: 8080\n  strategy:\n    canary:\n      stableService: shop-api-stable\n      canaryService: shop-api-canary\n      trafficRouting:\n        plugins:\n          argoproj-labs/gatewayAPI:\n            httpRoute: shop-api\n            namespace: shop-prod\n      steps:\n        - setWeight: 5\n        - pause: {duration: 5m}\n        - analysis:\n            templates:\n              - templateName: success-rate\n        - setWeight: 25\n        - pause: {duration: 10m}\n        - setWeight: 50\n        - pause: {duration: 10m}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: Gateway API weighted routing",
+       "body": "This complete `HTTPRoute` splits traffic between the stable and canary Services by weight, using only standard Gateway API fields (`gateway.networking.k8s.io/v1`). Rollouts edits the two `weight` values as it moves through the steps. Look at `parentRefs` (which Gateway), the two `backendRefs`, and that weights are relative, so 95 and 5 equal 95% and 5%."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "HTTPRoute with 95/5 split",
+       "code": "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: shop-api\n  namespace: shop-prod\nspec:\n  parentRefs:\n    - name: public-gateway\n      namespace: gateway-system\n  hostnames:\n    - shop.example.com\n  rules:\n    - matches:\n        - path: {type: PathPrefix, value: /api}\n      backendRefs:\n        - name: shop-api-stable\n          port: 80\n          weight: 95\n        - name: shop-api-canary\n          port: 80\n          weight: 5",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: driving a rollout",
+       "body": "These commands use the `kubectl argo rollouts` plugin to watch, promote and abort. The tree output shows the stable ReplicaSet, the canary ReplicaSet and the current step. Look at `Status: Paused` and `SetWeight`, which tell you which step is waiting, and use `promote` to skip a pause or `abort` to send traffic back to stable."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Watch, promote and abort a rollout",
+       "code": "kubectl argo rollouts get rollout shop-api -n shop-prod\nkubectl argo rollouts promote shop-api -n shop-prod\nkubectl argo rollouts abort shop-api -n shop-prod",
+       "output": "Name:            shop-api\nNamespace:       shop-prod\nStatus:          ‖ Paused\nMessage:         CanaryPauseStep\nStrategy:        Canary\n  Step:          1/7\n  SetWeight:     5\n  ActualWeight:  5\nImages:          registry.example.com/shop/api:1.8.2 (stable)\n                 registry.example.com/shop/api:1.9.0 (canary)\nReplicas:\n  Desired:       6\n  Current:       7\n\nrollout 'shop-api' promoted\nrollout 'shop-api' aborted",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "info",
+       "title": "Pick what your platform supports",
+       "body": "Argo Rollouts also supports NGINX, Istio, SMI and ALB traffic routing, and blue/green via `strategy.blueGreen`. Flagger is the Flux-aligned equivalent. Without any controller, you can approximate a canary with two Deployments behind one Service, but the split follows pod counts, not percentages. Database migrations must be backward compatible, because old and new versions run together."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Inspect rollout",
+       "prompt": "Show the current step of a Rollout.",
+       "command": "kubectl argo rollouts get rollout shop-api -n shop-prod",
+       "expected": "Status Paused and Step 1/7 while on the first pause",
+       "hint": "Plugin required.",
+       "solution": "kubectl argo rollouts get rollout shop-api -n shop-prod"
+      },
+      {
+       "title": "Check route weights",
+       "prompt": "Print the weights of the HTTPRoute backends.",
+       "command": "kubectl get httproute shop-api -n shop-prod -o jsonpath='{.spec.rules[0].backendRefs[*].weight}'",
+       "expected": "95 5",
+       "hint": "Use jsonpath over all backendRefs.",
+       "solution": "kubectl get httproute shop-api -n shop-prod -o jsonpath='{.spec.rules[0].backendRefs[*].weight}'"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What is the main advantage of blue/green?",
+        "options": [
+         "Lowest cost",
+         "Instant rollback by flipping traffic",
+         "Gradual percentages",
+         "No Service needed"
+        ],
+        "answer": 1,
+        "explain": "The old version stays running, so you switch back immediately."
+       },
+       {
+        "question": "What does a failed AnalysisRun do?",
+        "options": [
+         "Nothing",
+         "Aborts the rollout and returns to stable",
+         "Deletes the cluster",
+         "Scales to zero"
+        ],
+        "answer": 1,
+        "explain": "Failed analysis aborts and reverts traffic to the stable ReplicaSet."
+       },
+       {
+        "question": "Why can't a plain Deployment do an exact 5% canary?",
+        "options": [
+         "No pods",
+         "Traffic follows pod counts",
+         "Services reject it",
+         "Needs a CRD for pods"
+        ],
+        "answer": 1,
+        "explain": "kube-proxy balances across ready endpoints, so share depends on replica ratio."
+       },
+       {
+        "question": "In HTTPRoute, backendRef weights are...",
+        "options": [
+         "Percent that must add to 100",
+         "Relative proportions",
+         "Replica counts",
+         "Priorities"
+        ],
+        "answer": 1,
+        "explain": "Weights are relative; the share is weight divided by the sum."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-deployments",
+      "k8s-ingress",
+      "k8s-probes-resources"
+     ],
+     "tags": [
+      "canary",
+      "blue-green",
+      "rollouts",
+      "gateway-api"
+     ],
+     "commands": [
+      "kubectl argo rollouts get",
+      "kubectl argo rollouts promote",
+      "kubectl get httproute"
+     ],
+     "sources": [
+      {
+       "title": "Gateway API traffic splitting",
+       "url": "https://gateway-api.sigs.k8s.io/guides/traffic-splitting/"
+      },
+      {
+       "title": "Argo Rollouts canary",
+       "url": "https://argo-rollouts.readthedocs.io/en/stable/features/canary/"
+      },
+      {
+       "title": "Deployments",
+       "url": "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-ci-pipelines",
+     "title": "CI pipelines for Kubernetes and promotion",
+     "duration": "13 min",
+     "summary": "Build, scan, render and validate manifests in CI, then promote one immutable artifact across environments.",
+     "objectives": [
+      "Design a pipeline that builds, scans, renders and validates",
+      "Use kubeconform, kubectl diff and server-side dry-run",
+      "Promote by digest through environments"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What a delivery pipeline must prove",
+       "body": "A Kubernetes pipeline answers four questions before anything reaches production: does the image build and is it free of known critical vulnerabilities, do the rendered manifests match the API schemas, will the live API server accept them, and what exactly will change. Each question maps to a cheap automated check, ordered from fastest to slowest.\n\nThe key principle is **build once, promote many**: one image identified by digest moves through staging and production; only configuration differs."
+      },
+      {
+       "type": "table",
+       "title": "Pipeline stages",
+       "head": [
+        "Stage",
+        "Tool and command",
+        "Catches",
+        "Needs cluster?"
+       ],
+       "rows": [
+        [
+         "Build and push",
+         "docker buildx build --push",
+         "Compile and Dockerfile errors",
+         "No"
+        ],
+        [
+         "Scan",
+         "trivy image --severity HIGH,CRITICAL",
+         "Known CVEs in the image",
+         "No"
+        ],
+        [
+         "Render",
+         "helm template / kubectl kustomize",
+         "Template errors",
+         "No"
+        ],
+        [
+         "Schema validate",
+         "kubeconform -strict",
+         "Unknown fields, wrong types",
+         "No"
+        ],
+        [
+         "Server dry-run",
+         "kubectl apply --dry-run=server",
+         "Admission, quota, immutable fields",
+         "Yes"
+        ],
+        [
+         "Diff",
+         "kubectl diff",
+         "The exact change set",
+         "Yes"
+        ],
+        [
+         "Deploy",
+         "Commit tag (GitOps) or helm upgrade",
+         "-",
+         "Via controller"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a CI workflow",
+       "body": "This is a GitHub Actions workflow file (not a Kubernetes manifest, so shown as text) with build, scan and validate jobs. Look at the image being tagged with the commit SHA and its digest captured as an output, at `--exit-code 1` making Trivy fail the build, and at kubeconform validating rendered YAML with `-strict` against Kubernetes 1.31 schemas plus the datree CRD catalog."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": ".github/workflows/delivery.yaml",
+       "code": "name: delivery\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: ubuntu-24.04\n    outputs:\n      digest: ${{ steps.push.outputs.digest }}\n    steps:\n      - uses: actions/checkout@v4\n      - uses: docker/login-action@v3\n        with: {registry: registry.example.com, username: ci, password: '${{ secrets.REGISTRY_TOKEN }}'}\n      - id: push\n        uses: docker/build-push-action@v6\n        with:\n          push: true\n          tags: registry.example.com/shop/api:${{ github.sha }}\n      - name: Scan\n        run: trivy image --severity HIGH,CRITICAL --exit-code 1 registry.example.com/shop/api@${{ steps.push.outputs.digest }}\n  validate:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@v4\n      - run: kubectl kustomize overlays/staging > /tmp/staging.yaml\n      - run: kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' /tmp/staging.yaml",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: validation output",
+       "body": "These commands run the checks locally the same way CI does. `kubeconform` is purely offline; `--dry-run=server` sends the object through the real API server, running admission webhooks and quota checks but persisting nothing; `kubectl diff` shows the change. In the output, look at the kubeconform summary counts and at the per-object `server dry run` lines."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "kubeconform, server dry-run and diff",
+       "code": "kubectl kustomize overlays/prod | kubeconform -strict -summary -kubernetes-version 1.31.0 -\nkubectl kustomize overlays/prod | kubectl apply --dry-run=server -f -\nkubectl kustomize overlays/prod | kubectl diff -f -",
+       "output": "Summary: 6 resources found parsing stdin - Valid: 6, Invalid: 0, Errors: 0, Skipped: 0\nconfigmap/prod-shop-api-config-7b2k9fd8t5 created (server dry run)\ndeployment.apps/prod-shop-api configured (server dry run)\nservice/prod-shop-api unchanged (server dry run)\ndiff -u -N /tmp/LIVE-8841/apps.v1.Deployment.shop-prod.prod-shop-api /tmp/MERGED-8841/apps.v1.Deployment.shop-prod.prod-shop-api\n-        image: registry.example.com/shop/api:1.8.2\n+        image: registry.example.com/shop/api:1.9.0",
+       "note": "A failing kubeconform prints for example: stdin - Deployment prod-shop-api is invalid: problem validating schema. Check JSON formatting: additional properties 'replica' not allowed."
+      },
+      {
+       "type": "text",
+       "title": "About this example: promotion by pull request",
+       "body": "This is the deploy repository layout and the single edit that promotes a release. Promotion changes the image tag or digest in the next environment's overlay, via an automated pull request, so reviews and GitOps handle the rest. Look at the `images` entry that pins a digest rather than a mutable tag; every environment then runs byte-identical content."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "Promoting staging to prod",
+       "code": "# overlays/staging/kustomization.yaml (updated by CI after build)\nimages:\n  - name: registry.example.com/shop/api\n    digest: sha256:3b1f0e8c9d52a7f4c8b6e1d0a9f27c43e5b8d6a1c0f9e2b7d4a3c8e1f6b50a92\n\n# promotion job: copy the same digest to prod and open a PR\ncd overlays/prod\nkustomize edit set image registry.example.com/shop/api@sha256:3b1f0e8c9d52a7f4c8b6e1d0a9f27c43e5b8d6a1c0f9e2b7d4a3c8e1f6b50a92\ngh pr create --title 'Promote shop-api to prod' --body 'Digest verified in staging'",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Never deploy from a mutable tag or unscanned image",
+       "body": "`latest` and re-pushed tags make rollbacks and audits meaningless. Pin by digest, sign images (cosign) and verify them with an admission policy (Kyverno or ValidatingAdmissionPolicy). Also give CI the least access it needs: a pull-based GitOps flow needs none to the cluster, while push-based flows should use short-lived OIDC credentials."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Validate offline",
+       "prompt": "Run kubeconform on a rendered overlay.",
+       "command": "kubectl kustomize overlays/staging | kubeconform -strict -summary -",
+       "expected": "Summary line with Invalid: 0",
+       "hint": "Strict mode rejects unknown fields.",
+       "solution": "kubectl kustomize overlays/staging | kubeconform -strict -summary -"
+      },
+      {
+       "title": "Server dry run",
+       "prompt": "Check what the API server would do with the overlay.",
+       "command": "kubectl kustomize overlays/staging | kubectl apply --dry-run=server -f -",
+       "expected": "Each object marked (server dry run)",
+       "hint": "server mode runs admission; client does not.",
+       "solution": "kubectl kustomize overlays/staging | kubectl apply --dry-run=server -f -"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does --dry-run=server check that kubeconform cannot?",
+        "options": [
+         "YAML syntax",
+         "Admission, quota and immutable field rules",
+         "Image CVEs",
+         "Git history"
+        ],
+        "answer": 1,
+        "explain": "The real API server runs admission and validation with current cluster state."
+       },
+       {
+        "question": "Why promote by digest?",
+        "options": [
+         "Smaller images",
+         "Immutable, identical artifact in every environment",
+         "Faster pulls",
+         "Avoids registries"
+        ],
+        "answer": 1,
+        "explain": "Digests cannot be re-pointed like tags."
+       },
+       {
+        "question": "What exit behaviour does kubectl diff have when changes exist?",
+        "options": [
+         "0",
+         "1",
+         "2",
+         "Fails to run"
+        ],
+        "answer": 1,
+        "explain": "Exit code 1 means differences were found; above 1 means an error."
+       },
+       {
+        "question": "Which stage needs no cluster access?",
+        "options": [
+         "kubectl diff",
+         "kubeconform",
+         "server dry run",
+         "rollout status"
+        ],
+        "answer": 1,
+        "explain": "kubeconform validates rendered YAML against schemas offline."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-gitops",
+      "k8s-kustomize",
+      "k8s-production-checklist"
+     ],
+     "tags": [
+      "ci",
+      "kubeconform",
+      "dry-run",
+      "promotion"
+     ],
+     "commands": [
+      "kubeconform",
+      "kubectl diff",
+      "kubectl apply --dry-run=server",
+      "trivy image"
+     ],
+     "sources": [
+      {
+       "title": "kubectl apply and dry-run",
+       "url": "https://kubernetes.io/docs/reference/using-api/api-concepts/#dry-run"
+      },
+      {
+       "title": "kubectl diff",
+       "url": "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_diff/"
+      },
+      {
+       "title": "kubeconform",
+       "url": "https://github.com/yannh/kubeconform"
+      },
+      {
+       "title": "Trivy documentation",
+       "url": "https://trivy.dev/latest/docs/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-operations"
+ ],
+ "track": "kubernetes"
+}

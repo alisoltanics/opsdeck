@@ -1,0 +1,1549 @@
+{
+  "id": "k8s-eks-production",
+  "order": 36,
+  "title": "Amazon EKS in Production",
+  "subtitle": "IAM, Terraform, security, Karpenter, storage, observability and upgrades",
+  "level": "Advanced",
+  "duration": "2h 5m",
+  "icon": "shield",
+  "accent": "orange",
+  "description": "Run Amazon EKS the way production demands: per-workload IAM with IRSA and Pod Identity, clusters as Terraform, locked-down networking and secrets, Karpenter and Spot economics, EBS/EFS storage, CloudWatch and Prometheus observability, and a repeatable upgrade, backup and troubleshooting runbook.",
+  "outcomes": [
+    "Give every pod least-privilege AWS access and prove it",
+    "Provision and upgrade an EKS cluster with Terraform",
+    "Secure, scale and observe the cluster and recover from failures"
+  ],
+  "modules": [
+    {
+      "id": "k8s-eks-m-identity-provisioning",
+      "title": "Identity and provisioning",
+      "summary": "Give workloads their own AWS identity and build the cluster as code.",
+      "lessons": [
+        {
+          "id": "k8s-eks-workload-iam",
+          "title": "Workload IAM: IRSA and EKS Pod Identity",
+          "duration": "18 min",
+          "summary": "Give pods their own least-privilege AWS identity, using IRSA or EKS Pod Identity, and prove it from inside a pod.",
+          "objectives": [
+            "Explain why pods must not inherit the node instance role",
+            "Compare IRSA and EKS Pod Identity and choose between them",
+            "Write an IAM trust policy, a ServiceAccount annotation and a Pod Identity association",
+            "Verify the identity a pod really uses with aws sts get-caller-identity"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What you will build and the path through this course",
+              "body": "This course takes you from a working EKS cluster (the prerequisite course *Amazon EKS essentials*) to one you can run in production. The path is: **identity** (this lesson) -> **provisioning as code** with Terraform -> **networking and security** -> **scaling and cost** -> **storage** -> **observability** -> **upgrades, backup and troubleshooting**. Each lesson builds on the previous one: the Terraform module you write in lesson 2 creates the OIDC provider and add-ons used by every later lesson.\n\nWe start with identity because every other production feature (autoscaling, storage drivers, external secrets, log shipping) is a pod that calls AWS APIs, and each needs credentials. Getting this right first prevents the most common EKS security mistake: giving every pod the permissions of the worker node.\n\nA worker node is an EC2 instance with an **instance profile** (an IAM role attached to the VM). Any process on the node, including every pod, can reach the **instance metadata service (IMDS)** at 169.254.169.254 and obtain the temporary credentials of that role. If the node role can read S3 or Secrets Manager, so can every pod, including a compromised one.\n\nThe fix is to give each workload its own IAM role through its Kubernetes **ServiceAccount** (the identity a pod runs as inside the cluster), and to keep the node role minimal (only what the kubelet and CNI need). EKS offers two mechanisms: **IRSA** (IAM Roles for Service Accounts, uses an OIDC identity provider) and **EKS Pod Identity** (newer, uses an agent on each node and an EKS API association)."
+            },
+            {
+              "type": "table",
+              "title": "IRSA versus EKS Pod Identity",
+              "head": [
+                "Aspect",
+                "IRSA",
+                "EKS Pod Identity"
+              ],
+              "rows": [
+                [
+                  "How it works",
+                  "Projected OIDC token in the pod; AWS STS AssumeRoleWithWebIdentity",
+                  "eks-pod-identity-agent DaemonSet serves credentials on 169.254.170.23"
+                ],
+                [
+                  "Trust policy principal",
+                  "Federated: the cluster's OIDC provider ARN, with a sub condition per namespace:serviceaccount",
+                  "Service principal pods.eks.amazonaws.com (same for all clusters)"
+                ],
+                [
+                  "Wiring in Kubernetes",
+                  "Annotation eks.amazonaws.com/role-arn on the ServiceAccount",
+                  "No annotation; an EKS association links namespace + ServiceAccount to a role"
+                ],
+                [
+                  "Per-cluster IAM edits",
+                  "Trust policy must name each cluster's OIDC issuer, so roles are not reusable across clusters",
+                  "Role is reusable across clusters; no trust policy edit per cluster"
+                ],
+                [
+                  "Works on",
+                  "EC2, Fargate, EKS Anywhere, self-managed clusters",
+                  "EC2 nodes only (not Fargate, not EKS Anywhere)"
+                ],
+                [
+                  "Session tags",
+                  "Not supported",
+                  "Cluster name, namespace and ServiceAccount are added as tags for ABAC"
+                ],
+                [
+                  "Limit",
+                  "One OIDC provider per cluster; 100 OIDC providers per account by default",
+                  "No OIDC provider needed"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: the IRSA IAM trust policy",
+              "body": "This is the **trust policy** of an IAM role named `orders-s3-reader`, the document that says who may assume the role. It is not a Kubernetes file, so it is shown as plain text; you attach it with `aws iam create-role --assume-role-policy-document file://trust.json`. Look at the `Federated` principal (your cluster's OIDC provider ARN) and the `sub` condition, which restricts the role to exactly one ServiceAccount in one namespace: without that condition, any ServiceAccount in the cluster could assume the role."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "code": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Principal\": {\n        \"Federated\": \"arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE\"\n      },\n      \"Action\": \"sts:AssumeRoleWithWebIdentity\",\n      \"Condition\": {\n        \"StringEquals\": {\n          \"oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE:aud\": \"sts.amazonaws.com\",\n          \"oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE:sub\": \"system:serviceaccount:orders:orders-api\"\n        }\n      }\n    }\n  ]\n}",
+              "title": "IRSA trust policy (trust.json)",
+              "output": null,
+              "note": "Always pin both aud and sub with StringEquals. A StringLike with a wildcard sub is a common over-permissive shortcut."
+            },
+            {
+              "type": "text",
+              "title": "About this example: ServiceAccount and test pod for IRSA",
+              "body": "This manifest creates the `orders-api` ServiceAccount with the annotation naming the role ARN, and a pod that runs the AWS CLI image under it. You apply it with `kubectl apply -f`. The annotation is what makes the EKS pod identity webhook inject the `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` variables and a projected token volume into the pod; check the `serviceAccountName` field in the pod, since a pod that does not name it silently falls back to the default ServiceAccount and gets no role."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: orders-api\n  namespace: orders\n  annotations:\n    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/orders-s3-reader\n    eks.amazonaws.com/sts-regional-endpoints: \"true\"\n---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: aws-cli-test\n  namespace: orders\nspec:\n  serviceAccountName: orders-api\n  restartPolicy: Never\n  containers:\n    - name: aws\n      image: amazon/aws-cli:2.17.0\n      command: [\"sleep\", \"3600\"]\n",
+              "title": "ServiceAccount annotated for IRSA, plus a verification pod",
+              "output": "serviceaccount/orders-api created\npod/aws-cli-test created",
+              "note": "The webhook only mutates pods created after the annotation exists. Restart existing pods after adding it."
+            },
+            {
+              "type": "text",
+              "title": "About this example: EKS Pod Identity setup and verification",
+              "body": "These are the AWS CLI and kubectl commands to use Pod Identity instead. The first installs the `eks-pod-identity-agent` add-on, the second creates the **association** (it links the `orders` namespace and `orders-api` ServiceAccount to a role, with no annotation needed), and the last two prove the result from inside the pod. In the output, the `Arn` of `get-caller-identity` must show `assumed-role/orders-s3-reader` with a session name, never the node role (`eks-node-role`)."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "kubectl -n orders exec aws-cli-test -- env | grep -E 'AWS_(ROLE|WEB|CONTAINER|REGION)'\nkubectl -n orders get pod aws-cli-test -o jsonpath='{.spec.serviceAccountName}{\"\\n\"}'\naws sts get-caller-identity --query Arn --output text",
+              "title": "Which credential source is the pod using?",
+              "output": "AWS_REGION=us-east-1\nAWS_CONTAINER_CREDENTIALS_FULL_URI=http://169.254.170.23/v1/credentials\nAWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token\norders-api\narn:aws:iam::123456789012:user/ali",
+              "note": "The last line runs on your laptop, not in the pod: it is the identity of the human, shown for contrast."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** Leaving IMDS reachable: set the node group metadata option `http_put_response_hop_limit = 1` so pods cannot reach node credentials. **2.** Forgetting `serviceAccountName`, so the pod runs as `default`. **3.** A trust policy `sub` that does not match `system:serviceaccount:<namespace>:<name>` exactly (typos give `AccessDenied` from `AssumeRoleWithWebIdentity`). **4.** Using an old SDK that does not support the container credentials provider or web identity. **5.** Attaching `AdministratorAccess` to the workload role to make an error disappear."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "Pods inherit the node role unless you give them an identity. **IRSA** uses the cluster OIDC provider, a trust policy with an `aud`/`sub` condition and an annotated ServiceAccount; **Pod Identity** uses an agent add-on and an association, and produces roles that are reusable across clusters. Prefer Pod Identity on EC2 nodes, keep IRSA for Fargate and other clusters, and always verify with `aws sts get-caller-identity` from inside the pod.\n\nNext you will codify the cluster itself, including the OIDC provider, the Pod Identity add-on and these IAM roles, with Terraform."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Prove the identity",
+              "prompt": "Run `aws sts get-caller-identity` from inside a pod and confirm it is an assumed role for the workload, not the node role.",
+              "command": "kubectl -n orders exec aws-cli-test -- aws sts get-caller-identity",
+              "expected": "The Arn contains assumed-role/orders-s3-reader.",
+              "hint": "If the Arn shows the node role, check serviceAccountName and the association or annotation.",
+              "solution": "Confirm with: kubectl -n orders get pod aws-cli-test -o jsonpath='{.spec.serviceAccountName}', then recreate the pod after fixing the annotation or association."
+            },
+            {
+              "title": "List associations",
+              "prompt": "List all Pod Identity associations of the cluster and find the one for orders-api.",
+              "command": "aws eks list-pod-identity-associations --cluster-name prod-eks",
+              "expected": "An association entry for namespace orders and serviceAccount orders-api.",
+              "hint": "Add --namespace orders to filter.",
+              "solution": "aws eks list-pod-identity-associations --cluster-name prod-eks --namespace orders"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why is relying on the node instance role dangerous?",
+                "options": [
+                  "Nodes cannot have roles",
+                  "Every pod on the node can obtain the role's credentials through IMDS",
+                  "It makes pods slower",
+                  "It disables the CNI"
+                ],
+                "answer": 1,
+                "explain": "All pods on a node can reach IMDS, so one compromised pod gets all node permissions."
+              },
+              {
+                "question": "Which statement about EKS Pod Identity is true?",
+                "options": [
+                  "It needs an OIDC provider per cluster",
+                  "It works on Fargate",
+                  "The role trust principal is pods.eks.amazonaws.com",
+                  "It requires annotating the ServiceAccount"
+                ],
+                "answer": 2,
+                "explain": "Pod Identity uses the service principal pods.eks.amazonaws.com and an EKS association, no annotation."
+              },
+              {
+                "question": "What does the sub condition in an IRSA trust policy do?",
+                "options": [
+                  "Selects the AWS region",
+                  "Restricts the role to one namespace and ServiceAccount",
+                  "Sets session duration",
+                  "Encrypts the token"
+                ],
+                "answer": 1,
+                "explain": "sub is system:serviceaccount:<ns>:<name>, which limits who can assume the role."
+              },
+              {
+                "question": "A pod returns the node role from get-caller-identity. First check?",
+                "options": [
+                  "Cluster version",
+                  "That the pod uses the intended serviceAccountName and was created after the annotation or association",
+                  "The VPC CIDR",
+                  "The node AMI"
+                ],
+                "answer": 1,
+                "explain": "A pod on the default ServiceAccount, or created before the mutation, will not receive the workload role."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-secrets",
+            "k8s-rbac",
+            "k8s-sec-secrets-management"
+          ],
+          "tags": [
+            "eks",
+            "iam",
+            "irsa",
+            "pod-identity"
+          ],
+          "commands": [
+            "aws eks create-pod-identity-association",
+            "aws sts get-caller-identity",
+            "kubectl exec"
+          ],
+          "sources": [
+            {
+              "title": "IAM roles for service accounts",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html"
+            },
+            {
+              "title": "EKS Pod Identity",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html"
+            },
+            {
+              "title": "Service accounts",
+              "url": "https://kubernetes.io/docs/concepts/security/service-accounts/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-terraform",
+          "title": "Provisioning EKS with Terraform",
+          "duration": "19 min",
+          "summary": "Codify a production EKS cluster with the community module: VPC, managed node groups, add-ons, access entries and outputs.",
+          "objectives": [
+            "Structure a Terraform project for EKS with remote state",
+            "Configure terraform-aws-modules/eks with managed node groups and core add-ons",
+            "Grant cluster access with access entries instead of aws-auth",
+            "Plan, apply and connect kubectl using module outputs"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Why Terraform, and how the project is laid out",
+              "body": "Clicking through the console or running `eksctl` is fine to learn, but a production cluster must be **reproducible, reviewable and diffable**. **Terraform** (version 1.6 or newer here) describes infrastructure in HCL files, compares them to a **state file** and applies only the difference. The **AWS provider 5.x** talks to AWS, and the community module `terraform-aws-modules/eks/aws` (v20) wraps the dozens of resources an EKS cluster needs: control plane, IAM roles, security groups, OIDC provider, node groups, add-ons and access entries.\n\nA typical layout has one directory per environment (`envs/prod`) with `versions.tf` (pinned providers and a remote backend), `vpc.tf`, `eks.tf` and `outputs.tf`. State lives in an S3 bucket with DynamoDB locking so two engineers cannot apply at once."
+            },
+            {
+              "type": "table",
+              "title": "Main module inputs",
+              "head": [
+                "Argument",
+                "Meaning",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "cluster_name / cluster_version",
+                  "Name and Kubernetes minor version of the control plane",
+                  "prod-eks / 1.31"
+                ],
+                [
+                  "vpc_id / subnet_ids",
+                  "VPC and private subnets for nodes and control plane ENIs",
+                  "module.vpc.private_subnets"
+                ],
+                [
+                  "cluster_endpoint_public_access",
+                  "Whether the API endpoint is reachable from the internet",
+                  "false for private clusters"
+                ],
+                [
+                  "cluster_addons",
+                  "Map of EKS add-ons (CoreDNS, kube-proxy, VPC CNI, Pod Identity agent, EBS CSI)",
+                  "vpc-cni = { most_recent = true }"
+                ],
+                [
+                  "eks_managed_node_groups",
+                  "Map of managed node groups (AWS manages AMI rollout and draining)",
+                  "system = { instance_types = [\"m6i.large\"] }"
+                ],
+                [
+                  "access_entries",
+                  "Map of IAM principals granted Kubernetes access",
+                  "platform-admins with AmazonEKSClusterAdminPolicy"
+                ],
+                [
+                  "enable_cluster_creator_admin_permissions",
+                  "Give the identity running Terraform admin access",
+                  "true"
+                ],
+                [
+                  "cluster_enabled_log_types",
+                  "Control plane log streams sent to CloudWatch",
+                  "[\"api\",\"audit\",\"authenticator\"]"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: versions.tf and the VPC",
+              "body": "This file pins Terraform and the AWS provider, stores state remotely, and creates a three-AZ VPC with the community VPC module. The subnet tags matter: `kubernetes.io/role/internal-elb` lets the AWS Load Balancer Controller place internal load balancers, and `karpenter.sh/discovery` (used in lesson 4) lets Karpenter find subnets. Read `private_subnets`: nodes live there and reach the internet through NAT gateways."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "code": "terraform {\n  required_version = \">= 1.6.0\"\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.60\"\n    }\n  }\n  backend \"s3\" {\n    bucket         = \"acme-terraform-state\"\n    key            = \"prod/eks/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\n\nprovider \"aws\" {\n  region = \"us-east-1\"\n}\n\nlocals {\n  name = \"prod-eks\"\n  azs  = [\"us-east-1a\", \"us-east-1b\", \"us-east-1c\"]\n}\n\nmodule \"vpc\" {\n  source  = \"terraform-aws-modules/vpc/aws\"\n  version = \"~> 5.13\"\n\n  name = local.name\n  cidr = \"10.0.0.0/16\"\n  azs  = local.azs\n\n  private_subnets = [\"10.0.0.0/19\", \"10.0.32.0/19\", \"10.0.64.0/19\"]\n  public_subnets  = [\"10.0.96.0/24\", \"10.0.97.0/24\", \"10.0.98.0/24\"]\n\n  enable_nat_gateway = true\n  single_nat_gateway = false\n\n  public_subnet_tags = {\n    \"kubernetes.io/role/elb\" = 1\n  }\n  private_subnet_tags = {\n    \"kubernetes.io/role/internal-elb\" = 1\n    \"karpenter.sh/discovery\"          = local.name\n  }\n}",
+              "title": "versions.tf and vpc.tf",
+              "output": null,
+              "note": "Large private subnets (/19) matter: with the VPC CNI every pod consumes a VPC IP, so small subnets cause IP exhaustion (lesson 7)."
+            },
+            {
+              "type": "text",
+              "title": "About this example: the EKS module call",
+              "body": "This is `eks.tf`, the heart of the project. It creates a 1.31 control plane with a private-plus-restricted public endpoint, core add-ons, one managed node group for system workloads, and **access entries**, the current replacement for editing the `aws-auth` ConfigMap. Notice `before_compute = true` on the VPC CNI (it must exist before nodes join), the `AmazonEKSClusterAdminPolicy` association for the platform team, and `enable_irsa = true` which creates the OIDC provider from lesson 1."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "code": "module \"eks\" {\n  source  = \"terraform-aws-modules/eks/aws\"\n  version = \"~> 20.24\"\n\n  cluster_name    = local.name\n  cluster_version = \"1.31\"\n\n  vpc_id     = module.vpc.vpc_id\n  subnet_ids = module.vpc.private_subnets\n\n  cluster_endpoint_private_access      = true\n  cluster_endpoint_public_access       = true\n  cluster_endpoint_public_access_cidrs = [\"203.0.113.0/24\"]\n\n  enable_irsa                              = true\n  enable_cluster_creator_admin_permissions = false\n  authentication_mode                      = \"API\"\n\n  cluster_enabled_log_types = [\"api\", \"audit\", \"authenticator\"]\n\n  cluster_addons = {\n    coredns                = { most_recent = true }\n    kube-proxy             = { most_recent = true }\n    eks-pod-identity-agent = { most_recent = true }\n    vpc-cni = {\n      most_recent    = true\n      before_compute = true\n      configuration_values = jsonencode({\n        env = { ENABLE_PREFIX_DELEGATION = \"true\" }\n      })\n    }\n    aws-ebs-csi-driver = { most_recent = true }\n  }\n\n  eks_managed_node_groups = {\n    system = {\n      ami_type       = \"AL2023_x86_64_STANDARD\"\n      instance_types = [\"m6i.large\"]\n      min_size       = 2\n      max_size       = 4\n      desired_size   = 2\n      labels         = { \"workload\" = \"system\" }\n      metadata_options = {\n        http_tokens                 = \"required\"\n        http_put_response_hop_limit = 1\n      }\n    }\n  }\n\n  access_entries = {\n    platform-admins = {\n      principal_arn = \"arn:aws:iam::123456789012:role/PlatformAdmins\"\n      policy_associations = {\n        admin = {\n          policy_arn   = \"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy\"\n          access_scope = { type = \"cluster\" }\n        }\n      }\n    }\n    dev-readers = {\n      principal_arn = \"arn:aws:iam::123456789012:role/Developers\"\n      policy_associations = {\n        view = {\n          policy_arn   = \"arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy\"\n          access_scope = { type = \"namespace\", namespaces = [\"orders\"] }\n        }\n      }\n    }\n  }\n\n  tags = { Environment = \"prod\", ManagedBy = \"terraform\" }\n}",
+              "title": "eks.tf",
+              "output": null,
+              "note": "authentication_mode = \"API\" uses access entries only. Use \"API_AND_CONFIG_MAP\" while migrating an older cluster that still relies on aws-auth."
+            },
+            {
+              "type": "text",
+              "title": "About this example: init, plan, apply and connecting",
+              "body": "This is the command sequence you run from `envs/prod`, after adding an `outputs.tf` that exposes `module.eks.cluster_name`, `cluster_endpoint` and `oidc_provider_arn` (other stacks read them, for example the IAM roles from lesson 1). `init` downloads providers and modules, `plan` shows a diff you must read, `apply` creates resources (about 12 to 15 minutes) and `aws eks update-kubeconfig` writes your kubectl context. Look at the plan totals: `Plan: 61 to add, 0 to change, 0 to destroy` is expected on a first run, while any `to destroy` on an existing cluster deserves scrutiny; then check that `kubectl get nodes` shows Ready nodes."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "terraform init\nterraform plan -out=tfplan\nterraform apply tfplan\naws eks update-kubeconfig --region us-east-1 --name prod-eks\nkubectl get nodes",
+              "title": "Terraform workflow and connecting kubectl",
+              "output": "Initializing the backend...\nSuccessfully configured the backend \"s3\"! Terraform will automatically\nuse this backend unless the backend configuration changes.\nTerraform has been successfully initialized!\n\nPlan: 61 to add, 0 to change, 0 to destroy.\n\nmodule.eks.aws_eks_cluster.this[0]: Creation complete after 10m41s [id=prod-eks]\nmodule.eks.module.eks_managed_node_group[\"system\"].aws_eks_node_group.this[0]: Creation complete after 2m3s\n\nApply complete! Resources: 61 added, 0 changed, 0 destroyed.\n\nOutputs:\ncluster_endpoint = \"https://A1B2C3D4E5F6.gr7.us-east-1.eks.amazonaws.com\"\ncluster_name = \"prod-eks\"\nconfigure_kubectl = \"aws eks update-kubeconfig --region us-east-1 --name prod-eks\"\n\nAdded new context arn:aws:eks:us-east-1:123456789012:cluster/prod-eks to /home/ali/.kube/config\nNAME                           STATUS   ROLES    AGE   VERSION\nip-10-0-14-23.ec2.internal     Ready    <none>   96s   v1.31.2-eks-94953ac\nip-10-0-52-171.ec2.internal    Ready    <none>   91s   v1.31.2-eks-94953ac",
+              "note": "Always apply a saved plan file (-out=tfplan) in CI so what was reviewed is exactly what runs."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** Local state: two people apply at once and corrupt the cluster record; use the S3 backend with locking. **2.** Unpinned module versions: `terraform init -upgrade` can silently change a production cluster. **3.** Bumping `cluster_version` by two minors in one commit; EKS only upgrades one minor at a time. **4.** Losing admin access because `enable_cluster_creator_admin_permissions = false` and no access entry matches you. **5.** Public endpoint open to `0.0.0.0/0`. **6.** Putting application manifests in the same state as the cluster."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "You pinned Terraform and the provider, created a three-AZ VPC, called the EKS module with managed node groups, core add-ons and **access entries**, and used outputs plus `update-kubeconfig` to connect. Everything is in version control and repeatable.\n\nNext we secure the network layer of this cluster: security groups for pods, network policies, private endpoints, secrets and KMS encryption."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Read the plan",
+              "prompt": "Run a plan and find the total number of resources to add.",
+              "command": "terraform plan -out=tfplan",
+              "expected": "A summary line such as Plan: 61 to add, 0 to change, 0 to destroy.",
+              "hint": "The summary is the last line of the plan output.",
+              "solution": "terraform plan -out=tfplan | tail -n 3"
+            },
+            {
+              "title": "Connect to the cluster",
+              "prompt": "Create the kubeconfig entry from the module output and list nodes.",
+              "command": "aws eks update-kubeconfig --region us-east-1 --name prod-eks",
+              "expected": "Added new context ... and kubectl get nodes lists Ready nodes.",
+              "hint": "Use terraform output configure_kubectl to get the exact command.",
+              "solution": "eval \"$(terraform output -raw configure_kubectl)\" && kubectl get nodes"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What replaces editing the aws-auth ConfigMap in modern EKS?",
+                "options": [
+                  "Helm values",
+                  "Access entries",
+                  "Network policies",
+                  "Node labels"
+                ],
+                "answer": 1,
+                "explain": "Access entries are managed through the EKS API and can be defined in Terraform."
+              },
+              {
+                "question": "Why store Terraform state in S3 with DynamoDB?",
+                "options": [
+                  "To speed up pods",
+                  "Shared state and locking prevent concurrent corruption",
+                  "To encrypt etcd",
+                  "To enable IRSA"
+                ],
+                "answer": 1,
+                "explain": "Remote state with locking lets a team apply safely."
+              },
+              {
+                "question": "Why is before_compute = true set on the vpc-cni add-on?",
+                "options": [
+                  "Nodes need the CNI before they can join and become Ready",
+                  "It lowers cost",
+                  "It enables Karpenter",
+                  "It sets the endpoint to private"
+                ],
+                "answer": 0,
+                "explain": "Without a CNI, nodes cannot start pods and stay NotReady."
+              },
+              {
+                "question": "How many Kubernetes minor versions can one EKS upgrade jump?",
+                "options": [
+                  "Any number",
+                  "One",
+                  "Two",
+                  "Three"
+                ],
+                "answer": 1,
+                "explain": "EKS control plane upgrades are one minor version at a time."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-eks-workload-iam",
+            "k8s-kubeadm-upgrades",
+            "k8s-production-checklist"
+          ],
+          "tags": [
+            "eks",
+            "terraform",
+            "iac"
+          ],
+          "commands": [
+            "terraform init",
+            "terraform plan",
+            "terraform apply",
+            "aws eks update-kubeconfig"
+          ],
+          "sources": [
+            {
+              "title": "terraform-aws-modules/eks",
+              "url": "https://github.com/terraform-aws-modules/terraform-aws-eks"
+            },
+            {
+              "title": "EKS access entries",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/access-entries.html"
+            },
+            {
+              "title": "Terraform AWS provider",
+              "url": "https://registry.terraform.io/providers/hashicorp/aws/latest/docs"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-eks-m-secure-scale-data",
+      "title": "Security, scaling and storage",
+      "summary": "Harden the network, scale economically and run stateful data.",
+      "lessons": [
+        {
+          "id": "k8s-eks-network-security",
+          "title": "Networking and security on EKS",
+          "duration": "18 min",
+          "summary": "Isolate pods with security groups and network policies, lock down the API endpoint, and manage secrets and encryption with AWS services.",
+          "objectives": [
+            "Explain how the VPC CNI gives pods VPC IPs and what that means for security groups",
+            "Apply a SecurityGroupPolicy and a NetworkPolicy enforced by the VPC CNI",
+            "Choose between public, restricted and private cluster endpoints",
+            "Sync secrets from AWS Secrets Manager and encrypt Kubernetes secrets with KMS"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Layers of isolation in an EKS cluster",
+              "body": "EKS gives you four independent layers, and production clusters use all of them. **Pod networking**: the **Amazon VPC CNI** plugin gives each pod a real VPC IP address from the node's ENIs, so pods are first-class citizens of the VPC. **Network policy**: Kubernetes `NetworkPolicy` objects, enforced by the VPC CNI when you enable its network policy agent (an eBPF-based enforcer, Kubernetes 1.25+ and VPC CNI 1.14+). **Security groups for pods**: AWS security groups attached to individual pods, useful when the target is an RDS database that only accepts traffic from a specific security group. **Endpoint and data protection**: who can reach the API server, where secrets come from, and how they are encrypted at rest."
+            },
+            {
+              "type": "table",
+              "title": "Which control for which problem",
+              "head": [
+                "Need",
+                "Use",
+                "Where configured"
+              ],
+              "rows": [
+                [
+                  "Allow only the orders pods to reach RDS",
+                  "Security groups for pods",
+                  "SecurityGroupPolicy object; ENABLE_POD_ENI=true on vpc-cni"
+                ],
+                [
+                  "Deny all traffic into a namespace by default",
+                  "NetworkPolicy default deny",
+                  "Enable enableNetworkPolicy: \"true\" in the vpc-cni add-on configuration"
+                ],
+                [
+                  "Restrict who can call the API server",
+                  "Endpoint access settings and CIDR allow-list",
+                  "cluster_endpoint_public_access_cidrs or private-only"
+                ],
+                [
+                  "Keep database passwords out of Git",
+                  "Secrets Manager + External Secrets Operator or CSI driver",
+                  "ExternalSecret / SecretProviderClass"
+                ],
+                [
+                  "Encrypt Secret objects in etcd with your own key",
+                  "KMS envelope encryption",
+                  "encryptionConfig on the cluster (cluster_encryption_config in Terraform)"
+                ],
+                [
+                  "Stop pods reaching node credentials",
+                  "IMDSv2 with hop limit 1",
+                  "Node group metadata_options"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: SecurityGroupPolicy and NetworkPolicy",
+              "body": "This file holds two complete manifests. The `SecurityGroupPolicy` attaches security group `sg-0a1b2c3d4e5f67890` (allowed by the RDS security group) to pods labelled `app: orders`; it needs the VPC CNI setting `ENABLE_POD_ENI=true` and a supported Nitro instance type. The `NetworkPolicy` is a default-deny ingress policy for the `orders` namespace plus an allow rule from `ingress-nginx`; apply with `kubectl apply -f`, and notice the empty `podSelector: {}` which selects every pod."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: vpcresources.k8s.aws/v1beta1\nkind: SecurityGroupPolicy\nmetadata:\n  name: orders-db-access\n  namespace: orders\nspec:\n  podSelector:\n    matchLabels:\n      app: orders\n  securityGroups:\n    groupIds:\n      - sg-0a1b2c3d4e5f67890\n---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny-ingress\n  namespace: orders\nspec:\n  podSelector: {}\n  policyTypes:\n    - Ingress\n---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-from-ingress\n  namespace: orders\nspec:\n  podSelector:\n    matchLabels:\n      app: orders\n  policyTypes:\n    - Ingress\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: ingress-nginx\n      ports:\n        - protocol: TCP\n          port: 8080",
+              "title": "SecurityGroupPolicy plus NetworkPolicies",
+              "output": "securitygrouppolicy.vpcresources.k8s.aws/orders-db-access created\nnetworkpolicy.networking.k8s.io/default-deny-ingress created\nnetworkpolicy.networking.k8s.io/allow-from-ingress created",
+              "note": "To turn the enforcer on, update the add-on: aws eks update-addon --cluster-name prod-eks --addon-name vpc-cni --configuration-values '{\"enableNetworkPolicy\":\"true\"}'. Without it NetworkPolicy objects are accepted but silently not enforced."
+            },
+            {
+              "type": "text",
+              "title": "About this example: ExternalSecret from Secrets Manager",
+              "body": "The External Secrets Operator (installed by Helm, using Pod Identity for AWS access) reads a secret from **AWS Secrets Manager** and writes a normal Kubernetes Secret. The `ClusterSecretStore` says how to authenticate and where, and the `ExternalSecret` says which remote key becomes which Secret and how often to refresh it. Apply both with `kubectl apply -f`, then read the `STATUS` column of `kubectl get externalsecret`, which must say `SecretSynced`. The alternative, the Secrets Store CSI Driver with the AWS provider, mounts the value as a file and avoids creating a Secret object at all."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: external-secrets.io/v1beta1\nkind: ClusterSecretStore\nmetadata:\n  name: aws-secrets-manager\nspec:\n  provider:\n    aws:\n      service: SecretsManager\n      region: us-east-1\n---\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: orders-db\n  namespace: orders\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    kind: ClusterSecretStore\n    name: aws-secrets-manager\n  target:\n    name: orders-db\n    creationPolicy: Owner\n  data:\n    - secretKey: password\n      remoteRef:\n        key: prod/orders/db\n        property: password",
+              "title": "ClusterSecretStore and ExternalSecret",
+              "output": "clustersecretstore.external-secrets.io/aws-secrets-manager created\nexternalsecret.external-secrets.io/orders-db created\n\n$ kubectl -n orders get externalsecret\nNAME        STORE                 REFRESH INTERVAL   STATUS         READY\norders-db   aws-secrets-manager   1h                 SecretSynced   True",
+              "note": "The operator's own role needs secretsmanager:GetSecretValue and DescribeSecret only on arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/orders/*."
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking endpoint and encryption settings",
+              "body": "This command reads the cluster description and extracts the three settings that define its exposure: endpoint access, allowed CIDRs and KMS encryption. The matching Terraform arguments are `cluster_endpoint_public_access`, `cluster_endpoint_public_access_cidrs` and `cluster_encryption_config = { resources = [\"secrets\"], provider_key_arn = aws_kms_key.eks.arn }`. In the output, look at `endpointPublicAccess`: `false` means a private cluster, reachable only from inside the VPC, peered networks, a VPN or Direct Connect, and in that case you also need VPC interface endpoints (ecr.api, ecr.dkr, sts, s3 gateway) so private nodes can pull images and call AWS."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "aws eks describe-cluster --name prod-eks \\\n  --query 'cluster.{endpoint:resourcesVpcConfig,encryption:encryptionConfig}' --output json",
+              "title": "Inspect endpoint access and encryption",
+              "output": "{\n    \"endpoint\": {\n        \"subnetIds\": [\"subnet-0aa1\", \"subnet-0bb2\", \"subnet-0cc3\"],\n        \"securityGroupIds\": [\"sg-0d4e5f6a7b8c9d0e1\"],\n        \"clusterSecurityGroupId\": \"sg-0123456789abcdef0\",\n        \"vpcId\": \"vpc-0abc123def4567890\",\n        \"endpointPublicAccess\": false,\n        \"endpointPrivateAccess\": true,\n        \"publicAccessCidrs\": []\n    },\n    \"encryption\": [\n        {\n            \"resources\": [\"secrets\"],\n            \"provider\": {\n                \"keyArn\": \"arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d\"\n            }\n        }\n    ]\n}",
+              "note": "Envelope encryption can be enabled on an existing cluster but never removed, so pick the CMK carefully and enable key rotation."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** Writing NetworkPolicies without enabling the VPC CNI network policy agent: they look applied but nothing is enforced. **2.** A default-deny policy without an egress rule for DNS (UDP/TCP 53 to kube-system) breaks name resolution. **3.** Security groups for pods on unsupported instance types or without `ENABLE_POD_ENI`. **4.** Private endpoint with no route from your CI runner, locking the pipeline out. **5.** Storing the secret value in Git instead of only its Secrets Manager key name. **6.** Believing KMS encryption hides secrets from users with `get secret` RBAC; it protects data at rest only."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "Pods have VPC IPs, which lets you use security groups per pod and NetworkPolicies enforced by the VPC CNI. Restrict or privatise the API endpoint, source secrets from Secrets Manager through External Secrets or the CSI driver, and encrypt Secret objects with a KMS key.\n\nWith a secure baseline in place, the next lesson makes the cluster elastic: autoscaling with Karpenter, spot capacity and cost control."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Verify sync",
+              "prompt": "Check that an ExternalSecret has synced and that the target Secret exists.",
+              "command": "kubectl -n orders get externalsecret orders-db",
+              "expected": "STATUS shows SecretSynced and READY True.",
+              "hint": "Use kubectl describe externalsecret for the failing reason.",
+              "solution": "kubectl -n orders get secret orders-db"
+            },
+            {
+              "title": "Test default deny",
+              "prompt": "After applying default-deny, test that an untrusted pod cannot reach the orders service.",
+              "command": "kubectl run probe --rm -it --image=busybox -n default -- wget -qO- -T 3 http://orders.orders:8080",
+              "expected": "The request times out because ingress is denied.",
+              "hint": "Run the probe from a namespace that the allow policy does not list.",
+              "solution": "A timeout (wget: download timed out) confirms enforcement."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What must be enabled for NetworkPolicy objects to take effect with the VPC CNI?",
+                "options": [
+                  "Nothing, always on",
+                  "The network policy agent via enableNetworkPolicy",
+                  "A Calico license",
+                  "IRSA"
+                ],
+                "answer": 1,
+                "explain": "The VPC CNI add-on must have enableNetworkPolicy set to true."
+              },
+              {
+                "question": "Security groups for pods require which pod-level resource?",
+                "options": [
+                  "SecurityGroupPolicy",
+                  "StorageClass",
+                  "PriorityClass",
+                  "Ingress"
+                ],
+                "answer": 0,
+                "explain": "A SecurityGroupPolicy selects pods and attaches SG ids."
+              },
+              {
+                "question": "A private-only API endpoint means...",
+                "options": [
+                  "Anyone can call it",
+                  "It is reachable only from inside the VPC or connected networks",
+                  "Nodes cannot join",
+                  "Pods lose IPs"
+                ],
+                "answer": 1,
+                "explain": "endpointPublicAccess false restricts access to private networks."
+              },
+              {
+                "question": "What does KMS envelope encryption on EKS protect?",
+                "options": [
+                  "Pod logs",
+                  "Secrets stored in etcd",
+                  "Container images",
+                  "Node disks"
+                ],
+                "answer": 1,
+                "explain": "With encryptionConfig, Secret objects in etcd are encrypted with your CMK."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-network-policies",
+            "k8s-secrets",
+            "k8s-sec-secrets-management",
+            "k8s-eks-workload-iam"
+          ],
+          "tags": [
+            "eks",
+            "networking",
+            "security",
+            "kms"
+          ],
+          "commands": [
+            "kubectl get externalsecret",
+            "aws eks describe-cluster",
+            "aws eks update-addon"
+          ],
+          "sources": [
+            {
+              "title": "Network policies in EKS",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy.html"
+            },
+            {
+              "title": "Security groups for pods",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html"
+            },
+            {
+              "title": "External Secrets Operator",
+              "url": "https://external-secrets.io/latest/"
+            },
+            {
+              "title": "Network Policies",
+              "url": "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-scaling-cost",
+          "title": "Scaling and cost: Karpenter, Spot and right-sizing",
+          "duration": "19 min",
+          "summary": "Scale nodes automatically with Karpenter or Cluster Autoscaler, use Spot safely, and make EKS costs visible.",
+          "objectives": [
+            "Compare Cluster Autoscaler and Karpenter and pick one",
+            "Write a Karpenter NodePool and EC2NodeClass for on-demand and Spot capacity",
+            "Make workloads Spot-tolerant and right-size their requests",
+            "Attribute cost to namespaces and teams"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Two layers of scaling, and who owns the nodes",
+              "body": "Scaling on Kubernetes happens at two layers. **Pod scaling** (HorizontalPodAutoscaler, covered in the Operations course) changes the number of replicas. **Node scaling** changes the number of EC2 instances so that all pods have somewhere to run. Node scaling reacts to **Pending pods** that no node can fit.\n\nOn EKS there are two mainstream node autoscalers. **Cluster Autoscaler** (CA) scales pre-defined Auto Scaling Groups (managed node groups) up and down. **Karpenter** has no node groups: it reads the pending pods' requests, picks the cheapest EC2 instance types that fit (including Spot) from a wide list, launches them directly and consolidates (replaces or removes) nodes that are underused. Karpenter itself runs on a small managed node group, never on nodes it manages."
+            },
+            {
+              "type": "table",
+              "title": "Cluster Autoscaler versus Karpenter",
+              "head": [
+                "Aspect",
+                "Cluster Autoscaler",
+                "Karpenter"
+              ],
+              "rows": [
+                [
+                  "Unit of scaling",
+                  "Node group (ASG) with a fixed instance type list",
+                  "Individual instances chosen per pending pod batch"
+                ],
+                [
+                  "Speed",
+                  "Minutes (ASG then node join)",
+                  "Typically under a minute to a node"
+                ],
+                [
+                  "Instance choice",
+                  "You pre-create a group per shape",
+                  "Dynamic, from NodePool requirements (families, sizes, Spot or on-demand)"
+                ],
+                [
+                  "Scale down",
+                  "Removes nodes below a utilisation threshold",
+                  "Consolidation: delete empty or underused nodes and repack"
+                ],
+                [
+                  "Config objects",
+                  "Flags and ASG tags",
+                  "NodePool and EC2NodeClass custom resources (API karpenter.sh/v1)"
+                ],
+                [
+                  "Spot handling",
+                  "One Spot group per diversification set",
+                  "Mixes Spot and on-demand, handles interruption messages through SQS"
+                ],
+                [
+                  "Best for",
+                  "Simple, static shapes, strict ASG governance",
+                  "Varied workloads and cost optimisation"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: NodePool and EC2NodeClass",
+              "body": "These two manifests are Karpenter v1 resources. The **EC2NodeClass** describes the AWS side: which IAM role the nodes use, which subnets and security groups (found by the `karpenter.sh/discovery` tag you set in Terraform), and which AMI (`al2023@latest`). The **NodePool** describes the Kubernetes side: allowed capacity types, instance categories, a CPU limit as a spending guard, and the consolidation policy. Check `limits.cpu`, which caps total provisioned vCPU, and `expireAfter`, which forces periodic node replacement so AMI patches roll out."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: karpenter.k8s.aws/v1\nkind: EC2NodeClass\nmetadata:\n  name: default\nspec:\n  role: KarpenterNodeRole-prod-eks\n  amiSelectorTerms:\n    - alias: al2023@latest\n  subnetSelectorTerms:\n    - tags:\n        karpenter.sh/discovery: prod-eks\n  securityGroupSelectorTerms:\n    - tags:\n        karpenter.sh/discovery: prod-eks\n  metadataOptions:\n    httpTokens: required\n    httpPutResponseHopLimit: 1\n  blockDeviceMappings:\n    - deviceName: /dev/xvda\n      ebs:\n        volumeSize: 50Gi\n        volumeType: gp3\n        encrypted: true\n---\napiVersion: karpenter.sh/v1\nkind: NodePool\nmetadata:\n  name: general\nspec:\n  template:\n    spec:\n      nodeClassRef:\n        group: karpenter.k8s.aws\n        kind: EC2NodeClass\n        name: default\n      requirements:\n        - key: karpenter.sh/capacity-type\n          operator: In\n          values: [\"spot\", \"on-demand\"]\n        - key: karpenter.k8s.aws/instance-category\n          operator: In\n          values: [\"c\", \"m\", \"r\"]\n        - key: karpenter.k8s.aws/instance-generation\n          operator: Gt\n          values: [\"4\"]\n        - key: kubernetes.io/arch\n          operator: In\n          values: [\"amd64\"]\n      expireAfter: 720h\n  limits:\n    cpu: \"200\"\n  disruption:\n    consolidationPolicy: WhenEmptyOrUnderutilized\n    consolidateAfter: 1m",
+              "title": "Karpenter EC2NodeClass and NodePool",
+              "output": "ec2nodeclass.karpenter.k8s.aws/default created\nnodepool.karpenter.sh/general created",
+              "note": "Karpenter prefers Spot when both are allowed because it is cheaper. Create a separate on-demand NodePool for critical workloads and select it with a nodeSelector."
+            },
+            {
+              "type": "text",
+              "title": "About this example: watching Karpenter scale",
+              "body": "This session creates a Deployment of pause containers with a CPU request, scales it up beyond the current capacity, and then watches Karpenter react. The pause pods do nothing but reserve resources, which makes this a safe load test. Look at the Karpenter log lines `found provisionable pod(s)` and `launched nodeclaim`, which show the chosen instance types and capacity type, and at the new nodes appearing in `kubectl get nodes` with their `karpenter.sh/capacity-type` label."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "kubectl create deployment inflate --image=public.ecr.aws/eks-distro/kubernetes/pause:3.7 --replicas=0\nkubectl set resources deployment inflate --requests=cpu=1\nkubectl scale deployment inflate --replicas=20\nkubectl -n kube-system logs deploy/karpenter -f --tail=5\nkubectl get nodes -L karpenter.sh/capacity-type,node.kubernetes.io/instance-type",
+              "title": "Trigger and observe a scale-up",
+              "output": "deployment.apps/inflate created\ndeployment.apps/inflate resource requirements updated\ndeployment.apps/inflate scaled\n{\"level\":\"INFO\",\"message\":\"found provisionable pod(s)\",\"Pods\":\"default/inflate-6b8d9-4xk2p, default/inflate-6b8d9-7mq9c, ...\",\"duration\":\"31ms\"}\n{\"level\":\"INFO\",\"message\":\"computed new nodeclaim(s) to fit pod(s)\",\"nodeclaims\":2,\"pods\":20}\n{\"level\":\"INFO\",\"message\":\"launched nodeclaim\",\"nodeclaim\":\"general-5xk7d\",\"instance-type\":\"c6i.4xlarge\",\"zone\":\"us-east-1b\",\"capacity-type\":\"spot\"}\nNAME                          STATUS   ROLES    AGE   VERSION               CAPACITY-TYPE   INSTANCE-TYPE\nip-10-0-14-23.ec2.internal    Ready    <none>   3d    v1.31.2-eks-94953ac                   m6i.large\nip-10-0-67-8.ec2.internal     Ready    <none>   48s   v1.31.2-eks-94953ac   spot            c6i.4xlarge\nip-10-0-35-90.ec2.internal    Ready    <none>   46s   v1.31.2-eks-94953ac   spot            c6a.4xlarge",
+              "note": "Scale the deployment back to 0 afterwards; within about a minute consolidation removes the empty Spot nodes."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a Spot-tolerant workload",
+              "body": "This is a complete Deployment designed for Spot and for consolidation. Spot instances can be reclaimed with a two-minute warning, so it runs three replicas, spreads them across zones with a `topologySpreadConstraints` rule, protects availability with a PodDisruptionBudget, and sets `requests` equal to what the app really needs. Apply it with `kubectl apply -f`; the `requests` block is the one that drives both scheduling and Karpenter's choice of instance size, so over-asking here directly increases your bill."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\n  namespace: orders\n  labels:\n    app: orders\n    team: payments\n    cost-center: cc-1042\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders\n  template:\n    metadata:\n      labels:\n        app: orders\n        team: payments\n        cost-center: cc-1042\n    spec:\n      terminationGracePeriodSeconds: 30\n      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: topology.kubernetes.io/zone\n          whenUnsatisfiable: ScheduleAnyway\n          labelSelector:\n            matchLabels:\n              app: orders\n      containers:\n        - name: api\n          image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/orders-api:1.8.2\n          resources:\n            requests:\n              cpu: 250m\n              memory: 384Mi\n            limits:\n              memory: 512Mi\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: orders-api\n  namespace: orders\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: orders",
+              "title": "Spot-friendly Deployment and PodDisruptionBudget",
+              "output": "deployment.apps/orders-api created\npoddisruptionbudget.policy/orders-api created\n\n$ kubectl -n orders top pods\nNAME                          CPU(cores)   MEMORY(bytes)\norders-api-7f9c5d8b64-2kq9x   41m          212Mi\norders-api-7f9c5d8b64-8wzr5   38m          205Mi\norders-api-7f9c5d8b64-m4c7t   44m          219Mi",
+              "note": "Here actual CPU use is about 40m against a 250m request: this is the signal that the workload is over-provisioned (see right-sizing in the table above and the callout below)."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** Running Karpenter on nodes that Karpenter itself manages: if they are consolidated, nothing can scale. **2.** Running single-replica or stateful workloads on Spot without a PDB or graceful shutdown. **3.** Omitting `limits.cpu` in the NodePool, so a runaway Deployment buys hundreds of instances. **4.** Setting `requests` far above real usage; use `kubectl top`, Vertical Pod Autoscaler in recommendation mode, or Goldilocks. **5.** No cost labels, so the bill cannot be split by team. **6.** Pinning one instance type; wider choice means more Spot availability. For cost visibility, activate `team` and `cost-center` as cost allocation tags in Billing and install OpenCost or Kubecost for per-namespace numbers."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "Karpenter provisions right-sized nodes directly from pending pods and consolidates them, using Spot where safe; Cluster Autoscaler is the simpler ASG-based alternative. Spot works when workloads have several replicas, a PDB, zone spread and short shutdown times. Right-size requests from measured usage and tag everything for cost allocation.\n\nNext: stateful data, with EBS and EFS CSI drivers, StorageClasses and snapshots."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Check capacity types",
+              "prompt": "List nodes with their capacity type and instance type.",
+              "command": "kubectl get nodes -L karpenter.sh/capacity-type,node.kubernetes.io/instance-type",
+              "expected": "A table with spot or on-demand per node.",
+              "hint": "Nodes in the managed system group show an empty capacity-type label.",
+              "solution": "Use -L with comma separated label keys."
+            },
+            {
+              "title": "Find over-provisioning",
+              "prompt": "Compare actual usage with requests for the orders namespace.",
+              "command": "kubectl -n orders top pods",
+              "expected": "CPU and memory columns well below the requested values signal waste.",
+              "hint": "Compare against kubectl -n orders get pods -o custom-columns for requests.",
+              "solution": "Lower requests toward p95 usage plus headroom, then watch for throttling or OOMKilled."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What triggers Karpenter to launch a node?",
+                "options": [
+                  "High CPU on a node",
+                  "Unschedulable Pending pods",
+                  "A cron schedule",
+                  "A CloudWatch alarm"
+                ],
+                "answer": 1,
+                "explain": "Karpenter provisions capacity for pods that cannot be scheduled."
+              },
+              {
+                "question": "What does NodePool limits.cpu do?",
+                "options": [
+                  "Caps pod CPU limits",
+                  "Caps the total vCPU Karpenter may provision",
+                  "Sets the node CPU model",
+                  "Limits API calls"
+                ],
+                "answer": 1,
+                "explain": "It is a spending guard on total capacity."
+              },
+              {
+                "question": "Which setup makes a Deployment safe on Spot?",
+                "options": [
+                  "One replica",
+                  "Several replicas, PDB, zone spread, graceful shutdown",
+                  "hostNetwork true",
+                  "privileged true"
+                ],
+                "answer": 1,
+                "explain": "Spot reclaim gives two minutes of notice, so the app must tolerate losing a node."
+              },
+              {
+                "question": "Where does Karpenter itself run?",
+                "options": [
+                  "On nodes it provisions",
+                  "On a separate small managed node group or Fargate",
+                  "On the control plane",
+                  "On the developer laptop"
+                ],
+                "answer": 1,
+                "explain": "It must not depend on the nodes it manages."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-autoscaling-maintenance",
+            "k8s-capacity-scaling",
+            "k8s-priority-preemption-pdb",
+            "k8s-topology-spread"
+          ],
+          "tags": [
+            "eks",
+            "karpenter",
+            "spot",
+            "cost"
+          ],
+          "commands": [
+            "kubectl top",
+            "kubectl scale",
+            "kubectl get nodes -L"
+          ],
+          "sources": [
+            {
+              "title": "Karpenter documentation",
+              "url": "https://karpenter.sh/docs/"
+            },
+            {
+              "title": "EKS best practices: cost optimization",
+              "url": "https://aws.github.io/aws-eks-best-practices/cost_optimization/cost_opt/"
+            },
+            {
+              "title": "Cluster Autoscaler on AWS",
+              "url": "https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler/cloudprovider/aws"
+            },
+            {
+              "title": "Pod topology spread constraints",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-storage",
+          "title": "Storage and data: EBS, EFS and snapshots",
+          "duration": "15 min",
+          "summary": "Choose between EBS and EFS, define StorageClasses, and protect volumes with CSI snapshots.",
+          "objectives": [
+            "Explain the zonal nature of EBS and the shared nature of EFS",
+            "Write StorageClasses for gp3 EBS and EFS access points",
+            "Create a VolumeSnapshot and restore it into a new PVC",
+            "Avoid the stuck-in-wrong-zone Pending pod problem"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Two storage services, two very different behaviours",
+              "body": "Kubernetes asks for storage with a **PersistentVolumeClaim** (PVC), and a **StorageClass** says how to provision it. On EKS the provisioning is done by **CSI drivers** (Container Storage Interface plugins) that you install as EKS add-ons: `aws-ebs-csi-driver` and `aws-efs-csi-driver`. The drivers need AWS permissions, so give them an IAM role through Pod Identity or IRSA as in lesson 1.\n\n**EBS** is block storage: fast, one pod at a time (`ReadWriteOnce`), and **bound to a single Availability Zone**. **EFS** is a managed NFS file system: shared by many pods and nodes across zones (`ReadWriteMany`), slower per operation, billed per GB used."
+            },
+            {
+              "type": "table",
+              "title": "EBS versus EFS",
+              "head": [
+                "Aspect",
+                "EBS (gp3)",
+                "EFS"
+              ],
+              "rows": [
+                [
+                  "Access mode",
+                  "ReadWriteOnce (single node)",
+                  "ReadWriteMany (many nodes)"
+                ],
+                [
+                  "Scope",
+                  "One Availability Zone",
+                  "Regional, all AZs"
+                ],
+                [
+                  "Performance",
+                  "Provisioned IOPS and throughput (gp3 baseline 3000 IOPS)",
+                  "Elastic or provisioned throughput, higher latency"
+                ],
+                [
+                  "Typical use",
+                  "Databases, Kafka, Prometheus, StatefulSets",
+                  "Shared uploads, CMS content, ML datasets"
+                ],
+                [
+                  "Provisioning",
+                  "Dynamic: one volume per PVC",
+                  "Dynamic via access points, or static to an existing file system"
+                ],
+                [
+                  "Snapshots",
+                  "CSI VolumeSnapshot (EBS snapshots)",
+                  "Use AWS Backup; no CSI snapshots"
+                ],
+                [
+                  "Cost model",
+                  "Per provisioned GB",
+                  "Per used GB plus throughput"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: StorageClasses and a PVC",
+              "body": "This file defines a default gp3 StorageClass for EBS, an EFS StorageClass that creates one **access point** per volume, and a PVC. `volumeBindingMode: WaitForFirstConsumer` is the important field for EBS: the volume is only created after the pod is scheduled, in the same zone as the node, which prevents a volume being created in a zone where the pod cannot run. For EFS replace `fs-0123456789abcdef0` with your file system ID; apply with `kubectl apply -f`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: gp3\n  annotations:\n    storageclass.kubernetes.io/is-default-class: \"true\"\nprovisioner: ebs.csi.aws.com\nparameters:\n  type: gp3\n  encrypted: \"true\"\n  kmsKeyId: arn:aws:kms:us-east-1:123456789012:key/1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d\n  iops: \"4000\"\n  throughput: \"250\"\nvolumeBindingMode: WaitForFirstConsumer\nallowVolumeExpansion: true\nreclaimPolicy: Delete\n---\napiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: efs-shared\nprovisioner: efs.csi.aws.com\nparameters:\n  provisioningMode: efs-ap\n  fileSystemId: fs-0123456789abcdef0\n  directoryPerms: \"700\"\nreclaimPolicy: Retain\nvolumeBindingMode: Immediate\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: pg-data\n  namespace: orders\nspec:\n  accessModes: [\"ReadWriteOnce\"]\n  storageClassName: gp3\n  resources:\n    requests:\n      storage: 50Gi",
+              "title": "StorageClasses for EBS gp3 and EFS, and a PVC",
+              "output": "storageclass.storage.k8s.io/gp3 created\nstorageclass.storage.k8s.io/efs-shared created\npersistentvolumeclaim/pg-data created\n\n$ kubectl get sc\nNAME            PROVISIONER       RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE\ngp3 (default)   ebs.csi.aws.com   Delete          WaitForFirstConsumer   true                   4s\nefs-shared      efs.csi.aws.com   Retain          Immediate              false                  4s\ngp2             kubernetes.io/aws-ebs   Delete    WaitForFirstConsumer   false                  21d",
+              "note": "The legacy gp2 class uses the in-tree provisioner. Remove its default annotation so only gp3 is default."
+            },
+            {
+              "type": "text",
+              "title": "About this example: snapshot and restore",
+              "body": "These three manifests use the CSI snapshot feature (the external-snapshotter CRDs and controller must be installed; the EBS CSI add-on can deploy the snapshot controller). The `VolumeSnapshotClass` names the driver, the `VolumeSnapshot` takes a point-in-time copy of `pg-data`, and the last PVC restores it by naming the snapshot in `dataSource`. Look at `READYTOUSE` in the output: do not restore until it is `true`. For consistent database snapshots, quiesce or checkpoint the database first."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: snapshot.storage.k8s.io/v1\nkind: VolumeSnapshotClass\nmetadata:\n  name: ebs-snapclass\ndriver: ebs.csi.aws.com\ndeletionPolicy: Retain\n---\napiVersion: snapshot.storage.k8s.io/v1\nkind: VolumeSnapshot\nmetadata:\n  name: pg-data-20260302\n  namespace: orders\nspec:\n  volumeSnapshotClassName: ebs-snapclass\n  source:\n    persistentVolumeClaimName: pg-data\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: pg-data-restored\n  namespace: orders\nspec:\n  accessModes: [\"ReadWriteOnce\"]\n  storageClassName: gp3\n  resources:\n    requests:\n      storage: 50Gi\n  dataSource:\n    name: pg-data-20260302\n    kind: VolumeSnapshot\n    apiGroup: snapshot.storage.k8s.io",
+              "title": "VolumeSnapshotClass, VolumeSnapshot and restore PVC",
+              "output": "volumesnapshotclass.snapshot.storage.k8s.io/ebs-snapclass created\nvolumesnapshot.snapshot.storage.k8s.io/pg-data-20260302 created\npersistentvolumeclaim/pg-data-restored created\n\n$ kubectl -n orders get volumesnapshot\nNAME               READYTOUSE   SOURCEPVC   SNAPSHOTCLASS   SNAPSHOTCONTENT                                    CREATIONTIME   AGE\npg-data-20260302   true         pg-data     ebs-snapclass   snapcontent-5a3e6f1c-9b2d-4e7a-8c10-2f4d6a8b0c1e   42s            45s",
+              "note": "The restored volume is created in the zone of the first consuming pod. A snapshot is regional, so it can also seed a volume in another zone."
+            },
+            {
+              "type": "text",
+              "title": "About this example: diagnosing a stuck PVC",
+              "body": "This is the troubleshooting session for the most common EBS problem, a pod stuck in Pending because its volume lives in a zone with no node capacity. `describe pod` shows the scheduler's message `volume node affinity conflict`, and `get pv` plus the node label reveal the zone mismatch. The fix is capacity in that zone (for Karpenter, allow the zone) or restoring from a snapshot into another zone."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "kubectl -n orders describe pod pg-0 | grep -A3 Events\nkubectl get pv -o custom-columns=NAME:.metadata.name,ZONE:.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0],CLAIM:.spec.claimRef.name\nkubectl get nodes -L topology.kubernetes.io/zone",
+              "title": "Find the zone conflict",
+              "output": "Events:\n  Type     Reason            Age   From               Message\n  ----     ------            ----  ----               -------\n  Warning  FailedScheduling  3m    default-scheduler  0/4 nodes are available: 2 node(s) had volume node affinity conflict, 2 node(s) had untolerated taint {dedicated: gpu}.\nNAME                                       ZONE         CLAIM\npvc-6d3f1a2b-7c4e-4d89-b0a1-9e8f7a6b5c4d   us-east-1b   pg-data\nNAME                         STATUS   ROLES    AGE   VERSION               ZONE\nip-10-0-14-23.ec2.internal   Ready    <none>   3d    v1.31.2-eks-94953ac   us-east-1a\nip-10-0-35-90.ec2.internal   Ready    <none>   2d    v1.31.2-eks-94953ac   us-east-1c",
+              "note": "Prevention: run at least one node per zone for every node pool that hosts stateful pods."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** `volumeBindingMode: Immediate` for EBS, which creates volumes in a random zone. **2.** Running a StatefulSet whose nodes exist in only one zone. **3.** Forgetting the IAM role for the CSI driver, so PVCs hang with `AccessDenied` events. **4.** `reclaimPolicy: Delete` on data you cannot lose; use `Retain` and snapshots. **5.** Treating snapshots as the only backup (they live in the same account and region) and not testing a restore. **6.** Using EFS for latency-sensitive databases."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "EBS is fast, zonal, single-writer block storage; EFS is shared, regional file storage. StorageClasses define encryption, IOPS and binding mode, and `WaitForFirstConsumer` keeps volumes next to their pods. CSI snapshots give point-in-time copies you can restore into new PVCs.\n\nNext: seeing what the cluster is doing, with Container Insights, managed Prometheus and Grafana, control plane logs and alarms."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Inspect StorageClasses",
+              "prompt": "List storage classes and identify the default and its binding mode.",
+              "command": "kubectl get sc",
+              "expected": "One class marked (default) with WaitForFirstConsumer.",
+              "hint": "The default is marked in the NAME column.",
+              "solution": "kubectl get sc -o wide"
+            },
+            {
+              "title": "Check snapshot readiness",
+              "prompt": "List snapshots in the orders namespace and read READYTOUSE.",
+              "command": "kubectl -n orders get volumesnapshot",
+              "expected": "READYTOUSE true for finished snapshots.",
+              "hint": "If false, describe the snapshot for events.",
+              "solution": "kubectl -n orders describe volumesnapshot pg-data-20260302"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which access mode does EBS support on EKS?",
+                "options": [
+                  "ReadWriteMany",
+                  "ReadWriteOnce",
+                  "ReadOnlyMany only",
+                  "None"
+                ],
+                "answer": 1,
+                "explain": "An EBS volume attaches to one node at a time."
+              },
+              {
+                "question": "Why use WaitForFirstConsumer for EBS?",
+                "options": [
+                  "It is faster",
+                  "The volume is created in the zone where the pod is scheduled",
+                  "It enables encryption",
+                  "It allows RWX"
+                ],
+                "answer": 1,
+                "explain": "It avoids creating volumes in a zone without usable nodes."
+              },
+              {
+                "question": "Which is best for a shared file area used by many pods across zones?",
+                "options": [
+                  "EBS gp3",
+                  "EFS",
+                  "Instance store",
+                  "emptyDir"
+                ],
+                "answer": 1,
+                "explain": "EFS provides ReadWriteMany across zones."
+              },
+              {
+                "question": "Before restoring from a VolumeSnapshot you check...",
+                "options": [
+                  "READYTOUSE is true",
+                  "The node AMI",
+                  "The ingress class",
+                  "The HPA"
+                ],
+                "answer": 0,
+                "explain": "A snapshot is restorable only when ReadyToUse is true."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-persistent-storage",
+            "k8s-storage-internals",
+            "k8s-statefulsets"
+          ],
+          "tags": [
+            "eks",
+            "storage",
+            "ebs",
+            "efs"
+          ],
+          "commands": [
+            "kubectl get sc",
+            "kubectl get pv",
+            "kubectl get volumesnapshot"
+          ],
+          "sources": [
+            {
+              "title": "Amazon EBS CSI driver",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html"
+            },
+            {
+              "title": "Amazon EFS CSI driver",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/efs-csi.html"
+            },
+            {
+              "title": "Volume snapshots",
+              "url": "https://kubernetes.io/docs/concepts/storage/volume-snapshots/"
+            },
+            {
+              "title": "Storage classes",
+              "url": "https://kubernetes.io/docs/concepts/storage/storage-classes/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-eks-m-operate",
+      "title": "Observe and operate",
+      "summary": "See the cluster, upgrade it, back it up and fix it.",
+      "lessons": [
+        {
+          "id": "k8s-eks-observability",
+          "title": "Observability on AWS: logs, metrics and alarms",
+          "duration": "16 min",
+          "summary": "Turn on control plane logging, Container Insights and managed Prometheus, and wire alarms that page before users notice.",
+          "objectives": [
+            "Enable and read EKS control plane logs in CloudWatch",
+            "Install Container Insights through the CloudWatch Observability add-on",
+            "Send Prometheus metrics to Amazon Managed Service for Prometheus and view them in Managed Grafana",
+            "Create alarms and Logs Insights queries for the signals that matter"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Three sources of signals on EKS",
+              "body": "You need three kinds of telemetry. **Control plane logs** come from the AWS-managed API server, audit, authenticator, controller manager and scheduler and are shipped to CloudWatch Logs only if you enable them. **Node and pod metrics and logs** come from agents on your nodes: **Container Insights** (the `amazon-cloudwatch-observability` add-on, CloudWatch agent plus Fluent Bit) sends CPU, memory, network and container logs to CloudWatch. **Application and Kubernetes metrics in the Prometheus format** are scraped by Prometheus (or the AWS Distro for OpenTelemetry collector) and stored in **Amazon Managed Service for Prometheus** (AMP), then charted in **Amazon Managed Grafana**.\n\nThe CloudWatch path is the quickest to enable and integrates with alarms and SNS; the Prometheus path gives PromQL, the Kubernetes community dashboards, and SLO tooling like the one in the Reliability course."
+            },
+            {
+              "type": "table",
+              "title": "Control plane log types",
+              "head": [
+                "Log type",
+                "What it contains",
+                "Use it for"
+              ],
+              "rows": [
+                [
+                  "api",
+                  "API server request log",
+                  "Debugging failing requests and throttling"
+                ],
+                [
+                  "audit",
+                  "Who did what (every API request, with user and verb)",
+                  "Security investigations, who deleted the Deployment"
+                ],
+                [
+                  "authenticator",
+                  "IAM authenticator decisions",
+                  "401 or access denied errors, mapping of IAM to Kubernetes users"
+                ],
+                [
+                  "controllerManager",
+                  "Controller manager logs",
+                  "Deployments or nodes not reconciling"
+                ],
+                [
+                  "scheduler",
+                  "Scheduler logs",
+                  "Why a pod is Pending"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: enable logging and Container Insights",
+              "body": "These commands turn on the three most useful control plane log types, set a 90-day retention so the log group does not grow forever, and install the CloudWatch Observability add-on with a Pod Identity role. Run them once per cluster (or put the same settings in Terraform with `cluster_enabled_log_types`). In the output look at `status`: `ACTIVE` for the add-on means agents are running on every node, which you confirm with the DaemonSet listing."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "aws eks update-cluster-config --name prod-eks \\\n  --logging '{\"clusterLogging\":[{\"types\":[\"api\",\"audit\",\"authenticator\"],\"enabled\":true}]}'\naws logs put-retention-policy --log-group-name /aws/eks/prod-eks/cluster --retention-in-days 90\naws eks create-addon --cluster-name prod-eks --addon-name amazon-cloudwatch-observability \\\n  --pod-identity-associations serviceAccount=cloudwatch-agent,roleArn=arn:aws:iam::123456789012:role/CloudWatchAgentRole\nkubectl -n amazon-cloudwatch get daemonset",
+              "title": "Control plane logs, retention and Container Insights",
+              "output": "{\n    \"update\": {\n        \"id\": \"7f3e1c2a-4b5d-4e6f-8a9b-0c1d2e3f4a5b\",\n        \"status\": \"InProgress\",\n        \"type\": \"LoggingUpdate\"\n    }\n}\n{\n    \"addon\": {\n        \"addonName\": \"amazon-cloudwatch-observability\",\n        \"clusterName\": \"prod-eks\",\n        \"status\": \"CREATING\"\n    }\n}\nNAME                   DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE\ncloudwatch-agent       3         3         3       3            3           <none>          2m\nfluent-bit             3         3         3       3            3           <none>          2m",
+              "note": "Container Insights log ingestion can become your largest CloudWatch cost. Set retention on every log group and filter noisy namespaces."
+            },
+            {
+              "type": "text",
+              "title": "About this example: remote-writing to Managed Prometheus",
+              "body": "This is a Helm values fragment for the community `prometheus` chart (or `kube-prometheus-stack`) that ships metrics to an AMP workspace. It is a values file, not a Kubernetes manifest, so it is shown as text and used with `helm upgrade --install prometheus prometheus-community/prometheus -n monitoring -f values.yaml`. The ServiceAccount is bound to an IAM role allowed `aps:RemoteWrite`; look at `url`, which must contain your workspace id, and `sigv4`, which signs the request with those AWS credentials. Managed Grafana then uses the AMP workspace as a data source."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "code": "serviceAccounts:\n  server:\n    name: amp-prometheus\n    annotations:\n      eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/amp-remote-write\n\nserver:\n  retention: 6h\n  remoteWrite:\n    - url: https://aps-workspaces.us-east-1.amazonaws.com/workspaces/ws-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d/api/v1/remote_write\n      sigv4:\n        region: us-east-1\n      queue_config:\n        max_samples_per_send: 1000\n        max_shards: 200\n        capacity: 2500\n  persistentVolume:\n    enabled: true\n    size: 20Gi",
+              "title": "values.yaml for remote write to AMP",
+              "output": null,
+              "note": "Keep local retention short (here 6 hours); AMP stores 150 days by default. The workspace is created with: aws amp create-workspace --alias prod-eks."
+            },
+            {
+              "type": "text",
+              "title": "About this example: an alarm and a Logs Insights query",
+              "body": "The first command creates a CloudWatch alarm on Container Insights' `node_cpu_utilization`, notifying an SNS topic, and the second runs a **Logs Insights** query on the audit log to find who deleted pods in the last hour. The query output shows the user, verb and object, which is the first thing you need after an unexpected deletion. Check the alarm `StateValue`: `INSUFFICIENT_DATA` right after creation is normal until the first datapoints arrive."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "aws cloudwatch put-metric-alarm --alarm-name prod-eks-node-cpu-high \\\n  --namespace ContainerInsights --metric-name node_cpu_utilization \\\n  --dimensions Name=ClusterName,Value=prod-eks --statistic Average --period 300 \\\n  --evaluation-periods 3 --threshold 85 --comparison-operator GreaterThanThreshold \\\n  --alarm-actions arn:aws:sns:us-east-1:123456789012:oncall\naws logs start-query --log-group-name /aws/eks/prod-eks/cluster \\\n  --start-time $(date -d '1 hour ago' +%s) --end-time $(date +%s) \\\n  --query-string 'fields @timestamp, user.username, verb, objectRef.resource, objectRef.name | filter verb = \"delete\" and objectRef.resource = \"pods\" | sort @timestamp desc | limit 5'\naws logs get-query-results --query-id 2b9c7e1a-3d4f-4a5b-8c6d-7e8f9a0b1c2d",
+              "title": "CloudWatch alarm and audit query",
+              "output": "{\n    \"queryId\": \"2b9c7e1a-3d4f-4a5b-8c6d-7e8f9a0b1c2d\"\n}\n{\n    \"status\": \"Complete\",\n    \"results\": [\n        [\n            {\"field\": \"@timestamp\", \"value\": \"2026-03-02 09:41:07.113\"},\n            {\"field\": \"user.username\", \"value\": \"arn:aws:sts::123456789012:assumed-role/PlatformAdmins/ali\"},\n            {\"field\": \"verb\", \"value\": \"delete\"},\n            {\"field\": \"objectRef.resource\", \"value\": \"pods\"},\n            {\"field\": \"objectRef.name\", \"value\": \"orders-api-7f9c5d8b64-2kq9x\"}\n        ]\n    ],\n    \"statistics\": {\"recordsMatched\": 1.0, \"recordsScanned\": 18342.0}\n}",
+              "note": "Alarm on symptoms (API error rate, pending pods, node NotReady, disk pressure) and send to an SNS topic wired to your pager."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** Enabling every log type with no retention, then being surprised by the CloudWatch bill. **2.** Alerting on CPU only; also alert on `pod_number_of_container_restarts`, pending pods and node NotReady. **3.** Running self-managed Prometheus with a large local volume instead of remote-writing to AMP. **4.** Not enabling the audit log until after an incident. **5.** Giving agents admin IAM instead of `CloudWatchAgentServerPolicy` or `aps:RemoteWrite` only. **6.** Dashboards nobody owns: every alarm needs a runbook link."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "Enable control plane logs (api, audit, authenticator) with retention, use the CloudWatch Observability add-on for Container Insights, and remote-write Prometheus metrics to AMP for Managed Grafana. Add alarms with an owner and a runbook, and learn a few Logs Insights queries before you need them.\n\nThe final lesson is the operational one: upgrading Kubernetes safely, backing up with Velero, planning disaster recovery, and troubleshooting."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Check log groups",
+              "prompt": "Confirm the control plane log group exists and read its retention.",
+              "command": "aws logs describe-log-groups --log-group-name-prefix /aws/eks/prod-eks",
+              "expected": "retentionInDays 90 on /aws/eks/prod-eks/cluster.",
+              "hint": "Logs only appear after enabling cluster logging.",
+              "solution": "aws logs describe-log-groups --log-group-name-prefix /aws/eks/prod-eks --query 'logGroups[].retentionInDays'"
+            },
+            {
+              "title": "Find the add-on state",
+              "prompt": "Check the status of the CloudWatch Observability add-on.",
+              "command": "aws eks describe-addon --cluster-name prod-eks --addon-name amazon-cloudwatch-observability --query addon.status",
+              "expected": "ACTIVE.",
+              "hint": "CREATING for the first minutes.",
+              "solution": "Re-run until it prints ACTIVE, then check kubectl -n amazon-cloudwatch get pods."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which log type helps answer who deleted a Deployment?",
+                "options": [
+                  "scheduler",
+                  "audit",
+                  "controllerManager",
+                  "authenticator"
+                ],
+                "answer": 1,
+                "explain": "The audit log records every API request with user and verb."
+              },
+              {
+                "question": "What does Container Insights collect?",
+                "options": [
+                  "Only billing data",
+                  "Node, pod and container metrics and logs in CloudWatch",
+                  "VPC flow logs",
+                  "S3 access logs"
+                ],
+                "answer": 1,
+                "explain": "The add-on installs the CloudWatch agent and Fluent Bit."
+              },
+              {
+                "question": "Why remote-write to AMP?",
+                "options": [
+                  "It removes the need for exporters",
+                  "Long-term managed storage without running Prometheus storage yourself",
+                  "It encrypts pods",
+                  "It replaces CoreDNS"
+                ],
+                "answer": 1,
+                "explain": "Local Prometheus keeps a short window; AMP stores long term."
+              },
+              {
+                "question": "Control plane logs are enabled by default?",
+                "options": [
+                  "Yes all five types",
+                  "No, you must enable them",
+                  "Only on Fargate",
+                  "Only audit"
+                ],
+                "answer": 1,
+                "explain": "They are disabled until you update the cluster logging config."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-rel-metrics-pipeline",
+            "k8s-rel-logging-tracing",
+            "k8s-rel-slo-alerting"
+          ],
+          "tags": [
+            "eks",
+            "observability",
+            "cloudwatch",
+            "prometheus"
+          ],
+          "commands": [
+            "aws eks update-cluster-config",
+            "aws cloudwatch put-metric-alarm",
+            "aws logs start-query"
+          ],
+          "sources": [
+            {
+              "title": "EKS control plane logging",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html"
+            },
+            {
+              "title": "Container Insights on EKS",
+              "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/deploy-container-insights-EKS.html"
+            },
+            {
+              "title": "Amazon Managed Service for Prometheus",
+              "url": "https://docs.aws.amazon.com/prometheus/latest/userguide/what-is-Amazon-Managed-Service-Prometheus.html"
+            },
+            {
+              "title": "Logging architecture",
+              "url": "https://kubernetes.io/docs/concepts/cluster-administration/logging/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-upgrades-dr",
+          "title": "Upgrades, backup, disaster recovery and troubleshooting",
+          "duration": "20 min",
+          "summary": "Run a safe EKS version upgrade, back up with Velero, plan for regional failure, and debug the three most common EKS failures.",
+          "objectives": [
+            "Execute the EKS upgrade order: checks, control plane, add-ons, node groups",
+            "Find deprecated APIs with pluto or kubent before upgrading",
+            "Schedule Velero backups and describe a multi-region recovery strategy",
+            "Diagnose nodes that do not join, IP exhaustion and 401 Unauthorized errors"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Upgrades are routine, so make them boring",
+              "body": "EKS supports each Kubernetes minor version for about 14 months in standard support, after which it moves to paid extended support or is force-upgraded. Treat upgrades as a quarterly routine. The rules: you can upgrade the **control plane one minor version at a time**; nodes may lag the control plane by up to three minors (from 1.28 on), but you should upgrade them promptly; and a control plane upgrade **cannot be rolled back**.\n\nThe order is always the same: (1) read the release notes and run **deprecated API checks**, (2) test in a non-production cluster, (3) upgrade the control plane, (4) upgrade add-ons (VPC CNI, CoreDNS, kube-proxy, EBS CSI) to versions compatible with the new Kubernetes version, (5) roll the node groups (or let Karpenter replace nodes), (6) verify. The Terraform change is one line: `cluster_version = \"1.31\"` becomes `\"1.32\"`."
+            },
+            {
+              "type": "table",
+              "title": "Upgrade runbook at a glance",
+              "head": [
+                "Step",
+                "Action",
+                "Verify with"
+              ],
+              "rows": [
+                [
+                  "1. Preflight",
+                  "Check API deprecations, add-on compatibility, PDBs, free IPs in subnets (5 needed by the control plane)",
+                  "pluto detect-all-in-cluster; aws eks describe-addon-versions"
+                ],
+                [
+                  "2. Control plane",
+                  "Terraform apply of the new cluster_version, or aws eks update-cluster-version",
+                  "aws eks describe-update; kubectl version"
+                ],
+                [
+                  "3. Add-ons",
+                  "Update each add-on to the version compatible with the new minor",
+                  "aws eks describe-addon --query addon.addonVersion"
+                ],
+                [
+                  "4. Nodes",
+                  "Managed node groups: update-nodegroup-version (rolling, respects PDBs). Karpenter: drift replaces nodes after AMI alias update",
+                  "kubectl get nodes (VERSION column)"
+                ],
+                [
+                  "5. Verify",
+                  "Workloads healthy, no Pending pods, alerts quiet",
+                  "kubectl get pods -A | grep -v Running"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: preflight checks and the upgrade",
+              "body": "This session is the real runbook for moving prod-eks from 1.31 to 1.32. `pluto` (Fairwinds) and `kubent` (kube-no-trouble) scan live objects and Helm releases for APIs removed in the target version; `pluto` takes the target version with `--target-versions`. Then the control plane is upgraded and polled until `Successful`, followed by a managed node group rolling update. Read the pluto table first: any row with `REMOVED true` must be fixed before you upgrade, because the object will stop working."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "pluto detect-all-in-cluster --target-versions k8s=v1.32.0 -o wide\nkubent --target-version 1.32.0\naws eks update-cluster-version --name prod-eks --kubernetes-version 1.32\naws eks describe-update --name prod-eks --update-id 8d4e9a1b-6c2f-4d3e-9a7b-5f1c3e2d4a6b --query update.status\naws eks update-nodegroup-version --cluster-name prod-eks --nodegroup-name system\nkubectl get nodes",
+              "title": "Deprecated API check and upgrade commands",
+              "output": "NAME           NAMESPACE   KIND         VERSION                  REPLACEMENT   DEPRECATED   DEPRECATED IN   REMOVED   REMOVED IN\nlegacy-hpa     payments    HorizontalPodAutoscaler   autoscaling/v2beta2   autoscaling/v2   true         v1.23.0         true      v1.26.0\n>>> Deprecated APIs removed in 1.32 <<<\n(none found after fixing legacy-hpa)\n{\n    \"name\": \"prod-eks\",\n    \"update\": {\"id\": \"8d4e9a1b-6c2f-4d3e-9a7b-5f1c3e2d4a6b\", \"status\": \"InProgress\", \"type\": \"VersionUpdate\"}\n}\n\"Successful\"\n{\"update\": {\"status\": \"InProgress\", \"type\": \"VersionUpdate\"}}\nNAME                         STATUS                     ROLES    AGE   VERSION\nip-10-0-14-23.ec2.internal   Ready,SchedulingDisabled   <none>   3d    v1.31.2-eks-94953ac\nip-10-0-52-171.ec2.internal  Ready                      <none>   4m    v1.32.0-eks-5b3a1c2",
+              "note": "The control plane upgrade takes about 10 to 15 minutes; node group rollouts drain one node at a time (maxUnavailable in the update config) and honour PodDisruptionBudgets."
+            },
+            {
+              "type": "text",
+              "title": "About this example: Velero backup schedule",
+              "body": "**Velero** backs up Kubernetes objects to an S3 bucket and volumes through EBS snapshots (or file-system backup). You install it with Helm using an S3 bucket and a Pod Identity role; this manifest then defines a daily `Schedule` that backs up everything except system namespaces, keeping each backup for 30 days (`ttl`). Apply it with `kubectl apply -f`, then use `velero backup get` to confirm a backup is `Completed`. A backup you have never restored is not a backup, so restore into a scratch cluster at least quarterly with `velero restore create --from-backup`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "code": "apiVersion: velero.io/v1\nkind: Schedule\nmetadata:\n  name: daily-prod\n  namespace: velero\nspec:\n  schedule: \"0 2 * * *\"\n  template:\n    ttl: 720h0m0s\n    includedNamespaces:\n      - \"*\"\n    excludedNamespaces:\n      - kube-system\n      - velero\n    snapshotVolumes: true\n    storageLocation: default\n    volumeSnapshotLocations:\n      - default",
+              "title": "Velero daily Schedule",
+              "output": "schedule.velero.io/daily-prod created\n\n$ velero backup get\nNAME                        STATUS      ERRORS   WARNINGS   CREATED                         EXPIRES   STORAGE LOCATION   SELECTOR\ndaily-prod-20260303020012   Completed   0        0          2026-03-03 02:00:12 +0000 UTC   29d       default            <none>",
+              "note": "Disaster recovery: the cluster is rebuilt from Terraform, workloads from Git (GitOps) and data from Velero or AWS Backup. For regional failure, copy S3 backups and EBS snapshots to a second region (S3 cross-region replication), keep the Terraform for that region ready, and define RTO/RPO. Active-active needs a global data layer and Route 53 health checks; most teams choose pilot light."
+            },
+            {
+              "type": "text",
+              "title": "About this example: the three classic failures",
+              "body": "These outputs are what you actually see when something is wrong. **Nodes not joining**: an empty `get nodes` after a node group is `Active`; the cause shown here is a missing access entry or aws-auth role for the node role (`Unauthorized` in kubelet logs). **IP exhaustion**: pods Pending with `failed to assign an IP address to container` because subnets are full. **401 Unauthorized**: `kubectl` fails because your IAM identity has no access entry or the token is for the wrong account. Read the quoted error message in each, it names the fix."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "code": "kubectl get nodes\naws eks describe-nodegroup --cluster-name prod-eks --nodegroup-name system --query 'nodegroup.health.issues'\nkubectl -n orders describe pod orders-api-7f9c5d8b64-2kq9x | tail -n 4\naws ec2 describe-subnets --subnet-ids subnet-0aa1 --query 'Subnets[].AvailableIpAddressCount'\nkubectl get pods\naws sts get-caller-identity --query Arn --output text\naws eks list-access-entries --cluster-name prod-eks",
+              "title": "Diagnosing join, IP and 401 failures",
+              "output": "No resources found\n[\n    {\n        \"code\": \"NodeCreationFailure\",\n        \"message\": \"Instances failed to join the kubernetes cluster\",\n        \"resourceIds\": [\"i-0a1b2c3d4e5f67890\"]\n    }\n]\nEvents:\n  Warning  FailedCreatePodSandBox  12s  kubelet  Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup network for sandbox: plugin type=\"aws-cni\" failed (add): add cmd: failed to assign an IP address to container\n[\n    3\n]\nerror: You must be logged in to the server (Unauthorized)\narn:aws:sts::123456789012:assumed-role/Contractor/ali\n{\n    \"accessEntries\": [\n        \"arn:aws:iam::123456789012:role/PlatformAdmins\",\n        \"arn:aws:iam::123456789012:role/Developers\",\n        \"arn:aws:iam::123456789012:role/eks-node-role\"\n    ]\n}",
+              "note": "Fixes: join failure - add the node role access entry (type EC2_LINUX) and check security groups and the CNI; IP exhaustion - enable prefix delegation, add secondary CIDR (100.64.0.0/16) with custom networking, or use larger subnets; 401 - create an access entry for your role (Contractor is missing above)."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**1.** Upgrading add-ons before the control plane, or skipping CoreDNS and kube-proxy. **2.** Skipping the deprecated API scan because the manifests in Git look fine; Helm releases and old live objects matter. **3.** Not checking free IPs: the control plane upgrade needs up to five free IPs in the cluster subnets. **4.** PDBs with `minAvailable` equal to replicas, which blocks node draining forever. **5.** Velero in the same account and region as the only copy. **6.** Debugging 401 by changing RBAC, when the error is authentication (access entry), not authorisation (`403 Forbidden`)."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "Upgrade one minor at a time in a fixed order: preflight (`pluto`/`kubent`), control plane, add-ons, nodes, verify. Back up objects and volumes with Velero, test restores, and plan for regional loss with replicated backups plus Terraform and GitOps. When something breaks, read the error: `Unable to join` means access entry or networking, `failed to assign an IP` means subnet space, `Unauthorized` means authentication.\n\nYou now have the full production path: identity, Terraform, security, scaling, storage, observability and operations. Continue with the GitOps and Reliability courses to automate delivery and measure service health on top of this foundation."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Scan for deprecated APIs",
+              "prompt": "Run pluto against your cluster for the next Kubernetes version.",
+              "command": "pluto detect-all-in-cluster --target-versions k8s=v1.32.0",
+              "expected": "A table of deprecated or removed APIs, or none found.",
+              "hint": "Fix rows with REMOVED true before upgrading.",
+              "solution": "Update manifests/Helm charts to the replacement API, redeploy, then rerun pluto."
+            },
+            {
+              "title": "Check access entries",
+              "prompt": "List who has access to the cluster.",
+              "command": "aws eks list-access-entries --cluster-name prod-eks",
+              "expected": "A list of principal ARNs.",
+              "hint": "A 401 from kubectl usually means your role is missing here.",
+              "solution": "aws eks create-access-entry --cluster-name prod-eks --principal-arn <role-arn> and associate a policy."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "How many minor versions can a control plane upgrade jump?",
+                "options": [
+                  "One",
+                  "Two",
+                  "Three",
+                  "Unlimited"
+                ],
+                "answer": 0,
+                "explain": "EKS upgrades the control plane one minor version at a time."
+              },
+              {
+                "question": "Which tool scans a cluster for APIs removed in a future version?",
+                "options": [
+                  "Velero",
+                  "pluto or kubent",
+                  "Karpenter",
+                  "Fluent Bit"
+                ],
+                "answer": 1,
+                "explain": "pluto and kube-no-trouble detect deprecated and removed APIs."
+              },
+              {
+                "question": "Pods Pending with 'failed to assign an IP address to container' suggests...",
+                "options": [
+                  "Image pull error",
+                  "Subnet IP exhaustion",
+                  "Expired certificate",
+                  "Missing PDB"
+                ],
+                "answer": 1,
+                "explain": "The VPC CNI cannot allocate pod IPs because subnets or ENIs are out of addresses."
+              },
+              {
+                "question": "Unauthorized (401) from kubectl means...",
+                "options": [
+                  "RBAC denies the verb",
+                  "Authentication failed: no access entry for the identity",
+                  "The node is down",
+                  "Etcd is full"
+                ],
+                "answer": 1,
+                "explain": "401 is authentication; 403 Forbidden is authorisation."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-kubeadm-upgrades",
+            "k8s-production-checklist",
+            "k8s-troubleshoot-pods",
+            "k8s-rel-incident-response"
+          ],
+          "tags": [
+            "eks",
+            "upgrades",
+            "velero",
+            "troubleshooting"
+          ],
+          "commands": [
+            "pluto",
+            "kubent",
+            "velero backup get",
+            "aws eks update-cluster-version"
+          ],
+          "sources": [
+            {
+              "title": "Updating an EKS cluster Kubernetes version",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/update-cluster.html"
+            },
+            {
+              "title": "Velero documentation",
+              "url": "https://velero.io/docs/"
+            },
+            {
+              "title": "Kubernetes version skew policy",
+              "url": "https://kubernetes.io/releases/version-skew-policy/"
+            },
+            {
+              "title": "Deprecated API migration guide",
+              "url": "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+            },
+            {
+              "title": "EKS troubleshooting",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/troubleshooting.html"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "k8s-eks-essentials"
+  ],
+  "track": "kubernetes"
+}

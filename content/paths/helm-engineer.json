@@ -1,0 +1,35 @@
+{
+  "id": "helm-engineer",
+  "title": "Helm Engineer",
+  "subtitle": "From installing charts to publishing your own",
+  "level": "Intermediate",
+  "duration": "3h 54m",
+  "icon": "rocket",
+  "accent": "blue",
+  "description": "Learn to install and operate releases, then build, test and publish production-quality charts.",
+  "prerequisites": [],
+  "outcomes": [
+    "Install, upgrade and roll back releases",
+    "Write templates and helpers",
+    "Test, package and publish charts"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "k8s-helm-essentials",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "k8s-helm-charts",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "k8s-helm-essentials",
+      "k8s-helm-charts"
+    ]
+  }
+}

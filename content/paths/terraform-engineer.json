@@ -1,0 +1,35 @@
+{
+  "id": "terraform-engineer",
+  "title": "Terraform Engineer",
+  "subtitle": "Infrastructure as code from first plan to team workflows",
+  "level": "Intermediate",
+  "duration": "3h 37m",
+  "icon": "layers",
+  "accent": "violet",
+  "description": "Start with the Terraform workflow and HCL, then move to modules, remote state, testing and CI/CD.",
+  "prerequisites": [],
+  "outcomes": [
+    "Write and read Terraform confidently",
+    "Manage state safely",
+    "Build modules and CI/CD pipelines"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "k8s-terraform-essentials",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "k8s-terraform-advanced",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "k8s-terraform-essentials",
+      "k8s-terraform-advanced"
+    ]
+  }
+}

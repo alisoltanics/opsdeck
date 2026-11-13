@@ -1,0 +1,1712 @@
+{
+ "id": "k8s-helm-charts",
+ "order": 32,
+ "title": "Helm Charts: Build Your Own",
+ "subtitle": "Write, validate, test and publish a production-grade chart",
+ "level": "Advanced",
+ "duration": "1h 52m",
+ "icon": "boxes",
+ "accent": "violet",
+ "description": "Build one real chart, webapp, step by step: Deployment, Service, Ingress, ConfigMap and HPA. Learn Go templates, helpers, schema validation, dependencies, hooks, tests, packaging, OCI publishing, signing and CI with chart-testing.",
+ "outcomes": [
+  "Scaffold a chart and design a clean values.yaml and Chart.yaml",
+  "Write templates with pipelines, control flow, named templates and standard labels",
+  "Validate input with values.schema.json, required, fail and NOTES.txt",
+  "Compose charts with subcharts, global values and library charts",
+  "Add hooks and test pods, lint, package, sign and publish to an OCI registry, and test in CI"
+ ],
+ "modules": [
+  {
+   "id": "k8s-helmc-foundations",
+   "title": "Chart foundations",
+   "summary": "Scaffold the webapp chart, design its values and learn the template language.",
+   "lessons": [
+    {
+     "id": "k8s-helmc-anatomy",
+     "title": "Chart anatomy, Chart.yaml and values design",
+     "duration": "14 min",
+     "summary": "Scaffold a chart, understand every file in it and design a values.yaml that is a clean public API.",
+     "objectives": [
+      "Name every file and directory in a chart and its purpose",
+      "Distinguish version from appVersion in Chart.yaml",
+      "Design a grouped, documented values.yaml with safe defaults",
+      "Override values with --set and -f and know the precedence"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What you will build and the path through this course",
+       "body": "Helm is the package manager for Kubernetes, and the thing you ship with it is a **chart**: a directory of templates plus default values that renders into plain Kubernetes manifests. You already know how to install other people's charts; in this course you write your own. Across seven lessons you build **one real chart called `webapp`** that deploys an NGINX-based web application with a **Deployment, Service, Ingress, ConfigMap and HorizontalPodAutoscaler**, and you keep improving it until it is ready to publish.\n\n**Lesson 1 (this one)**: chart anatomy, `helm create`, `Chart.yaml` and designing `values.yaml`.\n**Lesson 2**: Go templates: `.Values`, `.Release`, `.Chart`, pipelines, whitespace control, `if`, `with`, `range`, and previewing with `helm template`.\n**Lesson 3**: named templates and `_helpers.tpl`: `define`, `include`, standard labels and the fullname helper.\n**Lesson 4**: guard rails: `values.schema.json`, `required`, `fail` and `NOTES.txt`.\n**Lesson 5**: dependencies: subcharts, `condition`, `alias`, global values and library charts.\n**Lesson 6**: hooks, `helm test` and `helm lint`.\n**Lesson 7**: packaging, the OCI registry, signing, SemVer and CI testing with chart-testing (`ct`).\n\nEvery template in the course is shown together with the manifest it renders to, so you never have to guess what Helm will send to the API server. The prerequisite is `k8s-helm-essentials`: you should be comfortable with `helm install`, `helm upgrade`, releases and `--set`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: scaffolding a chart with helm create",
+       "body": "The next block runs `helm create`, which generates a working starter chart, then lists the files it produced. Use it once at the start of a chart to get the conventional layout; you then delete or rewrite what you do not need. Look at which files sit at the top level (`Chart.yaml`, `values.yaml`, `charts/`) and which live under `templates/`."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "helm create webapp\ncd webapp\nfind . | sort",
+       "title": "Create the webapp chart",
+       "output": "$ helm create webapp\nCreating webapp\n\n$ cd webapp && find . | sort\n.\n./charts\n./Chart.yaml\n./.helmignore\n./templates\n./templates/deployment.yaml\n./templates/_helpers.tpl\n./templates/hpa.yaml\n./templates/httproute.yaml\n./templates/ingress.yaml\n./templates/NOTES.txt\n./templates/serviceaccount.yaml\n./templates/service.yaml\n./templates/tests\n./templates/tests/test-connection.yaml\n./values.yaml",
+       "note": "`helm create` also generates `templates/httproute.yaml` in recent Helm versions (Gateway API). Older 3.x releases do not have it. We keep Deployment, Service, Ingress, ConfigMap and HPA for `webapp`, so you can delete `serviceaccount.yaml`, `httproute.yaml` and `tests/` for now and add a ConfigMap of your own."
+      },
+      {
+       "type": "table",
+       "title": "Anatomy of a chart directory",
+       "head": [
+        "Path",
+        "Required?",
+        "Purpose",
+        "Example"
+       ],
+       "rows": [
+        [
+         "Chart.yaml",
+         "Yes",
+         "Chart metadata: name, version, appVersion, dependencies",
+         "name: webapp, version: 0.1.0"
+        ],
+        [
+         "values.yaml",
+         "Practically yes",
+         "Default configuration values that templates read through .Values",
+         "replicaCount: 2"
+        ],
+        [
+         "templates/",
+         "Yes",
+         "Go templates that render into Kubernetes manifests",
+         "templates/deployment.yaml"
+        ],
+        [
+         "templates/_helpers.tpl",
+         "No",
+         "Named templates shared by other templates (files starting with _ never render on their own)",
+         "define \"webapp.fullname\""
+        ],
+        [
+         "templates/NOTES.txt",
+         "No",
+         "Text printed after install and upgrade (also a template)",
+         "Visit http://webapp.example.com"
+        ],
+        [
+         "templates/tests/",
+         "No",
+         "Pods annotated as test hooks, run by helm test",
+         "tests/test-connection.yaml"
+        ],
+        [
+         "charts/",
+         "No",
+         "Packaged dependencies (subcharts), filled by helm dependency update",
+         "charts/postgresql-15.5.0.tgz"
+        ],
+        [
+         "values.schema.json",
+         "No",
+         "JSON Schema that validates the final values",
+         "type: object, required: [image]"
+        ],
+        [
+         "crds/",
+         "No",
+         "CRDs installed before templates, never templated or upgraded",
+         "crds/widgets.yaml"
+        ],
+        [
+         ".helmignore",
+         "No",
+         "Glob patterns left out of the packaged chart",
+         "*.swp, .git/, ci/"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: Chart.yaml",
+       "body": "`Chart.yaml` is the identity card of the chart. `apiVersion: v2` means a Helm 3 chart (dependencies live in this file); `version` is the version of the **chart** itself and must be SemVer, while `appVersion` is the version of the **application** it deploys and is free-form. The block shows our file followed by `helm show chart`, the command that prints it back after Helm parses it. Notice `kubeVersion`, which makes Helm refuse to install on clusters older than 1.28."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: v2\nname: webapp\ndescription: A web application chart with Deployment, Service, Ingress, ConfigMap and HPA\ntype: application\nversion: 0.1.0\nappVersion: \"1.27.0\"\nkubeVersion: \">=1.28.0-0\"\nkeywords:\n  - webapp\n  - nginx\nmaintainers:\n  - name: Platform Team\n    email: platform@example.com",
+       "title": "webapp/Chart.yaml",
+       "output": "$ helm show chart webapp\napiVersion: v2\nappVersion: 1.27.0\ndescription: A web application chart with Deployment, Service, Ingress, ConfigMap\n  and HPA\nkeywords:\n- webapp\n- nginx\nkubeVersion: '>=1.28.0-0'\nmaintainers:\n- email: platform@example.com\n  name: Platform Team\nname: webapp\ntype: application\nversion: 0.1.0",
+       "note": "`type: application` charts are installable; `type: library` charts only provide named templates (lesson 5). The `-0` suffix in `>=1.28.0-0` lets pre-release and vendor builds such as `v1.30.2-eks-abc` satisfy the constraint."
+      },
+      {
+       "type": "text",
+       "title": "About this example: designing values.yaml",
+       "body": "`values.yaml` is the public API of your chart: every key in it is something users can change with `--set` or `-f`, so name them carefully and document them with comments. Group related settings under one key (`image.*`, `service.*`, `ingress.*`), give every key a safe default, and use `enabled: false` switches for optional objects such as the Ingress and the HPA. Below is the file for `webapp`, followed by a `helm template` call that overrides one value to prove that user input wins over the default."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "# Number of pods. Ignored when autoscaling.enabled is true.\nreplicaCount: 2\n\nimage:\n  repository: nginx\n  # Empty means \"use the chart appVersion\".\n  tag: \"\"\n  pullPolicy: IfNotPresent\n\nnameOverride: \"\"\nfullnameOverride: \"\"\n\nservice:\n  type: ClusterIP\n  port: 80\n\ningress:\n  enabled: false\n  className: nginx\n  hosts:\n    - host: webapp.example.com\n      paths:\n        - path: /\n          pathType: Prefix\n  tls: []\n\nconfig:\n  logLevel: info\n  extra:\n    FEATURE_X: \"true\"\n    REGION: us-east-1\n\nresources:\n  requests:\n    cpu: 100m\n    memory: 128Mi\n  limits:\n    memory: 256Mi\n\nautoscaling:\n  enabled: false\n  minReplicas: 2\n  maxReplicas: 6\n  targetCPUUtilizationPercentage: 70\n\nnodeSelector: {}",
+       "title": "webapp/values.yaml",
+       "output": "$ helm template demo webapp --set replicaCount=5 --show-only templates/deployment.yaml | grep -n replicas\n14:  replicas: 5\n\n$ helm template demo webapp --set autoscaling.enabled=true --show-only templates/deployment.yaml | grep -c replicas\n0",
+       "note": "Precedence, lowest to highest: the chart `values.yaml`, then parent chart values, then each `-f file` in order, then `--set` flags. An empty `tag: \"\"` is a deliberate pattern: the template falls back to `appVersion`, so a new app release only needs a `Chart.yaml` bump."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes when designing values",
+       "body": "**Deeply nested keys** (`a.b.c.d.e`) are painful to `--set`; keep to two or three levels. **Lists instead of maps** cannot be partially overridden: `--set tolerations[0].key=x` replaces element 0, and a second `-f` file replaces the whole list. **Booleans and numbers as strings**: `--set port=80` is a number but `--set image.tag=1.10` becomes the float `1.1`, so quote tags and use `--set-string`. **No defaults** means `nil` pointer errors the first time a user omits a key. **Putting secrets in values.yaml** commits them to git; reference an existing Secret by name instead."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "A chart is a directory: `Chart.yaml` for identity, `values.yaml` for the configuration API, `templates/` for the manifests, and optional `charts/`, `crds/`, `values.schema.json` and `.helmignore`. `helm create` gives you the conventional skeleton, `version` versions the packaging and `appVersion` versions the app, and good values are grouped, documented, defaulted and switchable. Next, lesson 2 opens `templates/` and teaches the Go template language that turns these values into manifests, starting with the `.Values`, `.Release` and `.Chart` objects."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Scaffold and inspect a chart",
+       "prompt": "Create a chart named webapp in a scratch directory and print its metadata with Helm.",
+       "command": "helm create webapp && helm show chart webapp",
+       "expected": "Output shows apiVersion: v2, name: webapp, type: application, version: 0.1.0 and appVersion: 1.16.0.",
+       "hint": "helm show chart reads Chart.yaml from a directory.",
+       "solution": "helm create webapp\nhelm show chart webapp"
+      },
+      {
+       "title": "Override a default",
+       "prompt": "Render the chart with 5 replicas without editing values.yaml and confirm the number in the output.",
+       "command": "helm template demo webapp --set replicaCount=5 | grep replicas",
+       "expected": "A line \"replicas: 5\" appears in the Deployment.",
+       "hint": "--set path.to.key=value mirrors the nesting of values.yaml.",
+       "solution": "helm template demo webapp --set replicaCount=5 | grep replicas"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which field of Chart.yaml describes the version of the packaged chart and must be SemVer?",
+        "options": [
+         "appVersion",
+         "version",
+         "kubeVersion",
+         "apiVersion"
+        ],
+        "answer": 1,
+        "explain": "version is the chart version; appVersion is the application version and may be any string."
+       },
+       {
+        "question": "A file in templates/ whose name starts with an underscore, such as _helpers.tpl, is…",
+        "options": [
+         "Rendered into a manifest and applied",
+         "Ignored by Helm entirely",
+         "Used only for named templates and never rendered as a manifest",
+         "Only valid in library charts"
+        ],
+        "answer": 2,
+        "explain": "Files prefixed with _ hold partials; they are available to include but produce no manifest output."
+       },
+       {
+        "question": "Which source wins when the same key is set in values.yaml, in -f custom.yaml and with --set?",
+        "options": [
+         "values.yaml",
+         "-f custom.yaml",
+         "--set",
+         "The first one Helm reads"
+        ],
+        "answer": 2,
+        "explain": "--set has the highest precedence, then -f files in order, then the chart defaults."
+       },
+       {
+        "question": "Why is image.tag: \"\" a good default?",
+        "options": [
+         "Helm requires an empty tag",
+         "The template can fall back to .Chart.AppVersion",
+         "It disables image pulling",
+         "It makes the tag latest"
+        ],
+        "answer": 1,
+        "explain": "An empty tag lets the template use default .Chart.AppVersion, so releases follow Chart.yaml."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-basics",
+      "k8s-helm-templates"
+     ],
+     "tags": [
+      "helm",
+      "charts",
+      "values"
+     ],
+     "commands": [
+      "helm create",
+      "helm show chart",
+      "helm template"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Charts",
+       "url": "https://helm.sh/docs/topics/charts/"
+      },
+      {
+       "title": "Helm: Chart Template Guide",
+       "url": "https://helm.sh/docs/chart_template_guide/"
+      },
+      {
+       "title": "Helm: Values Files",
+       "url": "https://helm.sh/docs/chart_template_guide/values_files/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helmc-templates",
+     "title": "Go templates: values, pipelines and control flow",
+     "duration": "18 min",
+     "summary": "Learn the template objects, pipelines, whitespace control and the if, with and range actions, previewing every result with helm template.",
+     "objectives": [
+      "Use .Values, .Release, .Chart and .Capabilities in templates",
+      "Chain functions with pipelines (quote, default, toYaml, nindent)",
+      "Control whitespace with {{- and -}}",
+      "Write if/else, with and range blocks and keep scope straight",
+      "Preview output with helm template and --show-only"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Templates are Go text/template plus the Sprig functions",
+       "body": "Every file in `templates/` is a **Go template**: plain text in which anything inside `{{ ... }}` is an *action* that Helm evaluates, and everything else is copied through unchanged. Helm adds the ~70 **Sprig** functions (`default`, `quote`, `upper`, `trunc`...) and a few of its own (`toYaml`, `include`, `required`, `tpl`). The result must be valid YAML, because Helm parses it and sends the objects to Kubernetes.\n\nInside an action, the single dot `.` is the **current scope**. At the top of a template it holds a root object with the built-in values below; inside `with` and `range` it is rebound to something else, and `$` always points back to the root. This is the most common source of confusion, so keep it in mind."
+      },
+      {
+       "type": "table",
+       "title": "The built-in objects at the root scope",
+       "head": [
+        "Object",
+        "What it holds",
+        "Example expression",
+        "Example result"
+       ],
+       "rows": [
+        [
+         ".Values",
+         "Merged values: chart defaults, parent values, -f files, --set",
+         ".Values.service.port",
+         "80"
+        ],
+        [
+         ".Release.Name",
+         "Name given on helm install",
+         ".Release.Name",
+         "demo"
+        ],
+        [
+         ".Release.Namespace",
+         "Target namespace (-n)",
+         ".Release.Namespace",
+         "prod"
+        ],
+        [
+         ".Release.IsInstall / .IsUpgrade",
+         "Booleans describing the current operation",
+         ".Release.IsUpgrade",
+         "false"
+        ],
+        [
+         ".Release.Service",
+         "Always \"Helm\"",
+         ".Release.Service",
+         "Helm"
+        ],
+        [
+         ".Chart.Name / .Version / .AppVersion",
+         "Fields of Chart.yaml (capitalised first letter)",
+         ".Chart.AppVersion",
+         "1.27.0"
+        ],
+        [
+         ".Capabilities.KubeVersion",
+         "Version of the target cluster",
+         ".Capabilities.KubeVersion.Version",
+         "v1.30.2"
+        ],
+        [
+         ".Capabilities.APIVersions.Has",
+         "Does the cluster serve an API?",
+         ".Capabilities.APIVersions.Has \"autoscaling/v2\"",
+         "true"
+        ],
+        [
+         ".Template.Name / .BasePath",
+         "Path of the running template and the templates dir",
+         ".Template.BasePath",
+         "webapp/templates"
+        ],
+        [
+         ".Files",
+         "Access to non-template files in the chart",
+         ".Files.Get \"config/app.conf\"",
+         "file contents"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: the first webapp template, a ConfigMap",
+       "body": "This is `templates/configmap.yaml`, the simplest object in `webapp`. It uses `.Release.Name` and `.Release.Namespace` for metadata, `.Chart.AppVersion` for a data key, and a **pipeline** (`|`) that passes a value through functions left to right: `default \"info\"` supplies a fallback when `logLevel` is empty, and `quote` wraps the result in double quotes. The `range` loop turns every entry of `config.extra` into one more key. Compare the template with the output of `helm template`, which renders locally without a cluster."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}-webapp\n  namespace: {{ .Release.Namespace }}\ndata:\n  APP_VERSION: {{ .Chart.AppVersion | quote }}\n  LOG_LEVEL: {{ .Values.config.logLevel | default \"info\" | quote }}\n  {{- range $key, $value := .Values.config.extra }}\n  {{ $key }}: {{ $value | quote }}\n  {{- end }}\n\n# values.yaml (excerpt)\nconfig:\n  logLevel: \"\"\n  extra:\n    FEATURE_X: \"true\"\n    REGION: us-east-1",
+       "title": "templates/configmap.yaml (first version)",
+       "output": "$ helm template demo ./webapp -n prod\n---\n# Source: webapp/templates/configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo-webapp\n  namespace: prod\ndata:\n  APP_VERSION: \"1.27.0\"\n  LOG_LEVEL: \"info\"\n  FEATURE_X: \"true\"\n  REGION: \"us-east-1\"",
+       "note": "`range $key, $value := map` iterates maps in **alphabetical key order**, so output is deterministic. `{{ $value | quote }}` matters: unquoted `true` or `1234` in a ConfigMap `data` field would be a YAML boolean or number, which the API rejects because data values must be strings."
+      },
+      {
+       "type": "text",
+       "title": "About this example: control flow, toYaml and nindent in one playground",
+       "body": "This throwaway template (it is not part of `webapp`) exercises the building blocks you will use in every real chart. `if / else if / else` picks a branch by comparing with `eq`; `with` runs its body only when the value is **non-empty** and rebinds `.` to it, so `tolerations: []` produces nothing; `toYaml` converts a values subtree back into YAML text and `nindent N` adds a newline then indents every line by N spaces. Read the `{{-` markers carefully: the dash trims the whitespace and newlines on that side, which is why no blank lines appear in the output."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: play\ndata:\n  upper: {{ .Values.name | upper | quote }}\n  missing: {{ .Values.owner | default \"platform\" | quote }}\n  truncated: {{ \"abcdefghij\" | trunc 5 | quote }}\n  {{- if eq .Values.service.type \"NodePort\" }}\n  nodePort: {{ .Values.service.nodePort | quote }}\n  {{- else if eq .Values.service.type \"LoadBalancer\" }}\n  lb: \"true\"\n  {{- else }}\n  clusterIP: \"true\"\n  {{- end }}\n  {{- with .Values.nodeSelector }}\n  selector: |\n    {{- toYaml . | nindent 4 }}\n  {{- end }}\n  {{- with .Values.tolerations }}\n  tolerations: \"set\"\n  {{- end }}\n  resources: |\n    {{- toYaml .Values.resources | nindent 4 }}\n  indented: |\n{{ toYaml .Values.nodeSelector | indent 4 }}",
+       "title": "templates/play.yaml",
+       "output": "$ helm template t ./play --show-only templates/play.yaml\n---\n# Source: play/templates/play.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: play\ndata:\n  upper: \"WEBAPP\"\n  missing: \"platform\"\n  truncated: \"abcde\"\n  nodePort: \"30080\"\n  selector: |\n    disktype: ssd\n  resources: |\n    limits:\n      memory: 256Mi\n    requests:\n      cpu: 100m\n  indented: |\n    disktype: ssd",
+       "note": "The last key (`indented`) uses `indent 4` on a line that starts at column 0 and shows the difference: `indent` does **not** add a leading newline, while `nindent` does. Prefer `{{- toYaml ... | nindent N }}` at the end of the parent key line; it keeps the template readable and the indentation count obvious."
+      },
+      {
+       "type": "table",
+       "title": "Functions and keywords you will use every day",
+       "head": [
+        "Syntax",
+        "What it does",
+        "Template",
+        "Rendered"
+       ],
+       "rows": [
+        [
+         "quote / squote",
+         "Wrap in \" or '",
+         "{{ 8080 | quote }}",
+         "\"8080\""
+        ],
+        [
+         "default",
+         "Fallback for empty values (0, \"\", nil, [], {})",
+         "{{ .Values.tag | default \"latest\" }}",
+         "latest"
+        ],
+        [
+         "upper, lower, title",
+         "Change case",
+         "{{ \"web\" | upper }}",
+         "WEB"
+        ],
+        [
+         "trunc N, trimSuffix",
+         "Cut to length or drop a suffix (DNS names max 63)",
+         "{{ \"web-\" | trimSuffix \"-\" }}",
+         "web"
+        ],
+        [
+         "printf",
+         "Format a string",
+         "{{ printf \"%s-%s\" \"a\" \"b\" }}",
+         "a-b"
+        ],
+        [
+         "toYaml",
+         "Convert a map or list to YAML text",
+         "{{ toYaml .Values.resources }}",
+         "limits:\\n  memory: 256Mi"
+        ],
+        [
+         "indent N / nindent N",
+         "Indent every line by N / add newline first",
+         "{{ \"a\" | nindent 2 }}",
+         "\\n  a"
+        ],
+        [
+         "if / else if / else / end",
+         "Conditional; empty values are false",
+         "{{ if .Values.ingress.enabled }}",
+         "block or nothing"
+        ],
+        [
+         "with / end",
+         "Run only when non-empty and rebind .",
+         "{{ with .Values.nodeSelector }}",
+         "block or nothing"
+        ],
+        [
+         "range / end",
+         "Loop over a list or map",
+         "{{ range .Values.ingress.hosts }}",
+         "one block per item"
+        ],
+        [
+         "{{-  and  -}}",
+         "Trim whitespace on the left / right of the action",
+         "{{- if true -}}",
+         "no blank line"
+        ],
+        [
+         "$ and $var := value",
+         "Root scope and your own variable",
+         "{{ $name := .Chart.Name }}",
+         "variable for later use"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistakes: indentation, scope and nil",
+       "body": "**Wrong indent count**: Helm renders happily and Kubernetes then rejects the YAML; always run `helm template` and read the result. **Using `.` inside `range` or `with`** to reach `.Values` fails with `nil pointer evaluating interface {}`; use `$.Values` instead. **`default` on booleans**: `default true .Values.enabled` can never return false because false is \"empty\"; use `hasKey` or `ternary`. **Forgetting `quote`** on strings that look like numbers or booleans. **Leaving `{{ if }}` without `{{- end }}`** produces `unexpected EOF` at render time. Use `helm template --debug` to see the broken YAML next to the error."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Templates are Go `text/template` with Sprig: actions in `{{ }}`, objects at the root (`.Values`, `.Release`, `.Chart`, `.Capabilities`), pipelines with `|`, flow control with `if`, `with`, `range`, and `{{-` / `-}}` to control whitespace. `toYaml | nindent N` is the standard way to embed a values subtree, `$` escapes the narrowed scope, and `helm template` is your feedback loop. In lesson 3 you will stop repeating names and labels in every file by moving them into named templates in `_helpers.tpl`, then build the real Deployment, Service, Ingress and HPA of `webapp`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Add a value to the ConfigMap",
+       "prompt": "Using a scratch chart or webapp, add config.extra.TIER: gold and render the ConfigMap.",
+       "command": "helm template demo webapp --set config.extra.TIER=gold --show-only templates/configmap.yaml",
+       "expected": "The data section contains FEATURE_X, REGION and TIER (alphabetical) and every value is quoted.",
+       "hint": "--set config.extra.TIER=gold adds a key to the map.",
+       "solution": "helm template demo webapp --set config.extra.TIER=gold --show-only templates/configmap.yaml | grep TIER"
+      },
+      {
+       "title": "Debug a nil pointer",
+       "prompt": "Render webapp with a missing section by overriding it to null and read the error.",
+       "command": "helm template demo webapp --set config=null",
+       "expected": "Helm fails with a nil pointer evaluating interface {} .logLevel style error naming templates/configmap.yaml.",
+       "hint": "Setting a key to null deletes it from the merged values.",
+       "solution": "helm template demo webapp --set config=null --debug 2>&1 | head"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Inside a range loop, how do you read .Values from the root scope?",
+        "options": [
+         ".Values",
+         "$.Values",
+         "..Values",
+         "root.Values"
+        ],
+        "answer": 1,
+        "explain": "$ always refers to the root scope, even after range or with rebinds the dot."
+       },
+       {
+        "question": "What does {{ .Values.tag | default \"latest\" }} return when tag is an empty string?",
+        "options": [
+         "An empty string",
+         "nil",
+         "latest",
+         "An error"
+        ],
+        "answer": 2,
+        "explain": "default replaces empty values (empty string, 0, nil, empty list or map) with the fallback."
+       },
+       {
+        "question": "What is the difference between indent 4 and nindent 4?",
+        "options": [
+         "nindent uses tabs",
+         "nindent adds a newline before the indented text",
+         "indent skips the first line",
+         "There is none"
+        ],
+        "answer": 1,
+        "explain": "nindent prepends a newline, which is why it is used at the end of a key line."
+       },
+       {
+        "question": "Which command renders templates locally without contacting a cluster?",
+        "options": [
+         "helm install --dry-run=server",
+         "helm template",
+         "helm get manifest",
+         "helm status"
+        ],
+        "answer": 1,
+        "explain": "helm template renders client-side and prints the manifests; --dry-run=server contacts the API server."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-templates",
+      "k8s-configmaps"
+     ],
+     "tags": [
+      "helm",
+      "templates",
+      "go-template"
+     ],
+     "commands": [
+      "helm template",
+      "helm template --debug",
+      "helm lint"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Template Functions and Pipelines",
+       "url": "https://helm.sh/docs/chart_template_guide/functions_and_pipelines/"
+      },
+      {
+       "title": "Helm: Flow Control",
+       "url": "https://helm.sh/docs/chart_template_guide/control_structures/"
+      },
+      {
+       "title": "Helm: Built-in Objects",
+       "url": "https://helm.sh/docs/chart_template_guide/builtin_objects/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-helmc-reusable",
+   "title": "Reusable and safe charts",
+   "summary": "Factor out helpers, validate input and compose charts with dependencies.",
+   "lessons": [
+    {
+     "id": "k8s-helmc-helpers",
+     "title": "Named templates, _helpers.tpl and standard labels",
+     "duration": "16 min",
+     "summary": "Move names and labels into named templates, build the fullname helper and finish the Deployment, Service, Ingress and HPA of webapp.",
+     "objectives": [
+      "Define and call named templates with define and include",
+      "Build the fullname and label helpers with 63-character safety",
+      "Split immutable selector labels from common labels",
+      "Wrap optional objects in enabled switches",
+      "Test helper logic with helm template overrides"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Named templates: stop repeating yourself",
+       "body": "A **named template** (also called a partial or helper) is a block of template text you define once with `{{ define \"name\" }} ... {{ end }}` and reuse everywhere. Helm keeps one global namespace for all named templates in the chart **and its subcharts**, so by convention every name is prefixed with the chart name: `webapp.labels`, not `labels`. Put them in `templates/_helpers.tpl`; the leading underscore tells Helm not to render the file as a manifest.\n\nYou call a named template with **`include \"webapp.labels\" .`**. The second argument is the scope handed to the template: pass `.` (the root) so the helper can read `.Release`, `.Chart` and `.Values`. Always prefer `include` over the older `template` action, because `include` returns a string that you can pipe into `nindent`, `quote` or `sha256sum`, while `template` prints directly and cannot be piped."
+      },
+      {
+       "type": "text",
+       "title": "About this example: _helpers.tpl for webapp",
+       "body": "This is the full `templates/_helpers.tpl`. `webapp.name` is the short name, `webapp.fullname` builds the name used for every object (`<release>-<chart>`, or just the release name when it already contains the chart name, and always at most 63 characters because Kubernetes names are DNS labels), `webapp.chart` feeds the `helm.sh/chart` label, and the two label helpers split **selector labels** (stable) from **common labels** (stable plus informational). Look at how `webapp.labels` itself calls `include \"webapp.selectorLabels\"`: helpers can nest."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "{{/*\nShort name of the chart, overridable with nameOverride.\n*/}}\n{{- define \"webapp.name\" -}}\n{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix \"-\" }}\n{{- end }}\n\n{{/*\nFully qualified app name: <release>-<chart>, unless the release name already contains the chart name.\n*/}}\n{{- define \"webapp.fullname\" -}}\n{{- if .Values.fullnameOverride }}\n{{- .Values.fullnameOverride | trunc 63 | trimSuffix \"-\" }}\n{{- else }}\n{{- $name := default .Chart.Name .Values.nameOverride }}\n{{- if contains $name .Release.Name }}\n{{- .Release.Name | trunc 63 | trimSuffix \"-\" }}\n{{- else }}\n{{- printf \"%s-%s\" .Release.Name $name | trunc 63 | trimSuffix \"-\" }}\n{{- end }}\n{{- end }}\n{{- end }}\n\n{{/*\nChart name and version, used by the helm.sh/chart label.\n*/}}\n{{- define \"webapp.chart\" -}}\n{{- printf \"%s-%s\" .Chart.Name .Chart.Version | replace \"+\" \"_\" | trunc 63 | trimSuffix \"-\" }}\n{{- end }}\n\n{{/*\nSelector labels: immutable once the Deployment exists.\n*/}}\n{{- define \"webapp.selectorLabels\" -}}\napp.kubernetes.io/name: {{ include \"webapp.name\" . }}\napp.kubernetes.io/instance: {{ .Release.Name }}\n{{- end }}\n\n{{/*\nCommon labels for every object.\n*/}}\n{{- define \"webapp.labels\" -}}\nhelm.sh/chart: {{ include \"webapp.chart\" . }}\n{{ include \"webapp.selectorLabels\" . }}\napp.kubernetes.io/version: {{ .Chart.AppVersion | quote }}\napp.kubernetes.io/managed-by: {{ .Release.Service }}\n{{- end }}",
+       "title": "templates/_helpers.tpl",
+       "output": "$ helm template demo webapp --show-only templates/configmap.yaml\n---\n# Source: webapp/templates/configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo-webapp\n  labels:\n    helm.sh/chart: webapp-0.1.0\n    app.kubernetes.io/name: webapp\n    app.kubernetes.io/instance: demo\n    app.kubernetes.io/version: \"1.27.0\"\n    app.kubernetes.io/managed-by: Helm\ndata:\n  APP_VERSION: \"1.27.0\"\n  LOG_LEVEL: \"info\"\n  FEATURE_X: \"true\"\n  REGION: \"us-east-1\"",
+       "note": "`{{-` and `-}}` inside `define` matter: without them each helper output would start or end with a newline, giving blank lines and broken indentation wherever it is included."
+      },
+      {
+       "type": "text",
+       "title": "About this example: the Deployment and Service use the helpers",
+       "body": "Here is the heart of `webapp`: `templates/deployment.yaml`. Every name and label comes from `include`, the replica count is dropped when the HPA is enabled (otherwise Helm and the HPA would fight over `replicas`), the image tag falls back to `appVersion`, resources come from values through `toYaml | nindent`, and the pod annotation `checksum/config` is a hash of the rendered ConfigMap so pods restart when configuration changes. The output below is the real rendering with default values."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ include \"webapp.fullname\" . }}\n  labels:\n    {{- include \"webapp.labels\" . | nindent 4 }}\nspec:\n  {{- if not .Values.autoscaling.enabled }}\n  replicas: {{ .Values.replicaCount }}\n  {{- end }}\n  selector:\n    matchLabels:\n      {{- include \"webapp.selectorLabels\" . | nindent 6 }}\n  template:\n    metadata:\n      annotations:\n        checksum/config: {{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}\n      labels:\n        {{- include \"webapp.selectorLabels\" . | nindent 8 }}\n    spec:\n      containers:\n        - name: {{ .Chart.Name }}\n          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}\"\n          imagePullPolicy: {{ .Values.image.pullPolicy }}\n          ports:\n            - name: http\n              containerPort: 80\n              protocol: TCP\n          envFrom:\n            - configMapRef:\n                name: {{ include \"webapp.fullname\" . }}\n          readinessProbe:\n            httpGet:\n              path: /\n              port: http\n          resources:\n            {{- toYaml .Values.resources | nindent 12 }}\n      {{- with .Values.nodeSelector }}\n      nodeSelector:\n        {{- toYaml . | nindent 8 }}\n      {{- end }}",
+       "title": "templates/deployment.yaml",
+       "output": "$ helm template demo webapp --show-only templates/deployment.yaml\n---\n# Source: webapp/templates/deployment.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: demo-webapp\n  labels:\n    helm.sh/chart: webapp-0.1.0\n    app.kubernetes.io/name: webapp\n    app.kubernetes.io/instance: demo\n    app.kubernetes.io/version: \"1.27.0\"\n    app.kubernetes.io/managed-by: Helm\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: webapp\n      app.kubernetes.io/instance: demo\n  template:\n    metadata:\n      annotations:\n        checksum/config: 9dcb26e9a48ff636239b89def456371eba149ce99f2f513234679f9735959bf1\n      labels:\n        app.kubernetes.io/name: webapp\n        app.kubernetes.io/instance: demo\n    spec:\n      containers:\n        - name: webapp\n          image: \"nginx:1.27.0\"\n          imagePullPolicy: IfNotPresent\n          ports:\n            - name: http\n              containerPort: 80\n              protocol: TCP\n          envFrom:\n            - configMapRef:\n                name: demo-webapp\n          readinessProbe:\n            httpGet:\n              path: /\n              port: http\n          resources:\n            limits:\n              memory: 256Mi\n            requests:\n              cpu: 100m\n              memory: 128Mi",
+       "note": "The pod template carries only `selectorLabels`, not the full `webapp.labels`: `matchLabels` is immutable after creation, so it must never contain values that change between releases, such as `helm.sh/chart` or `app.kubernetes.io/version`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: the Ingress and HPA behind switches",
+       "body": "`templates/ingress.yaml` and `templates/hpa.yaml` are wrapped in `{{- if .Values.<feature>.enabled }}` so they render nothing by default. The Ingress uses nested `range` loops over hosts and paths and writes `include \"webapp.fullname\" $` with `$` because inside `range` the dot is the current host, not the root. Below, the Ingress template is followed by its rendering with both switches turned on."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "{{- if .Values.ingress.enabled -}}\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: {{ include \"webapp.fullname\" . }}\n  labels:\n    {{- include \"webapp.labels\" . | nindent 4 }}\nspec:\n  ingressClassName: {{ .Values.ingress.className }}\n  {{- with .Values.ingress.tls }}\n  tls:\n    {{- toYaml . | nindent 4 }}\n  {{- end }}\n  rules:\n    {{- range .Values.ingress.hosts }}\n    - host: {{ .host | quote }}\n      http:\n        paths:\n          {{- range .paths }}\n          - path: {{ .path }}\n            pathType: {{ .pathType }}\n            backend:\n              service:\n                name: {{ include \"webapp.fullname\" $ }}\n                port:\n                  name: http\n          {{- end }}\n    {{- end }}\n{{- end }}",
+       "title": "templates/ingress.yaml",
+       "output": "$ helm template demo webapp --set ingress.enabled=true --set autoscaling.enabled=true --show-only templates/ingress.yaml --show-only templates/hpa.yaml\n---\n# Source: webapp/templates/ingress.yaml\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: demo-webapp\n  labels:\n    helm.sh/chart: webapp-0.1.0\n    app.kubernetes.io/name: webapp\n    app.kubernetes.io/instance: demo\n    app.kubernetes.io/version: \"1.27.0\"\n    app.kubernetes.io/managed-by: Helm\nspec:\n  ingressClassName: nginx\n  rules:\n    - host: \"webapp.example.com\"\n      http:\n        paths:\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: demo-webapp\n                port:\n                  name: http\n\n---\n# Source: webapp/templates/hpa.yaml\napiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: demo-webapp\n  labels:\n    helm.sh/chart: webapp-0.1.0\n    app.kubernetes.io/name: webapp\n    app.kubernetes.io/instance: demo\n    app.kubernetes.io/version: \"1.27.0\"\n    app.kubernetes.io/managed-by: Helm\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: demo-webapp\n  minReplicas: 2\n  maxReplicas: 6\n  metrics:\n    - type: Resource\n      resource:\n        name: cpu\n        target:\n          type: Utilization\n          averageUtilization: 70",
+       "note": "Without the switches, `helm template demo webapp --show-only templates/ingress.yaml` fails with `could not find template templates/ingress.yaml in chart` because the file rendered to an empty document."
+      },
+      {
+       "type": "table",
+       "title": "What webapp.fullname produces",
+       "head": [
+        "Release name",
+        "Values",
+        "Result",
+        "Why"
+       ],
+       "rows": [
+        [
+         "demo",
+         "(defaults)",
+         "demo-webapp",
+         "release name plus chart name"
+        ],
+        [
+         "webapp-prod",
+         "(defaults)",
+         "webapp-prod",
+         "release name already contains the chart name, so it is not doubled"
+        ],
+        [
+         "demo",
+         "nameOverride=shop",
+         "demo-shop",
+         "nameOverride replaces the chart-name part"
+        ],
+        [
+         "demo",
+         "fullnameOverride=checkout",
+         "checkout",
+         "fullnameOverride wins and ignores the release name"
+        ],
+        [
+         "a-very-long-release-name-that-keeps-going-and-going-until-it-is-too-long",
+         "(defaults)",
+         "cut to 63 characters",
+         "trunc 63 keeps the name a valid DNS label"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes with named templates",
+       "body": "**Unprefixed names** such as `define \"labels\"` collide with a subchart or another chart that defines the same name: the last one loaded silently wins. **Passing the wrong scope**: `include \"webapp.labels\" .Values` makes `.Chart` and `.Release` nil. **Using `template` and then piping**: `template` cannot be piped, use `include`. **Changing selector labels** in a later release makes `helm upgrade` fail with `field is immutable`, so treat `selectorLabels` as frozen. **Forgetting `$`** inside `range` or `with` when calling a helper that needs the root."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "`define` creates a chart-wide named template, `include name .` renders it to a pipeable string, and `_helpers.tpl` is where they live, always prefixed with the chart name. `webapp` now has a fullname helper, split selector and common labels, and Deployment, Service, ConfigMap, Ingress and HPA templates that all use them. The chart works, but it will happily accept `replicaCount: lots`. Lesson 4 adds guard rails: a JSON Schema for values, `required` and `fail` for custom errors, and a `NOTES.txt` that tells the user what to do next."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Test the helper logic",
+       "prompt": "Render only the Service name for a release called webapp-prod and then for demo with nameOverride=shop.",
+       "command": "helm template webapp-prod webapp --show-only templates/service.yaml | grep -m1 \"  name:\"",
+       "expected": "The first prints name: webapp-prod, the second name: demo-shop.",
+       "hint": "--show-only limits output to one template file.",
+       "solution": "helm template webapp-prod webapp --show-only templates/service.yaml | grep -m1 \"  name:\"\nhelm template demo webapp --set nameOverride=shop --show-only templates/service.yaml | grep -m1 \"  name:\""
+      },
+      {
+       "title": "Turn on the optional objects",
+       "prompt": "Enable the Ingress and HPA and list the kinds Helm renders.",
+       "command": "helm template demo webapp --set ingress.enabled=true --set autoscaling.enabled=true | grep \"^kind:\"",
+       "expected": "Kinds: ConfigMap, Service, Deployment, HorizontalPodAutoscaler and Ingress.",
+       "hint": "grep \"^kind:\" shows one line per object.",
+       "solution": "helm template demo webapp --set ingress.enabled=true --set autoscaling.enabled=true | grep \"^kind:\""
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Why use include instead of template for helpers?",
+        "options": [
+         "include is faster",
+         "include returns a string you can pipe to nindent",
+         "template is deprecated and removed",
+         "include works only in subcharts"
+        ],
+        "answer": 1,
+        "explain": "include returns a value that can be piped through nindent, quote or sha256sum; template prints directly."
+       },
+       {
+        "question": "Why should named templates be prefixed with the chart name?",
+        "options": [
+         "Helm requires it",
+         "All named templates share one namespace including subcharts",
+         "To make them private",
+         "To enable caching"
+        ],
+        "answer": 1,
+        "explain": "The namespace is global, so unprefixed names can collide and the last loaded definition wins."
+       },
+       {
+        "question": "Why does the Deployment omit replicas when autoscaling.enabled is true?",
+        "options": [
+         "replicas is not allowed with HPA",
+         "So helm upgrade does not reset the replica count chosen by the HPA",
+         "The HPA reads values.yaml",
+         "To save space"
+        ],
+        "answer": 1,
+        "explain": "If the manifest keeps replicas, every upgrade would reset the HPA-managed count."
+       },
+       {
+        "question": "Why call include \"webapp.fullname\" $ inside a range loop?",
+        "options": [
+         "$ is faster",
+         "Inside range the dot is rebound, and the helper needs the root scope",
+         "$ is required by Go",
+         "It prints a dollar sign"
+        ],
+        "answer": 1,
+        "explain": "range changes the dot to the current item; $ is the root so .Release and .Chart remain available."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-templates",
+      "k8s-deployments",
+      "k8s-services",
+      "k8s-ingress",
+      "k8s-autoscaling-maintenance"
+     ],
+     "tags": [
+      "helm",
+      "helpers",
+      "labels"
+     ],
+     "commands": [
+      "helm template",
+      "include",
+      "define"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Charts",
+       "url": "https://helm.sh/docs/topics/charts/"
+      },
+      {
+       "title": "Helm: Chart Template Guide",
+       "url": "https://helm.sh/docs/chart_template_guide/"
+      },
+      {
+       "title": "Helm: Named Templates",
+       "url": "https://helm.sh/docs/chart_template_guide/named_templates/"
+      },
+      {
+       "title": "Kubernetes: Recommended Labels",
+       "url": "https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helmc-validation",
+     "title": "Validate values: schema, required, fail and NOTES.txt",
+     "duration": "15 min",
+     "summary": "Add guard rails to webapp with a JSON Schema, custom required/fail errors and a helpful NOTES.txt.",
+     "objectives": [
+      "Write a values.schema.json with types, ranges, enums and required keys",
+      "Use required and fail for cross-field rules with clear messages",
+      "Preview NOTES.txt with a client-side dry run",
+      "Avoid over-strict schemas that break parent charts"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Three layers of guard rails",
+       "body": "A chart that accepts anything fails late and confusingly: a typo such as `image.pullpolicy` is silently ignored, `replicaCount: lots` renders a manifest the API server rejects with a cryptic message, and a forgotten database host becomes a crash loop. Helm gives you three layers of defence, from cheapest to most flexible:\n\n**1. `values.schema.json`**: a JSON Schema that Helm checks on every `install`, `upgrade`, `template` and `lint`, before any template is rendered. Use it for types, ranges, enums and required keys.\n**2. `required` and `fail`** inside templates: custom, readable errors for rules a schema cannot express, such as \"if the Ingress is enabled there must be at least one host\".\n**3. `NOTES.txt`**: not validation, but the last guard rail for humans: it tells the user what was deployed and the exact next command to run."
+      },
+      {
+       "type": "text",
+       "title": "About this example: values.schema.json and the errors it produces",
+       "body": "This schema sits next to `values.yaml`. `required` at the top makes `image` and `service` mandatory, `minimum`/`maximum` bound numbers, `enum` restricts strings to a closed set, and `additionalProperties: false` on `image` turns typos into errors (we deliberately do **not** set it at the top level, because parent charts inject extra keys such as `global`). The four commands below break one rule each; read the JSON pointer (`/replicaCount`) to find the offending key."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "{\n  \"$schema\": \"https://json-schema.org/draft-07/schema#\",\n  \"title\": \"webapp values\",\n  \"type\": \"object\",\n  \"required\": [\"image\", \"service\"],\n  \"properties\": {\n    \"replicaCount\": { \"type\": \"integer\", \"minimum\": 1, \"maximum\": 50 },\n    \"image\": {\n      \"type\": \"object\",\n      \"required\": [\"repository\"],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"repository\": { \"type\": \"string\", \"minLength\": 1 },\n        \"tag\": { \"type\": \"string\" },\n        \"pullPolicy\": { \"enum\": [\"Always\", \"IfNotPresent\", \"Never\"] }\n      }\n    },\n    \"service\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"type\": { \"enum\": [\"ClusterIP\", \"NodePort\", \"LoadBalancer\"] },\n        \"port\": { \"type\": \"integer\", \"minimum\": 1, \"maximum\": 65535 }\n      }\n    },\n    \"ingress\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"enabled\": { \"type\": \"boolean\" },\n        \"className\": { \"type\": \"string\" }\n      }\n    },\n    \"autoscaling\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"enabled\": { \"type\": \"boolean\" },\n        \"minReplicas\": { \"type\": \"integer\", \"minimum\": 1 },\n        \"maxReplicas\": { \"type\": \"integer\", \"minimum\": 1 },\n        \"targetCPUUtilizationPercentage\": { \"type\": \"integer\", \"minimum\": 1, \"maximum\": 100 }\n      }\n    }\n  }\n}",
+       "title": "values.schema.json",
+       "output": "$ helm template demo webapp --set replicaCount=0\nError: values don't meet the specifications of the schema(s) in the following chart(s):\nwebapp:\n- at '/replicaCount': minimum: got 0, want 1\n\n$ helm template demo webapp --set service.type=Nodeport\nError: values don't meet the specifications of the schema(s) in the following chart(s):\nwebapp:\n- at '/service/type': value must be one of 'ClusterIP', 'NodePort', 'LoadBalancer'\n\n$ helm template demo webapp --set image.pullpolicy=Always\nError: values don't meet the specifications of the schema(s) in the following chart(s):\nwebapp:\n- at '/image': additional properties 'pullpolicy' not allowed\n\n$ helm template demo webapp --set replicaCount=lots\nError: values don't meet the specifications of the schema(s) in the following chart(s):\nwebapp:\n- at '/replicaCount': got string, want integer",
+       "note": "The exact wording of schema errors depends on the Helm release (Helm 3 prints messages like `Must be greater than or equal to 1`; Helm 4 uses the JSON-pointer form shown here), but all of them name the chart and the key. Use JSON Schema draft-07 or later features sparingly; `helm lint` and `helm install` fail the same way, so CI catches bad values too."
+      },
+      {
+       "type": "table",
+       "title": "JSON Schema keywords you need for charts",
+       "head": [
+        "Keyword",
+        "Applies to",
+        "Effect",
+        "Example"
+       ],
+       "rows": [
+        [
+         "type",
+         "any",
+         "Value must be string, integer, number, boolean, object or array",
+         "\"type\": \"integer\""
+        ],
+        [
+         "required",
+         "object",
+         "Listed keys must be present",
+         "\"required\": [\"image\"]"
+        ],
+        [
+         "properties",
+         "object",
+         "Schema per known key",
+         "\"properties\": {\"port\": {...}}"
+        ],
+        [
+         "additionalProperties",
+         "object",
+         "false rejects unknown keys (catches typos)",
+         "\"additionalProperties\": false"
+        ],
+        [
+         "enum",
+         "any",
+         "Value must be one of a closed list",
+         "\"enum\": [\"ClusterIP\",\"NodePort\"]"
+        ],
+        [
+         "minimum / maximum",
+         "number",
+         "Numeric range",
+         "\"minimum\": 1, \"maximum\": 65535"
+        ],
+        [
+         "minLength / pattern",
+         "string",
+         "Length or regular expression",
+         "\"pattern\": \"^[a-z0-9-]+$\""
+        ],
+        [
+         "items / minItems",
+         "array",
+         "Schema of elements and minimum count",
+         "\"minItems\": 1"
+        ],
+        [
+         "default / description",
+         "any",
+         "Documentation only, not applied by Helm",
+         "\"description\": \"Pod count\""
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: required and fail in a template",
+       "body": "`required \"message\" value` stops rendering with your message when the value is empty or missing, and returns the value otherwise, so you can assign it to a variable in one step. `fail \"message\"` stops unconditionally and is meant for `if` blocks that check combinations of values. The scratch template below uses both; the three commands show the failing and the passing paths. Notice the `{{- ... -}}` on every line: the file must render nothing before `apiVersion`."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "{{- $host := required \"db.host is required: set it with --set db.host=<hostname>\" .Values.db.host -}}\n{{- if and .Values.ingress.enabled (not .Values.ingress.hosts) -}}\n{{- fail \"ingress.enabled=true needs at least one entry in ingress.hosts\" -}}\n{{- end -}}\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: guard\ndata:\n  DB_HOST: {{ $host | quote }}",
+       "title": "templates/config.yaml (guard demo)",
+       "output": "$ helm template g ./guard\nError: execution error at (guard/templates/config.yaml:1:13): db.host is required: set it with --set db.host=<hostname>\n\nUse --debug flag to render out invalid YAML\n\n$ helm template g ./guard --set db.host=pg.prod.svc\n---\n# Source: guard/templates/config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: guard\ndata:\n  DB_HOST: \"pg.prod.svc\"\n\n$ helm template g ./guard --set db.host=pg.prod.svc --set ingress.enabled=true\nError: execution error at (guard/templates/config.yaml:3:4): ingress.enabled=true needs at least one entry in ingress.hosts\n\nUse --debug flag to render out invalid YAML",
+       "note": "Write error messages that tell the user **how to fix** the problem (`set it with --set db.host=...`). Prefer the schema for simple rules and keep `fail` for cross-field rules. Remember `required` treats an empty string as missing, which is usually what you want for hostnames and secrets names."
+      },
+      {
+       "type": "text",
+       "title": "About this example: NOTES.txt",
+       "body": "`templates/NOTES.txt` is rendered like any template but printed to the terminal after `helm install` and `helm upgrade` (and again by `helm get notes`). It can use `.Values`, `include` and conditionals, so it can show the right access instructions for the chosen Service type or Ingress. Because `helm template` does not print it, preview it with a client-side dry run, as in the command below, which cuts the output down to the notes section."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "{{ include \"webapp.fullname\" . }} {{ .Chart.AppVersion }} is deployed in namespace {{ .Release.Namespace }}.\n{{- if .Values.ingress.enabled }}\n\nOpen the application:\n{{- range .Values.ingress.hosts }}\n  http://{{ .host }}{{ (first .paths).path }}\n{{- end }}\n{{- else if contains \"NodePort\" .Values.service.type }}\n\nGet the node port and any node address:\n  kubectl --namespace {{ .Release.Namespace }} get svc {{ include \"webapp.fullname\" . }}\n{{- else }}\n\nReach it from your laptop with a port-forward:\n  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include \"webapp.fullname\" . }} 8080:{{ .Values.service.port }}\n  curl http://127.0.0.1:8080\n{{- end }}\n\nCheck the rollout:\n  kubectl --namespace {{ .Release.Namespace }} rollout status deploy/{{ include \"webapp.fullname\" . }}",
+       "title": "templates/NOTES.txt",
+       "output": "$ helm install demo webapp -n prod --dry-run=client | sed -n '/^NOTES:/,$p'\nNOTES:\ndemo-webapp 1.27.0 is deployed in namespace prod.\n\nReach it from your laptop with a port-forward:\n  kubectl --namespace prod port-forward svc/demo-webapp 8080:80\n  curl http://127.0.0.1:8080\n\nCheck the rollout:\n  kubectl --namespace prod rollout status deploy/demo-webapp\n\n$ helm install demo webapp -n prod --dry-run=client --set ingress.enabled=true | sed -n '/^NOTES:/,$p'\nNOTES:\ndemo-webapp 1.27.0 is deployed in namespace prod.\n\nOpen the application:\n  http://webapp.example.com/\n\nCheck the rollout:\n  kubectl --namespace prod rollout status deploy/demo-webapp",
+       "note": "`--dry-run=client` renders locally without contacting the cluster (in Helm 3 plain `--dry-run` behaves the same; `--dry-run=server` also validates against the API server and runs admission webhooks). Use `--create-namespace -n prod` on a real install."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes with validation",
+       "body": "**Schema too strict at the top level**: `additionalProperties: false` on the root rejects `global` and subchart values (lesson 5); only use it on objects you own. **Schema and values drift**: add every new key to the schema in the same commit. **Using `fail` where the schema would do**: the schema reports all violations at once, `fail` reports one at a time. **Secrets in error messages**: never print `.Values.password` in a `fail` or `required` message. **NOTES.txt that errors**: a nil value in the notes fails the whole install after resources were created, so test it with `--dry-run`."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "`values.schema.json` validates types, ranges, enums and required keys before rendering; `required` and `fail` give precise custom errors for rules the schema cannot express; `NOTES.txt` ends an install with the exact next steps. `webapp` now rejects `replicaCount=0`, a misspelt `Nodeport` and an unknown `image.pullpolicy`. Lesson 5 extends the chart with other charts: you will add a subchart dependency (Redis for caching), switch it with `condition`, run it twice with `alias`, share values with `global`, and learn what a library chart is."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Trip the schema",
+       "prompt": "Render webapp with an out-of-range service port and read the error.",
+       "command": "helm template demo webapp --set service.port=70000",
+       "expected": "Error says values do not meet the schema and points at /service/port with a maximum of 65535.",
+       "hint": "maximum is 65535 in values.schema.json.",
+       "solution": "helm template demo webapp --set service.port=70000"
+      },
+      {
+       "title": "Preview the notes",
+       "prompt": "Run a client-side dry run with a NodePort Service and show only the NOTES section.",
+       "command": "helm install demo webapp --dry-run=client --set service.type=NodePort | sed -n \"/^NOTES:/,\\$p\"",
+       "expected": "NOTES mention kubectl get svc demo-webapp instead of port-forward.",
+       "hint": "sed prints from the line starting with NOTES: to the end.",
+       "solution": "helm install demo webapp --dry-run=client --set service.type=NodePort | sed -n '/^NOTES:/,$p'"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "When is values.schema.json checked?",
+        "options": [
+         "Only on helm install",
+         "On install, upgrade, template and lint",
+         "Only in CI",
+         "Only when the cluster has admission webhooks"
+        ],
+        "answer": 1,
+        "explain": "Helm validates the final merged values against the schema for all commands that render the chart."
+       },
+       {
+        "question": "What does required \"msg\" .Values.x do when x is an empty string?",
+        "options": [
+         "Returns the empty string",
+         "Fails rendering with the message",
+         "Returns nil",
+         "Uses the default"
+        ],
+        "answer": 1,
+        "explain": "required fails for nil and empty-string values, which makes it ideal for mandatory settings."
+       },
+       {
+        "question": "Why not set additionalProperties: false at the root of the schema?",
+        "options": [
+         "It is not allowed in JSON Schema",
+         "Parent charts inject keys such as global",
+         "It disables enum checks",
+         "It slows rendering"
+        ],
+        "answer": 1,
+        "explain": "Parent charts and global values add keys the chart does not know, so a strict root would reject valid installs."
+       },
+       {
+        "question": "Which command previews NOTES.txt without installing?",
+        "options": [
+         "helm template",
+         "helm lint",
+         "helm install --dry-run=client",
+         "helm get manifest"
+        ],
+        "answer": 2,
+        "explain": "helm template does not print notes; a dry-run install renders and prints them."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-templates",
+      "k8s-configmaps"
+     ],
+     "tags": [
+      "helm",
+      "schema",
+      "validation"
+     ],
+     "commands": [
+      "helm template",
+      "helm install --dry-run",
+      "helm lint"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Schema Files",
+       "url": "https://helm.sh/docs/topics/charts/#schema-files"
+      },
+      {
+       "title": "Helm: Notes Files",
+       "url": "https://helm.sh/docs/chart_template_guide/notes_files/"
+      },
+      {
+       "title": "Helm: Template Functions (required, fail)",
+       "url": "https://helm.sh/docs/howto/charts_tips_and_tricks/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helmc-dependencies",
+     "title": "Dependencies, subcharts and library charts",
+     "duration": "16 min",
+     "summary": "Add a subchart to webapp, control it with condition, alias and global values, and share helpers with a library chart.",
+     "objectives": [
+      "Declare dependencies in Chart.yaml and fetch them with helm dependency update",
+      "Explain Chart.lock and helm dependency build",
+      "Pass values to subcharts and share global values",
+      "Switch subcharts with condition and include copies with alias",
+      "Build and use a library chart"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Why dependencies, and how a chart finds them",
+       "body": "Real applications need a database, a cache or a metrics exporter. Instead of copying their manifests into your chart, you declare them as **dependencies** in `Chart.yaml`. A dependency is another chart (a **subchart**) that Helm renders together with the parent as part of the same release. Where the chart is fetched from is the `repository` field: an HTTP chart repository (`https://charts.example.com`), an **OCI registry** (`oci://registry.example.com/charts`), or a local path (`file://../cache`), which is perfect while developing two charts side by side.\n\n`helm dependency update` downloads each dependency into `charts/` as a `.tgz` and writes **`Chart.lock`**, which pins the exact resolved versions and a digest; `helm dependency build` reinstalls strictly from the lock file, which is what CI should use. Subcharts are namespaced by their name for values, and one chart cannot see the other's values unless they are `global`. In this lesson we add a Redis-like `cache` subchart and a **library chart** to `webapp`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: declaring and fetching dependencies",
+       "body": "The block shows the `dependencies:` list appended to `webapp/Chart.yaml`, then the commands that fetch and list them, and the generated `Chart.lock`. `cache` has a `condition`, a values path that decides at render time whether the subchart is included at all. `platform-lib` is a library chart (below) and needs none. Look at the `charts/` listing: the packaged subcharts are now part of the chart, so you commit `Chart.lock` and usually git-ignore `charts/*.tgz`."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "dependencies:\n  - name: cache\n    version: 0.1.0\n    repository: file://../cache\n    condition: cache.enabled\n  - name: platform-lib\n    version: 1.0.0\n    repository: file://../platform-lib",
+       "title": "Chart.yaml (dependencies section)",
+       "output": "$ helm dependency update webapp\nSaving 2 charts\nDeleting outdated charts\n\n$ ls webapp/charts\ncache-0.1.0.tgz  platform-lib-1.0.0.tgz\n\n$ helm dependency list webapp\nNAME        \tVERSION\tREPOSITORY            \tSTATUS\ncache       \t0.1.0  \tfile://../cache       \tok    \nplatform-lib\t1.0.0  \tfile://../platform-lib\tok    \n\n$ cat webapp/Chart.lock\ndependencies:\n- name: cache\n  repository: file://../cache\n  version: 0.1.0\n- name: platform-lib\n  repository: file://../platform-lib\n  version: 1.0.0\ndigest: sha256:8793ceb173dd30609711d745991d94b83d19d3ff32c15a7cc96b650f057a4b18\ngenerated: \"2026-11-13T09:41:12.482913Z\"",
+       "note": "With a remote repository you first run `helm repo add` (HTTP) or authenticate with `helm registry login` (OCI), and use version ranges such as `~19.6.0` or `^1.2.0`; the lock file then freezes the resolved version. Run `helm dependency update` again whenever you change the `dependencies` list."
+      },
+      {
+       "type": "table",
+       "title": "Fields of a dependency entry",
+       "head": [
+        "Field",
+        "Meaning",
+        "Example",
+        "Notes"
+       ],
+       "rows": [
+        [
+         "name",
+         "Chart name inside the repository",
+         "cache",
+         "must match the subchart Chart.yaml name"
+        ],
+        [
+         "version",
+         "Exact version or SemVer range",
+         "0.1.0, ~19.6.0, ^1.2.0",
+         "locked in Chart.lock"
+        ],
+        [
+         "repository",
+         "Where to fetch it",
+         "file://../cache, https://charts.example.com, oci://registry.example.com/charts",
+         "repo URL must be added with helm repo add for HTTP"
+        ],
+        [
+         "condition",
+         "Values path(s) holding a boolean; false removes the subchart",
+         "cache.enabled",
+         "first path found wins"
+        ],
+        [
+         "tags",
+         "List of tags; enable or disable groups via tags: in values",
+         "tags: [backend]",
+         "condition takes precedence over tags"
+        ],
+        [
+         "alias",
+         "Name under which the subchart is included, allows several copies",
+         "sessions",
+         "values key becomes the alias"
+        ],
+        [
+         "import-values",
+         "Copy values from a subchart up to the parent",
+         "child: data, parent: db",
+         "rarely needed, prefer explicit values"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: values flow, condition and global",
+       "body": "Values for a subchart live under a key with the subchart's name: `cache.replicaCount: 2` in the parent overrides the `replicaCount` default in `cache/values.yaml`. Anything under **`global:`** is visible to the parent **and every subchart** as `.Values.global.*`, which is how you share things like environment names or image registries. The `cache.enabled` boolean is the `condition`. The commands render the whole release, then switch the subchart off, and finally print the subchart Deployment to prove both overrides arrived."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "# Passed to the \"cache\" subchart: keys under the subchart name.\ncache:\n  enabled: true\n  replicaCount: 2\n\n# Visible to the parent and to every subchart as .Values.global.*\nglobal:\n  environment: staging\n  system: shop\n\nowner: team-web",
+       "title": "webapp/values.yaml (additions)",
+       "output": "$ helm template demo webapp | grep -E '^# Source'\n# Source: webapp/templates/configmap.yaml\n# Source: webapp/templates/lib-demo.yaml\n# Source: webapp/charts/cache/templates/cache.yaml\n# Source: webapp/templates/service.yaml\n# Source: webapp/charts/cache/templates/cache.yaml\n# Source: webapp/templates/deployment.yaml\n\n$ helm template demo webapp --set cache.enabled=false | grep -E '^# Source'\n# Source: webapp/templates/configmap.yaml\n# Source: webapp/templates/lib-demo.yaml\n# Source: webapp/templates/service.yaml\n# Source: webapp/templates/deployment.yaml\n\n$ helm template demo webapp --show-only charts/cache/templates/cache.yaml | grep -E '^kind:|^  name:|replicas:|environment:'\nkind: Service\n  name: demo-cache\nkind: Deployment\n  name: demo-cache\n    app.kubernetes.io/environment: \"staging\"\n  replicas: 2",
+       "note": "The `# Source:` path `webapp/charts/cache/templates/cache.yaml` shows the subchart template was rendered as part of the parent. With `cache.enabled=false` no file from `charts/cache` appears. In the subchart, `global.environment` arrives as `\"staging\"`. A subchart cannot read its parent's non-global values, which keeps it reusable."
+      },
+      {
+       "type": "text",
+       "title": "About this example: aliases and a library chart",
+       "body": "An **alias** lets you include the same subchart more than once with separate values: the parent below pulls `cache` twice as `sessions` and `pages`, each configured under its own key. A **library chart** (`type: library` in `Chart.yaml`) contains only named templates and renders no manifests of its own; you depend on it and `include` its helpers, so every chart in the company shares the same labels. The first block is the library template, the second the scratch `stack` chart with aliases and the rendered result."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: v2\nname: platform-lib\ndescription: Shared helpers for all company charts\ntype: library\nversion: 1.0.0\n\n# templates/_labels.tpl\n{{- define \"platform-lib.labels\" -}}\napp.kubernetes.io/name: {{ .Chart.Name }}\napp.kubernetes.io/instance: {{ .Release.Name }}\napp.kubernetes.io/part-of: {{ .Values.global.system | default \"platform\" }}\ncompany.example.com/owner: {{ .Values.owner | default \"unassigned\" | quote }}\n{{- end -}}\n\n# webapp/templates/lib-demo.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include \"webapp.fullname\" . }}-labels-demo\n  labels:\n    {{- include \"platform-lib.labels\" . | nindent 4 }}\ndata: {}\n\n# stack/Chart.yaml dependencies\ndependencies:\n  - name: cache\n    alias: sessions\n    version: 0.1.0\n    repository: file://../cache\n  - name: cache\n    alias: pages\n    version: 0.1.0\n    repository: file://../cache\n# stack/values.yaml\nsessions:\n  replicaCount: 1\npages:\n  replicaCount: 3\n  image:\n    tag: 7.4-alpine",
+       "title": "platform-lib/Chart.yaml, _labels.tpl and a consumer",
+       "output": "$ helm template demo webapp --show-only templates/lib-demo.yaml\n---\n# Source: webapp/templates/lib-demo.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo-webapp-labels-demo\n  labels:\n    app.kubernetes.io/name: webapp\n    app.kubernetes.io/instance: demo\n    app.kubernetes.io/part-of: shop\n    company.example.com/owner: \"team-web\"\ndata: {}\n\n$ helm template s stack | grep -E '^# Source|^  name:|replicas:|image:'\n# Source: stack/charts/pages/templates/cache.yaml\n  name: s-pages\n# Source: stack/charts/sessions/templates/cache.yaml\n  name: s-sessions\n# Source: stack/charts/pages/templates/cache.yaml\n  name: s-pages\n  replicas: 3\n          image: \"redis:7.4-alpine\"\n# Source: stack/charts/sessions/templates/cache.yaml\n  name: s-sessions\n  replicas: 1\n          image: \"redis:7.2-alpine\"",
+       "note": "Library charts cannot be installed (`helm install` on one fails) and are ideal for the helpers from lesson 3. Inside an included library template the dot is the **caller's** scope, so `.Chart.Name` is `webapp` and `.Values.owner` comes from the parent. Prefix library template names with the library name (`platform-lib.labels`) to avoid collisions."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes with dependencies",
+       "body": "**Forgetting `helm dependency update`** gives `found in Chart.yaml, but missing in charts/ directory`. **Subchart values at the wrong level**: `replicaCount: 2` at the top changes the parent, not the cache; it must be under `cache:`. **Expecting a subchart to read parent values**: only `global` crosses the boundary. **Unpinned versions** such as `*` make builds irreproducible: commit `Chart.lock` and use `helm dependency build` in CI. **Name collisions**: two subcharts defining the same named template; always prefix. **Dashes in aliases** are awkward in `--set`; prefer `sessions` to `session-cache`."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Dependencies live in `Chart.yaml`, are fetched into `charts/` by `helm dependency update` and pinned by `Chart.lock`. Subchart values go under the subchart name (or alias), `global` values are shared, `condition` and `tags` switch subcharts on and off, `alias` allows several copies, and library charts distribute reusable named templates. In lesson 6 we add behaviour around the release itself: hooks that run a Job before an upgrade, test pods run by `helm test`, and `helm lint` to catch problems before they ship."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Switch the subchart off",
+       "prompt": "Render webapp with the cache subchart disabled and count the Deployments.",
+       "command": "helm template demo webapp --set cache.enabled=false | grep -c \"^kind: Deployment\"",
+       "expected": "Count is 1: only the webapp Deployment remains.",
+       "hint": "condition cache.enabled controls inclusion.",
+       "solution": "helm template demo webapp --set cache.enabled=false | grep -c \"^kind: Deployment\""
+      },
+      {
+       "title": "Override a subchart value",
+       "prompt": "Set the cache replica count to 4 through the parent and confirm.",
+       "command": "helm template demo webapp --set cache.replicaCount=4 --show-only charts/cache/templates/cache.yaml | grep replicas",
+       "expected": "Output shows replicas: 4 for the cache Deployment.",
+       "hint": "Subchart values are prefixed with the subchart name.",
+       "solution": "helm template demo webapp --set cache.replicaCount=4 --show-only charts/cache/templates/cache.yaml | grep replicas"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which file pins the exact resolved versions of dependencies?",
+        "options": [
+         "Chart.yaml",
+         "values.yaml",
+         "Chart.lock",
+         "requirements.txt"
+        ],
+        "answer": 2,
+        "explain": "helm dependency update writes Chart.lock; helm dependency build installs exactly what it records."
+       },
+       {
+        "question": "How can a parent chart share a value with all of its subcharts?",
+        "options": [
+         "By putting it under global:",
+         "By defining it at the top level of values.yaml",
+         "By using import-values only",
+         "It cannot"
+        ],
+        "answer": 0,
+        "explain": "Keys under global are merged into every subchart as .Values.global."
+       },
+       {
+        "question": "What is the purpose of the alias field?",
+        "options": [
+         "Rename the release",
+         "Include the same chart several times with separate values",
+         "Shorten the repository URL",
+         "Hide the chart from helm list"
+        ],
+        "answer": 1,
+        "explain": "An alias gives each instance its own values key, so the same chart can appear twice."
+       },
+       {
+        "question": "A chart with type: library…",
+        "options": [
+         "Can be installed like any chart",
+         "Only provides named templates and renders no manifests",
+         "Must live in an OCI registry",
+         "Replaces the parent values"
+        ],
+        "answer": 1,
+        "explain": "Library charts contain helpers only; they are used as dependencies and cannot be installed."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-templates",
+      "k8s-helm-basics"
+     ],
+     "tags": [
+      "helm",
+      "dependencies",
+      "subcharts",
+      "library"
+     ],
+     "commands": [
+      "helm dependency update",
+      "helm dependency list",
+      "helm dependency build"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Chart Dependencies",
+       "url": "https://helm.sh/docs/topics/charts/#chart-dependencies"
+      },
+      {
+       "title": "Helm: Library Charts",
+       "url": "https://helm.sh/docs/topics/library_charts/"
+      },
+      {
+       "title": "Helm: Subcharts and Global Values",
+       "url": "https://helm.sh/docs/chart_template_guide/subcharts_and_globals/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-helmc-ship",
+   "title": "Testing and shipping",
+   "summary": "Add hooks and tests, then package, sign, publish and verify in CI.",
+   "lessons": [
+    {
+     "id": "k8s-helmc-hooks-tests",
+     "title": "Hooks, helm test and helm lint",
+     "duration": "16 min",
+     "summary": "Run migrations before upgrades, verify releases with test hooks and catch mistakes with lint.",
+     "objectives": [
+      "Explain hook events, weights and delete policies",
+      "Write a pre-upgrade migration Job hook",
+      "Write a test hook and run it with helm test",
+      "Use helm lint and its --strict flag in a workflow",
+      "Avoid hook pitfalls that block releases"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What a hook is and when it runs",
+       "body": "A **hook** is an ordinary Kubernetes resource (usually a Job or Pod) in `templates/` that carries the annotation `helm.sh/hook`. Helm does not treat it as part of the release's normal resources: it creates it at a specific moment of the release lifecycle, **waits for it to finish** (a Job to complete, a Pod to succeed), and only then continues. If a hook fails, the whole `install` or `upgrade` fails. Typical uses are database migrations before an upgrade, a smoke test after it, or cleanup before delete.\n\nTwo more annotations shape hook behaviour. **`helm.sh/hook-weight`** is a string number; hooks of the same event run in ascending weight order (ties break by resource kind, then name). **`helm.sh/hook-delete-policy`** says when Helm deletes the hook object: `before-hook-creation` (default, deletes the previous one before creating a new one), `hook-succeeded`, or `hook-failed`. Because hooks are not tracked as release resources, `helm uninstall` will not remove leftovers unless a delete policy does."
+      },
+      {
+       "type": "table",
+       "title": "Hook events",
+       "head": [
+        "Annotation value",
+        "Runs",
+        "Typical use",
+        "Note"
+       ],
+       "rows": [
+        [
+         "pre-install",
+         "After templates render, before any resource is created",
+         "create a database or run a first-time setup",
+         "blocks the install"
+        ],
+        [
+         "post-install",
+         "After all resources are created and ready",
+         "warm caches, notify a webhook",
+         "release is already deployed if this fails"
+        ],
+        [
+         "pre-upgrade",
+         "After render, before any resource is updated",
+         "database migrations, backups",
+         "blocks the upgrade"
+        ],
+        [
+         "post-upgrade",
+         "After all resources are updated",
+         "smoke test, announce a deploy",
+         ""
+        ],
+        [
+         "pre-rollback / post-rollback",
+         "Around helm rollback",
+         "restore data, reset flags",
+         ""
+        ],
+        [
+         "pre-delete / post-delete",
+         "Around helm uninstall",
+         "export data, deregister from a service",
+         "post-delete runs after resources are gone"
+        ],
+        [
+         "test",
+         "Only when you run helm test",
+         "verify the release works",
+         "not run during install or upgrade"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a migration Job as pre-install and pre-upgrade hook",
+       "body": "This is `templates/job-migrate.yaml` in the hooks version of `webapp`. The three annotations make it run **before** every install and upgrade (`pre-install,pre-upgrade`), at weight `-5` so it runs ahead of any other pre-hooks with higher weights, and be removed when it succeeds or when a new run starts. `activeDeadlineSeconds` and `backoffLimit` stop a stuck migration from blocking the release forever. The output of `helm template` shows the object with its annotations, and `--no-hooks` proves hooks are a separate class of resource."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: {{ include \"webapp.fullname\" . }}-migrate\n  labels:\n    {{- include \"webapp.labels\" . | nindent 4 }}\n  annotations:\n    \"helm.sh/hook\": pre-install,pre-upgrade\n    \"helm.sh/hook-weight\": \"-5\"\n    \"helm.sh/hook-delete-policy\": before-hook-creation,hook-succeeded\nspec:\n  backoffLimit: 1\n  activeDeadlineSeconds: 300\n  template:\n    metadata:\n      labels:\n        {{- include \"webapp.selectorLabels\" . | nindent 8 }}\n    spec:\n      restartPolicy: Never\n      containers:\n        - name: migrate\n          image: busybox:1.36\n          command: [\"sh\", \"-c\", \"echo running migrations for {{ .Release.Name }} && sleep 3\"]",
+       "title": "templates/job-migrate.yaml",
+       "output": "$ helm template demo webapp -n prod --show-only templates/job-migrate.yaml | sed -n \"2,20p\"\n# Source: webapp/templates/job-migrate.yaml\napiVersion: batch/v1\nkind: Job\nmetadata:\n  name: demo-webapp-migrate\n  labels:\n    helm.sh/chart: webapp-0.1.0\n    app.kubernetes.io/name: webapp\n    app.kubernetes.io/instance: demo\n    app.kubernetes.io/version: \"1.27.0\"\n    app.kubernetes.io/managed-by: Helm\n  annotations:\n    \"helm.sh/hook\": pre-install,pre-upgrade\n    \"helm.sh/hook-weight\": \"-5\"\n    \"helm.sh/hook-delete-policy\": before-hook-creation,hook-succeeded\nspec:\n  backoffLimit: 1\n  activeDeadlineSeconds: 300\n  template:\n\n$ helm template demo webapp --no-hooks | grep \"^kind\"\nkind: ConfigMap\nkind: Service\nkind: Deployment",
+       "note": "Annotation values must be strings, which is why the weight is quoted (`\"-5\"`). Hook Jobs should be idempotent: Helm may run them again on every upgrade, and a failed `post-upgrade` hook leaves the new revision deployed but marked failed."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a test hook and the install, upgrade, test flow",
+       "body": "`templates/tests/test-connection.yaml` is a Pod with `helm.sh/hook: test`. It calls the chart's Service with `wget` and exits 0 on success, so it validates DNS, the Service selector and the application together. It only runs when you execute **`helm test <release>`** after an install. The block shows the Pod and then a typical session on a real cluster: the pre-upgrade Job runs first, the release becomes `deployed`, and the test passes."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: \"{{ include \"webapp.fullname\" . }}-test-connection\"\n  labels:\n    {{- include \"webapp.labels\" . | nindent 4 }}\n  annotations:\n    \"helm.sh/hook\": test\n    \"helm.sh/hook-delete-policy\": before-hook-creation,hook-succeeded\nspec:\n  restartPolicy: Never\n  containers:\n    - name: wget\n      image: busybox:1.36\n      command: [\"wget\"]\n      args: [\"-qO-\", \"http://{{ include \"webapp.fullname\" . }}:{{ .Values.service.port }}\"]",
+       "title": "templates/tests/test-connection.yaml",
+       "output": "$ helm upgrade --install demo ./webapp -n prod --create-namespace --wait\nRelease \"demo\" does not exist. Installing it now.\nNAME: demo\nLAST DEPLOYED: Fri Nov 13 13:20:11 2026\nNAMESPACE: prod\nSTATUS: deployed\nREVISION: 1\nTEST SUITE: None\nNOTES:\ndemo-webapp 1.27.0 is deployed in namespace prod.\n...\n\n$ kubectl -n prod get pods\nNAME                           READY   STATUS    RESTARTS   AGE\ndemo-webapp-6d8f7c9b5d-7xk2p   1/1     Running   0          21s\ndemo-webapp-6d8f7c9b5d-q9wlz   1/1     Running   0          21s\n\n$ helm test demo -n prod --logs\nNAME: demo\nLAST DEPLOYED: Fri Nov 13 13:20:11 2026\nNAMESPACE: prod\nSTATUS: deployed\nREVISION: 1\nTEST SUITE:     demo-webapp-test-connection\nLast Started:   Fri Nov 13 13:21:02 2026\nLast Completed: Fri Nov 13 13:21:09 2026\nPhase:          Succeeded\n\nPOD LOGS: demo-webapp-test-connection\n<!DOCTYPE html>\n<html>\n<head>\n<title>Welcome to nginx!</title>\n...",
+       "note": "A failing test shows `Phase: Failed` and `helm test` exits non-zero, which makes it usable as a CI gate. Add `--timeout 2m` for slow clusters. Because the delete policy includes `hook-succeeded`, passing test Pods disappear; remove that value while debugging so you can `kubectl logs` the failed one. Use `helm install --skip-tests` or `helm template --skip-tests` to leave tests out."
+      },
+      {
+       "type": "text",
+       "title": "About this example: helm lint finds problems before the cluster does",
+       "body": "`helm lint` runs static checks on the chart: Chart.yaml rules, template rendering, YAML validity and the values schema. The first run below is the clean chart. The second uses a copy of the chart where `version` was changed to `\"1.0\"` and one line of `deployment.yaml` lost two spaces of indentation; lint reports a SemVer warning and a YAML parse error, and exits non-zero so CI fails. `--strict` turns warnings into errors and `--set` or `-f` lint with specific values."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "helm lint webapp\nhelm lint bad\nhelm lint webapp --strict --set service.type=NodePort --set ingress.enabled=true",
+       "title": "Lint a good and a broken chart",
+       "output": "$ helm lint webapp\n==> Linting webapp\n[INFO] Chart.yaml: icon is recommended\n\n1 chart(s) linted, 0 chart(s) failed\n\n$ helm lint bad\n==> Linting bad\n[INFO] Chart.yaml: icon is recommended\n[WARNING] Chart.yaml: version '1.0' is not a valid SemVerV2\n[ERROR] templates/deployment.yaml: unable to parse YAML: error converting YAML to JSON: yaml: line 35: did not find expected '-' indicator\n\nError: 1 chart(s) linted, 1 chart(s) failed",
+       "note": "Lint checks that the chart is well formed, not that it is correct on your cluster: it cannot know about admission policies. Combine it with `helm template | kubeconform` (schema validation of the rendered manifests) and `helm install --dry-run=server` against a test cluster."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes with hooks and tests",
+       "body": "**Hooks that never finish**: a Job without `activeDeadlineSeconds` hangs the release until `--timeout` (default 5 minutes). **Non-idempotent migrations** that break on the second run. **Hook resources left behind** because no delete policy was set: the next install fails with `already exists`. **Hook needs resources that do not exist yet**: a `pre-install` hook cannot use a ConfigMap or Secret of the same chart unless that resource is itself a pre-install hook with a lower weight. **Treating `helm test` as a unit test**: it needs a live release and checks the deployment, not the templates. **Forgetting `--wait`** so tests run before pods are ready."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Hooks are annotated resources that Helm runs at lifecycle events and waits for; weights order them and delete policies clean them up. `helm test` runs Pods annotated `test` against a live release, and `helm lint` (plus `helm template` and `--dry-run=server`) catches mistakes without touching production. `webapp` now has a migration hook and a connection test. In the final lesson you package the chart, publish it to an OCI registry, sign it, version it with SemVer and wire lint, template and install tests into CI with chart-testing."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Render hooks and skip tests",
+       "prompt": "Render the hooks chart and count how many objects remain with --skip-tests and --no-hooks.",
+       "command": "helm template demo webapp --skip-tests | grep \"^kind\"",
+       "expected": "The test Pod is missing from the list but the migration Job is still there.",
+       "hint": "--skip-tests removes only test hooks; --no-hooks removes all hooks.",
+       "solution": "helm template demo webapp --skip-tests | grep \"^kind\"\nhelm template demo webapp --no-hooks | grep \"^kind\""
+      },
+      {
+       "title": "Break and lint",
+       "prompt": "Copy the chart, set version to \"1.0\" in Chart.yaml and run helm lint.",
+       "command": "cp -r webapp bad && sed -i \"s/^version: .*/version: \\\"1.0\\\"/\" bad/Chart.yaml && helm lint bad",
+       "expected": "Lint prints a warning that version 1.0 is not a valid SemVerV2.",
+       "hint": "SemVer needs three numbers: 1.0.0.",
+       "solution": "sed -i \"s/^version: .*/version: \\\"1.0\\\"/\" bad/Chart.yaml && helm lint bad"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which annotation makes a Pod run only on helm test?",
+        "options": [
+         "helm.sh/hook: post-install",
+         "helm.sh/hook: test",
+         "helm.sh/test: true",
+         "helm.sh/hook-weight: 0"
+        ],
+        "answer": 1,
+        "explain": "The value test marks the resource as a test hook, which runs only with helm test."
+       },
+       {
+        "question": "Hooks with the same event run in which order?",
+        "options": [
+         "Alphabetical by name",
+         "Random",
+         "Ascending weight, then kind and name",
+         "Descending weight"
+        ],
+        "answer": 2,
+        "explain": "Hook weights are sorted ascending; ties are broken by resource kind and name."
+       },
+       {
+        "question": "What does the delete policy hook-succeeded do?",
+        "options": [
+         "Deletes the hook object after it succeeds",
+         "Keeps the object forever",
+         "Deletes the whole release",
+         "Retries the hook"
+        ],
+        "answer": 0,
+        "explain": "The hook resource is deleted once it completes successfully; before-hook-creation deletes the old one before a new run."
+       },
+       {
+        "question": "What does helm lint --strict change?",
+        "options": [
+         "Runs the chart on a cluster",
+         "Treats warnings as errors",
+         "Skips the schema",
+         "Lints subcharts only"
+        ],
+        "answer": 1,
+        "explain": "--strict makes warnings fail the lint, useful in CI."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-jobs-cronjobs",
+      "k8s-probes-resources",
+      "k8s-helm-basics"
+     ],
+     "tags": [
+      "helm",
+      "hooks",
+      "test",
+      "lint"
+     ],
+     "commands": [
+      "helm test",
+      "helm lint",
+      "helm template --no-hooks",
+      "helm upgrade --install"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Chart Hooks",
+       "url": "https://helm.sh/docs/topics/charts_hooks/"
+      },
+      {
+       "title": "Helm: Chart Tests",
+       "url": "https://helm.sh/docs/topics/chart_tests/"
+      },
+      {
+       "title": "Helm: helm lint",
+       "url": "https://helm.sh/docs/helm/helm_lint/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helmc-publish-ci",
+     "title": "Package, publish, version and test in CI",
+     "duration": "17 min",
+     "summary": "Package webapp, publish it to an HTTP repository or OCI registry, sign it, version it with SemVer and test it in CI with chart-testing.",
+     "objectives": [
+      "Package a chart and build a repository index.yaml",
+      "Push and install charts through an OCI registry",
+      "Sign a chart and verify provenance",
+      "Apply SemVer to version and appVersion correctly",
+      "Configure ct lint and ct install in a CI pipeline"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "From a directory to something other people can install",
+       "body": "A chart directory is for authors. To share it, you **package** it into a versioned archive (`webapp-0.2.0.tgz`) and put that archive somewhere installers can reach: a classic **HTTP chart repository** (a static web server holding the `.tgz` files plus an `index.yaml` catalogue) or, increasingly the default, an **OCI registry** such as Docker Hub, GHCR, ECR or Harbor, where a chart is stored just like a container image. Installers then run `helm repo add` + `helm install repo/webapp`, or `helm install oci://...` directly.\n\nTwo version numbers travel with the package. **`version`** is the chart's own SemVer and must change on every published change, because registries treat a version as immutable. **`appVersion`** is informational: the version of the application the chart deploys (here the NGINX tag). Bump the chart's **patch** for fixes in templates, **minor** for backward-compatible new values or objects, and **major** when an upgrade requires users to change their values or when you remove or rename a value."
+      },
+      {
+       "type": "table",
+       "title": "SemVer for charts: which part to bump",
+       "head": [
+        "Change in the chart",
+        "Bump",
+        "Example",
+        "Why"
+       ],
+       "rows": [
+        [
+         "Fix a label typo or template bug, no new values",
+         "patch",
+         "0.2.0 to 0.2.1",
+         "upgrade is safe"
+        ],
+        [
+         "Add an optional value such as autoscaling.behavior",
+         "minor",
+         "0.2.1 to 0.3.0",
+         "new keys have defaults, old values still work"
+        ],
+        [
+         "Rename or remove a value, change a selector, raise minimum Kubernetes",
+         "major",
+         "0.3.0 to 1.0.0",
+         "users must edit values or recreate objects"
+        ],
+        [
+         "New application image only (appVersion 1.27.0 to 1.27.1)",
+         "patch (chart) + appVersion bump",
+         "0.2.0 to 0.2.1",
+         "the packaging changed even if templates did not"
+        ],
+        [
+         "Pre-release for testing",
+         "pre-release tag",
+         "0.3.0-rc.1",
+         "sorts before 0.3.0 and is skipped unless --devel is used"
+        ],
+        [
+         "Chart under 1.0.0",
+         "any",
+         "0.x.y",
+         "SemVer allows breaking changes in minor versions, so say so in the README"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: helm package and an HTTP repository index",
+       "body": "`helm package` validates the chart, archives it as `<name>-<version>.tgz` and can override versions on the command line, which is handy in CI (`--version 0.2.0 --app-version 1.27.1`). `helm repo index` scans a directory of archives and writes `index.yaml` with name, version, digest and download URL of each chart; upload both to any static host (S3 behind CloudFront, GitHub Pages, nginx) and you have a repository. Check the `digest` and `urls` fields in the index: they are what `helm install` downloads and verifies."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "helm package webapp --version 0.2.0 --app-version 1.27.1 -d out\nls -l out\nhelm repo index out --url https://charts.example.com\ncat out/index.yaml",
+       "title": "Package the chart and build index.yaml",
+       "output": "$ helm package webapp --version 0.2.0 --app-version 1.27.1 -d out\nSuccessfully packaged chart and saved it to: out/webapp-0.2.0.tgz\n\n$ ls out\nwebapp-0.2.0.tgz\n\n$ helm repo index out --url https://charts.example.com\n$ cat out/index.yaml\napiVersion: v1\nentries:\n  webapp:\n  - apiVersion: v2\n    appVersion: 1.27.1\n    created: \"2026-11-13T13:30:02.114Z\"\n    description: A web application chart with Deployment, Service, Ingress, ConfigMap\n      and HPA\n    digest: bbe4aeec641b977b4ee830327185c77aaabe428b499c992fdccdb8b09910820e\n    keywords:\n    - webapp\n    - nginx\n    kubeVersion: '>=1.28.0-0'\n    maintainers:\n    - email: platform@example.com\n      name: Platform Team\n    name: webapp\n    type: application\n    urls:\n    - https://charts.example.com/webapp-0.2.0.tgz\n    version: 0.2.0\ngenerated: \"2026-11-13T13:30:02.116Z\"",
+       "note": "Files matched by `.helmignore` are left out of the archive, so keep `ci/`, `.git/` and editor files there. After publishing, consumers run `helm repo add acme https://charts.example.com`, `helm repo update` and `helm search repo acme/webapp --versions`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: publishing to an OCI registry and signing",
+       "body": "With OCI there is no `index.yaml` to maintain: `helm push` uploads the archive as an artifact whose tag is the chart version, and `helm pull` or `helm install oci://...` fetches it. You authenticate with `helm registry login`. **Signing** adds provenance: `helm package --sign` creates a `.prov` file containing the chart hash signed with your PGP key, and `helm verify` (or `--verify` on install/pull) checks it against the public key. Sigstore/cosign signing of the OCI artifact is a common modern alternative. The session below uses a fictional ECR registry and shows the shape of the output."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "helm registry login 123456789012.dkr.ecr.us-east-1.amazonaws.com --username AWS --password-stdin < ecr-token.txt\nhelm push out/webapp-0.2.0.tgz oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/charts\nhelm install demo oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/charts/webapp --version 0.2.0 -n prod --create-namespace\nhelm package webapp --sign --key 'Platform Team' --keyring ~/.gnupg/secring.gpg -d out\nhelm verify out/webapp-0.1.0.tgz --keyring ~/.gnupg/pubring.gpg",
+       "title": "Push to OCI, install from OCI, sign and verify",
+       "output": "$ helm registry login 123456789012.dkr.ecr.us-east-1.amazonaws.com --username AWS --password-stdin < ecr-token.txt\nLogin Succeeded\n\n$ helm push out/webapp-0.2.0.tgz oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/charts\nPushed: 123456789012.dkr.ecr.us-east-1.amazonaws.com/charts/webapp:0.2.0\nDigest: sha256:8f1c2d9a47e0b36c5d1f7e2a94b08c6d3e5a1f2b7c9d0e4a6b8c1d3f5e7a9b2c\n\n$ helm install demo oci://123456789012.dkr.ecr.us-east-1.amazonaws.com/charts/webapp --version 0.2.0 -n prod --create-namespace\nPulled: 123456789012.dkr.ecr.us-east-1.amazonaws.com/charts/webapp:0.2.0\nDigest: sha256:8f1c2d9a47e0b36c5d1f7e2a94b08c6d3e5a1f2b7c9d0e4a6b8c1d3f5e7a9b2c\nNAME: demo\nLAST DEPLOYED: Fri Nov 13 13:34:41 2026\nNAMESPACE: prod\nSTATUS: deployed\nREVISION: 1\n\n$ helm package webapp --sign --key 'Platform Team' --keyring ~/.gnupg/secring.gpg -d out\nSuccessfully packaged chart and saved it to: out/webapp-0.1.0.tgz\n\n$ ls out\nwebapp-0.1.0.tgz  webapp-0.1.0.tgz.prov\n\n$ helm verify out/webapp-0.1.0.tgz --keyring ~/.gnupg/pubring.gpg\nSigned by: Platform Team <platform@example.com>\nUsing Key With Fingerprint: 3F2A9C71D5B84E06A1C2F3D49B87E5C10A6D2E48\nChart Hash Verified: sha256:5c0e7d1a8b2f9346e1d7a0c5b3f82e94d6a1c7b0e53f9d28a4c6b1e7f0d3a592",
+       "note": "`helm push` takes the registry path **without** the chart name; the chart name and version come from the archive. For ECR create the repository `charts/webapp` first. Passwords come from stdin to keep them out of shell history. Users verify at install time with `helm install --verify` (HTTP repos) or `helm pull --verify`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: testing charts in CI with chart-testing (ct)",
+       "body": "**chart-testing (`ct`)** is the Helm project's tool for CI. `ct lint` runs `helm lint`, validates `Chart.yaml` and YAML style, and enforces that the chart `version` was bumped compared with the target branch (`check-version-increment`). `ct install` creates a throwaway namespace on a kind cluster, installs every changed chart once per file in its `ci/*-values.yaml`, and runs `helm test`. The first block is `ct.yaml`, the second a CI-only values file that turns on Ingress and HPA so those templates are exercised, the third a GitHub Actions workflow, and the output is a lint run."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "# ct.yaml\nremote: origin\ntarget-branch: main\nchart-dirs:\n  - charts\ncheck-version-increment: true\nvalidate-maintainers: false\nhelm-extra-args: --timeout 300s\n\n# charts/webapp/ci/ingress-hpa-values.yaml\ningress:\n  enabled: true\nautoscaling:\n  enabled: true\n\n# .github/workflows/chart-ci.yaml\nname: chart-ci\non:\n  pull_request:\n    paths: [\"charts/**\"]\njobs:\n  test:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n      - uses: azure/setup-helm@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: \"3.12\"\n      - uses: helm/chart-testing-action@v2.6.1\n      - name: Lint\n        run: ct lint --config ct.yaml\n      - uses: helm/kind-action@v1.10.0\n      - name: Install and test on kind\n        run: ct install --config ct.yaml",
+       "title": "ct.yaml, ci values and a GitHub Actions workflow",
+       "output": "$ ct lint --config ct.yaml\n------------------------------------------------------------------------------------------------------------------------\n Charts to be processed:\n------------------------------------------------------------------------------------------------------------------------\n webapp => (version: \"0.2.0\", path: \"charts/webapp\")\n------------------------------------------------------------------------------------------------------------------------\n\nLinting chart \"webapp => (version: \\\"0.2.0\\\", path: \\\"charts/webapp\\\")\"\nChecking chart \"webapp => (version: \\\"0.2.0\\\", path: \\\"charts/webapp\\\")\" for a version bump...\nOld chart version: 0.1.0\nNew chart version: 0.2.0\nChart version ok.\nValidating /repo/charts/webapp/Chart.yaml...\nValidation success!\n\n==> Linting charts/webapp\n[INFO] Chart.yaml: icon is recommended\n\n1 chart(s) linted, 0 chart(s) failed\n\n------------------------------------------------------------------------------------------------------------------------\n webapp => (version: \"0.2.0\", path: \"charts/webapp\")\n------------------------------------------------------------------------------------------------------------------------\nAll charts linted successfully\n\n$ ct install --config ct.yaml\nInstalling chart \"webapp => (version: \\\"0.2.0\\\", path: \\\"charts/webapp\\\")\" with values file \"charts/webapp/ci/ingress-hpa-values.yaml\"...\nCreating namespace \"webapp-7q3k2m9x1b\"...\nhelm install webapp-ex7p4 --namespace webapp-7q3k2m9x1b --wait --values charts/webapp/ci/ingress-hpa-values.yaml\nNAME: webapp-ex7p4\nSTATUS: deployed\nREVISION: 1\nRunning 'helm test webapp-ex7p4 --namespace webapp-7q3k2m9x1b'\nPhase:          Succeeded\nDeleting namespace \"webapp-7q3k2m9x1b\"...\nAll charts installed successfully",
+       "note": "With `check-version-increment: true` a pull request that changes templates but not `version` fails, which keeps published versions immutable. A typical release job on the main branch then runs `helm package`, `helm push` and, if you also host an HTTP repository, `helm repo index --merge`. Pin action versions to a commit SHA in security-sensitive pipelines."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes when publishing",
+       "body": "**Re-publishing the same version** with different content: caches and GitOps tools (Argo CD, Flux) keep the old archive, so bump `version` every time. **Using `appVersion` as the only version**: it is not used for resolution. **Forgetting `helm dependency build`** before `helm package`, which ships a chart with missing subcharts. **Using `latest`-style ranges** in consumer charts. **Putting secrets or `.git` in the archive**: check `.helmignore` and `tar tzf webapp-0.2.0.tgz`. **Pushing without `ci/` values coverage**, so optional templates (Ingress, HPA) are never rendered by the pipeline. **Signing key lost**: store the private key and passphrase in your CI secret manager and document the public key for consumers."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "You packaged `webapp` with `helm package`, indexed it for an HTTP repository or pushed it to an OCI registry, signed it for provenance, versioned it by SemVer rules (chart `version` versus `appVersion`), and wired `ct lint` and `ct install` into CI so every change is linted, version-checked, installed on kind and tested. Together with the earlier lessons you now own the full chart lifecycle: scaffold, template, factor into helpers, validate, compose with subcharts, hook into releases, test and ship. To deploy such charts continuously with a reconciler instead of `helm install` by hand, continue with the GitOps lesson in the delivery course."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Package with a new version",
+       "prompt": "Package the webapp chart as version 0.3.0 with appVersion 1.27.2 into a directory out and list the archive.",
+       "command": "helm package webapp --version 0.3.0 --app-version 1.27.2 -d out && ls out",
+       "expected": "out contains webapp-0.3.0.tgz.",
+       "hint": "-d chooses the destination directory.",
+       "solution": "helm package webapp --version 0.3.0 --app-version 1.27.2 -d out\nls out"
+      },
+      {
+       "title": "Inspect an archive",
+       "prompt": "List the files inside the packaged chart and confirm .helmignore patterns were applied.",
+       "command": "tar tzf out/webapp-0.3.0.tgz",
+       "expected": "Lists webapp/Chart.yaml, values.yaml, templates/... and no .git or ci directory.",
+       "hint": "tar tzf lists archive contents without extracting.",
+       "solution": "tar tzf out/webapp-0.3.0.tgz"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "When should the chart version be bumped to a new major?",
+        "options": [
+         "For every release",
+         "When an upgrade requires users to change their values or a value is removed",
+         "When appVersion changes",
+         "Never, only minor and patch exist"
+        ],
+        "answer": 1,
+        "explain": "Breaking changes for consumers, such as removed or renamed values, call for a major bump."
+       },
+       {
+        "question": "What does helm push expect as destination?",
+        "options": [
+         "An https URL",
+         "An oci:// registry path without the chart name",
+         "A local directory",
+         "A git repository"
+        ],
+        "answer": 1,
+        "explain": "helm push archive.tgz oci://registry/path uploads the chart named in the archive under that path."
+       },
+       {
+        "question": "What file does helm package --sign produce next to the archive?",
+        "options": [
+         "A .sig file",
+         "A .prov provenance file",
+         "A Chart.lock",
+         "A values.schema.json"
+        ],
+        "answer": 1,
+        "explain": "The .prov file contains the signed chart hash and metadata used by helm verify."
+       },
+       {
+        "question": "What does ct install do with files in charts/webapp/ci/*-values.yaml?",
+        "options": [
+         "Ignores them",
+         "Installs the chart once per values file and runs helm test",
+         "Merges them into values.yaml",
+         "Publishes them"
+        ],
+        "answer": 1,
+        "explain": "Each ci values file defines a scenario; ct installs the chart with each one on the test cluster."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-basics",
+      "k8s-gitops",
+      "k8s-ci-pipelines"
+     ],
+     "tags": [
+      "helm",
+      "oci",
+      "semver",
+      "ci",
+      "chart-testing"
+     ],
+     "commands": [
+      "helm package",
+      "helm push",
+      "helm repo index",
+      "helm verify",
+      "ct lint",
+      "ct install"
+     ],
+     "sources": [
+      {
+       "title": "Helm: Chart Repository Guide",
+       "url": "https://helm.sh/docs/topics/chart_repository/"
+      },
+      {
+       "title": "Helm: Registries (OCI)",
+       "url": "https://helm.sh/docs/topics/registries/"
+      },
+      {
+       "title": "Helm: Provenance and Integrity",
+       "url": "https://helm.sh/docs/topics/provenance/"
+      },
+      {
+       "title": "chart-testing",
+       "url": "https://github.com/helm/chart-testing"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-helm-essentials"
+ ],
+ "track": "kubernetes"
+}

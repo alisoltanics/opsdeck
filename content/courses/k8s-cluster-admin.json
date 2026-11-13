@@ -1,0 +1,1084 @@
+{
+  "id": "k8s-cluster-admin",
+  "order": 30,
+  "title": "Cluster Administration and Internals",
+  "subtitle": "Control plane, kubeadm upgrades, networking and storage internals, multi-tenancy",
+  "level": "Advanced",
+  "duration": "1h 7m",
+  "icon": "cloud",
+  "accent": "blue",
+  "description": "Understand how a Kubernetes cluster works inside: the API request pipeline, etcd backups, certificates, kubeadm upgrades, CNI and kube-proxy data paths, CSI storage and tenancy models.",
+  "outcomes": [
+    "Back up and restore etcd and keep certificates valid",
+    "Plan and run a version-skew-safe kubeadm upgrade",
+    "Debug Service, CNI and DNS problems at the node level",
+    "Design storage and multi-tenant isolation for shared clusters"
+  ],
+  "modules": [
+    {
+      "id": "k8s-mod-control-plane",
+      "title": "Control plane and lifecycle",
+      "summary": "API server, etcd, certificates and kubeadm upgrades.",
+      "lessons": [
+        {
+          "id": "k8s-control-plane-internals",
+          "title": "Control plane internals: API server, etcd and certificates",
+          "duration": "15 min",
+          "summary": "Follow a request through authentication, authorization and admission, back up and restore etcd, and keep cluster certificates valid.",
+          "objectives": [
+            "Trace an API request through authn, authz, mutating and validating admission and persistence",
+            "Take and verify an etcd snapshot, and know the restore procedure",
+            "Explain what the controller manager and scheduler do and how they cooperate",
+            "Inspect and renew control plane certificates with kubeadm"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Everything goes through the API server",
+              "body": "The **kube-apiserver** is the only component that talks to etcd. Every other part (scheduler, controller manager, kubelets, kubectl) is a client of the API server and watches resources for changes. This design makes the API server the single place where security, validation and auditing are enforced.\n\nA write request passes a fixed pipeline: **authentication** (who are you), **authorization** (may you do this), **mutating admission** (webhooks and built-in plugins may modify the object), **schema validation**, **validating admission** (policies and webhooks may reject it) and finally **persistence** to etcd. Reads skip the admission stages.\n\nThe **kube-controller-manager** runs reconcile loops (Deployment, ReplicaSet, Node, Job, EndpointSlice and more). Each loop watches desired state and acts to close the gap. The **scheduler** only assigns unscheduled Pods to nodes by writing `spec.nodeName`; the kubelet does the rest. Both use **leader election** via Lease objects, so only one replica is active.\n\nkubeadm issues certificates valid for **one year** (the CA for ten). They renew automatically during `kubeadm upgrade`, but a cluster that is never upgraded will stop working on expiry. Check with `kubeadm certs check-expiration` and monitor the date."
+            },
+            {
+              "type": "table",
+              "title": "The request pipeline",
+              "head": [
+                "Stage",
+                "Question answered",
+                "Typical implementation",
+                "Failure result"
+              ],
+              "rows": [
+                [
+                  "Authentication",
+                  "Who is the caller?",
+                  "x509 client certs, ServiceAccount tokens, OIDC",
+                  "401 Unauthorized"
+                ],
+                [
+                  "Authorization",
+                  "Is this verb allowed on this resource?",
+                  "RBAC, Node authorizer, webhook",
+                  "403 Forbidden"
+                ],
+                [
+                  "Mutating admission",
+                  "Should the object be changed?",
+                  "DefaultStorageClass, sidecar injectors",
+                  "Object rewritten"
+                ],
+                [
+                  "Validating admission",
+                  "Is the final object acceptable?",
+                  "ValidatingAdmissionPolicy, Pod Security, Kyverno",
+                  "403 with admission message"
+                ],
+                [
+                  "Persistence",
+                  "Store the object",
+                  "etcd write via Raft quorum",
+                  "500 or timeout if etcd is unhealthy"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a kubeadm static Pod manifest for the API server",
+              "body": "This fragment is what `/etc/kubernetes/manifests/kube-apiserver.yaml` contains on a kubeadm control plane node. The kubelet watches that directory and runs the file as a **static Pod**, so editing it restarts the API server. Look at `--authorization-mode`, `--enable-admission-plugins` and the `--etcd-*` flags: they define the pipeline stages and the path to etcd. It is a partial file, so it is shown as text and not applied with kubectl."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "kube-apiserver flags (excerpt)",
+              "code": "spec:\n  containers:\n  - command:\n    - kube-apiserver\n    - --advertise-address=10.0.0.10\n    - --authorization-mode=Node,RBAC\n    - --enable-admission-plugins=NodeRestriction\n    - --client-ca-file=/etc/kubernetes/pki/ca.crt\n    - --etcd-servers=https://127.0.0.1:2379\n    - --etcd-cafile=/etc/kubernetes/pki/etcd/ca.crt\n    - --etcd-certfile=/etc/kubernetes/pki/apiserver-etcd-client.crt\n    - --etcd-keyfile=/etc/kubernetes/pki/apiserver-etcd-client.key\n    - --service-cluster-ip-range=10.96.0.0/12\n    - --tls-cert-file=/etc/kubernetes/pki/apiserver.crt",
+              "output": null,
+              "note": "Authorization modes are evaluated in order; the first that allows wins. Node handles kubelets, RBAC handles everyone else."
+            },
+            {
+              "type": "text",
+              "title": "About this example: snapshotting etcd",
+              "body": "etcd holds all cluster state, so a snapshot is your disaster recovery backup. These commands run on a control plane node using `etcdctl` with the client certificates kubeadm generated. `snapshot save` writes a consistent point-in-time file and `snapshot status` verifies it; check the hash and total key count in the table output. Store the file off the node and test restores regularly. The second half of the block restores that snapshot into a fresh data directory, which you do with the API server stopped and then point the etcd manifest at the new path."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "etcdctl backup, verify and restore",
+              "code": "export ETCDCTL_API=3\nETCD_FLAGS=\"--endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key\"\netcdctl $ETCD_FLAGS snapshot save /backup/etcd-$(date +%F).db\netcdctl --write-out=table snapshot status /backup/etcd-$(date +%F).db\nmv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/\netcdutl snapshot restore /backup/etcd-2026-11-13.db --data-dir /var/lib/etcd-restored\nsed -i 's#/var/lib/etcd$#/var/lib/etcd-restored#' /etc/kubernetes/manifests/etcd.yaml\nmv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/\nkubectl get nodes",
+              "output": "Snapshot saved at /backup/etcd-2026-11-13.db\n+----------+----------+------------+------------+\n|   HASH   | REVISION | TOTAL KEYS | TOTAL SIZE |\n+----------+----------+------------+------------+\n| 3f1c9a7e |  8123456 |       1893 |      41 MB |\n+----------+----------+------------+------------+\n2026-11-13T10:02:11Z\tinfo\tsnapshot/v3_snapshot.go:265\trestoring snapshot\n2026-11-13T10:02:12Z\tinfo\tmembership/cluster.go:421\tadded member\nNAME   STATUS   ROLES           AGE   VERSION\ncp1    Ready    control-plane   41d   v1.33.2\nw1     Ready    <none>          41d   v1.33.2",
+              "note": "Recent etcdctl versions steer you to etcdutl for offline snapshot status and restore; both work against the same file format."
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking and renewing certificates",
+              "body": "These commands run on the control plane node. `check-expiration` lists every certificate and its remaining time, and `renew all` reissues them; afterwards the static Pods must restart to load the new files. Watch the RESIDUAL TIME column and EXTERNALLY MANAGED, which tells you if kubeadm is allowed to touch a certificate."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "kubeadm certificate lifecycle",
+              "code": "kubeadm certs check-expiration\nkubeadm certs renew all\nkubectl get lease -n kube-system kube-scheduler",
+              "output": "CERTIFICATE                EXPIRES                  RESIDUAL TIME   CERTIFICATE AUTHORITY   EXTERNALLY MANAGED\napiserver                  Nov 10, 2027 09:12 UTC   362d            ca                      no\napiserver-etcd-client      Nov 10, 2027 09:12 UTC   362d            etcd-ca                 no\nadmin.conf                 Nov 10, 2027 09:12 UTC   362d            ca                      no\nca                         Nov 08, 2035 09:12 UTC   9y                                      no\n\ncertificate embedded in the kubeconfig file for the admin to use and for kubeadm itself renewed\n\nNAME             HOLDER                                      AGE\nkube-scheduler   cp1_6b0c-91ae-44e1-a7d2-1f8e9c3b2d10       41d",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Restore rewinds the whole cluster",
+              "body": "Anything created after the snapshot (Deployments, Secrets, PVC bindings) disappears, while running containers on nodes are unaware. In multi-member etcd you must restore every member from the same snapshot with new `--initial-cluster` settings. Practice this in a throwaway cluster before you need it."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Inspect control plane health",
+              "prompt": "List control plane Pods in kube-system and note their restart counts.",
+              "command": "kubectl get pods -n kube-system -l tier=control-plane",
+              "expected": "Pods for etcd, kube-apiserver, kube-controller-manager and kube-scheduler in Running state.",
+              "hint": "The label tier=control-plane is set by kubeadm on static Pods.",
+              "solution": "kubectl get pods -n kube-system -l tier=control-plane -o wide"
+            },
+            {
+              "title": "Find the active scheduler",
+              "prompt": "Identify which instance holds the scheduler leader lease.",
+              "command": "kubectl get lease -n kube-system kube-scheduler -o jsonpath='{.spec.holderIdentity}'",
+              "expected": "A holder identity string that includes the control plane node name.",
+              "hint": "Leases live in kube-system for control plane components.",
+              "solution": "kubectl get lease -n kube-system kube-controller-manager -o yaml"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "A request is denied with 403 after authentication succeeded. Which stage most likely rejected it?",
+                "options": [
+                  "Persistence",
+                  "Authorization or validating admission",
+                  "TLS handshake",
+                  "Scheduling"
+                ],
+                "answer": 1,
+                "explain": "401 means authentication failed; 403 comes from authorization or an admission rejection."
+              },
+              {
+                "question": "Which component is the only one that reads and writes etcd directly?",
+                "options": [
+                  "kubelet",
+                  "kube-scheduler",
+                  "kube-apiserver",
+                  "kube-proxy"
+                ],
+                "answer": 2,
+                "explain": "All other components use the API server, which centralizes security and validation."
+              },
+              {
+                "question": "Why must the API server be stopped during an etcd restore?",
+                "options": [
+                  "etcdctl requires it",
+                  "To avoid writes into a data directory being replaced",
+                  "To renew certificates",
+                  "To elect a leader"
+                ],
+                "answer": 1,
+                "explain": "Writes during the swap would be lost or corrupt state; stopping it gives a clean cutover."
+              },
+              {
+                "question": "kubeadm client certificates are valid for how long by default?",
+                "options": [
+                  "30 days",
+                  "90 days",
+                  "1 year",
+                  "10 years"
+                ],
+                "answer": 2,
+                "explain": "Leaf certificates last one year and are renewed on kubeadm upgrade; the CA lasts ten years."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-rbac",
+            "k8s-production-checklist"
+          ],
+          "tags": [
+            "control-plane",
+            "etcd",
+            "certificates"
+          ],
+          "commands": [
+            "etcdctl snapshot save",
+            "kubeadm certs check-expiration",
+            "kubectl get lease"
+          ],
+          "sources": [
+            {
+              "title": "Kubernetes components",
+              "url": "https://kubernetes.io/docs/concepts/overview/components/"
+            },
+            {
+              "title": "Operating etcd clusters",
+              "url": "https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/"
+            },
+            {
+              "title": "Certificate management with kubeadm",
+              "url": "https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-certs/"
+            },
+            {
+              "title": "Controlling access to the API",
+              "url": "https://kubernetes.io/docs/concepts/security/controlling-access/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-kubeadm-upgrades",
+          "title": "Cluster lifecycle with kubeadm: install, skew policy and upgrades",
+          "duration": "13 min",
+          "summary": "Bootstrap a cluster with kubeadm, respect the version skew policy and run a safe control plane and node upgrade.",
+          "objectives": [
+            "Describe what kubeadm init and join do",
+            "Apply the version skew policy to plan upgrades",
+            "Run an ordered upgrade of control plane then workers",
+            "Define rollback and verification steps"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What kubeadm does and does not do",
+              "body": "**kubeadm** bootstraps a minimum viable cluster: it generates certificates, writes static Pod manifests for the control plane, creates kubeconfigs and bootstrap tokens, and installs CoreDNS and kube-proxy. It does not install a CNI plugin, a load balancer, storage or the container runtime. You provide those.\n\nA production setup uses a **ClusterConfiguration** file so the whole install is declarative, versioned in Git and repeatable. A stable `controlPlaneEndpoint` (a load balancer or virtual IP) is essential for adding control plane nodes later. After `kubeadm init` prints a join command with a token and CA hash, run it on each new node; add `--control-plane` for extra API server nodes. Always upgrade one minor version at a time: skipping minors breaks the skew policy, and you should check deprecated API usage first."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a kubeadm configuration file",
+              "body": "This is the file you pass to `kubeadm init --config`. It fixes the Kubernetes version, the Pod and Service CIDRs and the API endpoint at install time, which are painful to change afterwards. Look at `controlPlaneEndpoint` (use a stable DNS name), `podSubnet` (must match your CNI) and `certSANs`. It has multiple YAML documents with custom kinds that kubectl cannot apply, so it is shown as text."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "kubeadm-config.yaml",
+              "code": "apiVersion: kubeadm.k8s.io/v1beta4\nkind: InitConfiguration\nnodeRegistration:\n  criSocket: unix:///run/containerd/containerd.sock\n---\napiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\nkubernetesVersion: v1.33.2\ncontrolPlaneEndpoint: k8s-api.example.com:6443\nnetworking:\n  podSubnet: 10.244.0.0/16\n  serviceSubnet: 10.96.0.0/12\napiServer:\n  certSANs:\n  - k8s-api.example.com\n---\napiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\ncgroupDriver: systemd",
+              "output": null,
+              "note": "Run: kubeadm init --config kubeadm-config.yaml --upload-certs"
+            },
+            {
+              "type": "table",
+              "title": "Version skew policy",
+              "head": [
+                "Component",
+                "Allowed skew",
+                "Example (API server 1.33)"
+              ],
+              "rows": [
+                [
+                  "kube-apiserver (HA)",
+                  "Replicas may differ by 1 minor during upgrade",
+                  "1.33 and 1.32 together"
+                ],
+                [
+                  "kubelet",
+                  "May be up to 3 minor older, never newer",
+                  "1.30 to 1.33 ok, 1.34 not ok"
+                ],
+                [
+                  "kube-proxy",
+                  "Same skew as kubelet",
+                  "1.30 to 1.33"
+                ],
+                [
+                  "controller-manager, scheduler",
+                  "Up to 1 minor older than API server",
+                  "1.32 or 1.33"
+                ],
+                [
+                  "kubectl",
+                  "1 minor newer or older",
+                  "1.32, 1.33, 1.34"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: the control plane upgrade runbook",
+              "body": "These commands run on the first control plane node. `kubeadm upgrade plan` verifies the cluster, shows available versions and the component diff, and `upgrade apply` performs the change and renews certificates. Afterwards upgrade the kubelet package and restart it on that node. Look at the plan's 'COMPONENT CURRENT TARGET' table to confirm only expected versions change."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Upgrade the first control plane node",
+              "code": "sudo apt-get update && sudo apt-get install -y kubeadm=1.33.2-1.1\nsudo kubeadm upgrade plan\nsudo kubeadm upgrade apply v1.33.2\nkubectl drain cp1 --ignore-daemonsets\nsudo apt-get install -y kubelet=1.33.2-1.1 kubectl=1.33.2-1.1\nsudo systemctl restart kubelet\nkubectl uncordon cp1",
+              "output": "Upgrade to the latest stable version:\n\nCOMPONENT                 NODE   CURRENT    TARGET\nkube-apiserver            cp1    v1.32.5    v1.33.2\nkube-controller-manager   cp1    v1.32.5    v1.33.2\nkube-scheduler            cp1    v1.32.5    v1.33.2\nCoreDNS                          v1.11.3    v1.12.0\netcd                      cp1    3.5.16     3.5.21\n\n[upgrade/successful] SUCCESS! Your cluster was upgraded to \"v1.33.2\". Enjoy!",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: upgrading a worker node",
+              "body": "Workers are upgraded one at a time (or in small batches limited by PodDisruptionBudgets). You drain the node from a machine with kubectl, then run `kubeadm upgrade node` on the worker itself and upgrade the kubelet. Check VERSION in `kubectl get nodes` afterwards; a node showing the old version has not restarted its kubelet."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Worker upgrade loop",
+              "code": "kubectl drain w1 --ignore-daemonsets --delete-emptydir-data\n# on w1:\nsudo apt-get install -y kubeadm=1.33.2-1.1\nsudo kubeadm upgrade node\nsudo apt-get install -y kubelet=1.33.2-1.1\nsudo systemctl restart kubelet\n# back on the admin machine:\nkubectl uncordon w1\nkubectl get nodes",
+              "output": "node/w1 cordoned\nevicting pod default/web-7d9f6b8c5-x2k4m\nnode/w1 drained\nnode/w1 uncordoned\nNAME   STATUS   ROLES           AGE   VERSION\ncp1    Ready    control-plane   41d   v1.33.2\nw1     Ready    <none>          41d   v1.33.2\nw2     Ready    <none>          41d   v1.32.5",
+              "note": null
+            },
+            {
+              "type": "steps",
+              "title": "Safe upgrade runbook",
+              "items": [
+                {
+                  "title": "Prepare",
+                  "body": "Take an etcd snapshot, read release notes, check deprecated APIs and confirm PDBs exist for critical workloads."
+                },
+                {
+                  "title": "Control plane",
+                  "body": "Upgrade the first node with `upgrade apply`, then other control plane nodes with `upgrade node`."
+                },
+                {
+                  "title": "Add-ons",
+                  "body": "Upgrade the CNI, CoreDNS and metrics components to versions that support the new release."
+                },
+                {
+                  "title": "Workers",
+                  "body": "Drain, upgrade, uncordon one node at a time and watch application health."
+                },
+                {
+                  "title": "Verify",
+                  "body": "Check `kubectl get nodes`, run smoke tests and review alerts before declaring done."
+                }
+              ]
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Audit node versions",
+              "prompt": "List nodes with their kubelet versions to check skew against the API server.",
+              "command": "kubectl get nodes -o custom-columns=NAME:.metadata.name,KUBELET:.status.nodeInfo.kubeletVersion",
+              "expected": "One line per node showing its kubelet version.",
+              "hint": "custom-columns lets you pick fields without parsing.",
+              "solution": "kubectl version"
+            },
+            {
+              "title": "Preview an upgrade",
+              "prompt": "Run the non-destructive planning command on a control plane node.",
+              "command": "sudo kubeadm upgrade plan",
+              "expected": "A table of components with current and target versions, no changes made.",
+              "hint": "plan never modifies the cluster.",
+              "solution": "sudo kubeadm upgrade plan"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the newest kubelet allowed relative to the API server?",
+                "options": [
+                  "One minor newer",
+                  "Same version or older only",
+                  "Two minor newer",
+                  "Any version"
+                ],
+                "answer": 1,
+                "explain": "Kubelets must never be newer than the API server."
+              },
+              {
+                "question": "Which command performs the actual first control plane upgrade?",
+                "options": [
+                  "kubeadm upgrade node",
+                  "kubeadm upgrade plan",
+                  "kubeadm upgrade apply",
+                  "kubeadm reset"
+                ],
+                "answer": 2,
+                "explain": "apply upgrades the first node; node is used for additional control plane and worker nodes."
+              },
+              {
+                "question": "Why upgrade one minor version at a time?",
+                "options": [
+                  "kubeadm forbids newer binaries",
+                  "Skipping minors breaks the skew policy and API migrations",
+                  "It is faster",
+                  "Certificates would expire"
+                ],
+                "answer": 1,
+                "explain": "Skew rules and storage/API migrations are tested only for sequential minors."
+              },
+              {
+                "question": "What does kubeadm not install?",
+                "options": [
+                  "CoreDNS",
+                  "kube-proxy",
+                  "A CNI plugin",
+                  "The control plane static Pods"
+                ],
+                "answer": 2,
+                "explain": "You must install a Pod network add-on yourself."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-autoscaling-maintenance",
+            "k8s-control-plane-internals"
+          ],
+          "tags": [
+            "kubeadm",
+            "upgrade",
+            "version-skew"
+          ],
+          "commands": [
+            "kubeadm init",
+            "kubeadm upgrade plan",
+            "kubectl drain",
+            "kubectl uncordon"
+          ],
+          "sources": [
+            {
+              "title": "Creating a cluster with kubeadm",
+              "url": "https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/"
+            },
+            {
+              "title": "Upgrading kubeadm clusters",
+              "url": "https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-upgrade/"
+            },
+            {
+              "title": "Version skew policy",
+              "url": "https://kubernetes.io/releases/version-skew-policy/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-mod-networking-storage",
+      "title": "Networking and storage internals",
+      "summary": "CNI, kube-proxy, DNS and CSI.",
+      "lessons": [
+        {
+          "id": "k8s-networking-internals",
+          "title": "Networking internals: CNI, kube-proxy and DNS",
+          "duration": "15 min",
+          "summary": "See how Pod networking is built by CNI plugins, how kube-proxy programs Services, and how to tune cluster DNS.",
+          "objectives": [
+            "Explain the role of the CNI plugin and Pod-to-Pod paths",
+            "Compare iptables, IPVS and eBPF Service data paths",
+            "Read kube-proxy iptables rules and EndpointSlices",
+            "Tune CoreDNS and Pod DNS settings"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "CNI and the Pod network",
+              "body": "When the kubelet starts a Pod, the container runtime creates the network namespace and calls the **CNI plugin** configured in `/etc/cni/net.d`. The plugin creates a veth pair, attaches one end to the Pod, assigns an IP from the node's Pod CIDR and sets up routes. The Kubernetes model requires that every Pod can reach every other Pod without NAT.\n\nPlugins differ in how cross-node traffic travels. **Overlay** (VXLAN, Geneve) encapsulates packets and works anywhere. **Routed** (BGP, native cloud routing) avoids encapsulation for better performance. Cilium and Calico can also enforce NetworkPolicy and replace kube-proxy.\n\n**kube-proxy** watches Services and EndpointSlices and programs the node. In **iptables mode** it writes NAT rules with random probability to pick a backend; rule evaluation is linear, so clusters with tens of thousands of Services slow down. **IPVS mode** uses kernel hash tables for O(1) lookup and offers schedulers like round robin and least connection. **nftables mode** is the modern successor of iptables. **eBPF** (Cilium) replaces kube-proxy entirely with kernel programs attached to sockets and interfaces, avoiding conntrack for many flows."
+            },
+            {
+              "type": "table",
+              "title": "Pod-to-Pod paths",
+              "head": [
+                "Path",
+                "How it works",
+                "Notes"
+              ],
+              "rows": [
+                [
+                  "Same node",
+                  "veth to bridge or direct route inside the node",
+                  "Fastest, no encapsulation"
+                ],
+                [
+                  "Different node, overlay",
+                  "Encapsulated in VXLAN/Geneve UDP",
+                  "Adds about 50 bytes; lower MTU"
+                ],
+                [
+                  "Different node, routed",
+                  "Node routes via BGP or cloud route table",
+                  "Needs network cooperation"
+                ],
+                [
+                  "Pod to Service",
+                  "DNAT to a backend Pod IP by kube-proxy or eBPF",
+                  "ClusterIP is virtual, never on an interface"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a CNI configuration file",
+              "body": "This is a typical conflist file in `/etc/cni/net.d/` read by the runtime to chain plugins. Look at `type` (the plugin binary in `/opt/cni/bin`), `ipam` (where Pod IPs come from) and `mtu`. A wrong MTU on overlays causes the classic 'small requests work, large ones hang' failure. It is a node file, not a Kubernetes object, so it is shown as text."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "/etc/cni/net.d/10-flannel.conflist",
+              "code": "{\n  \"name\": \"cbr0\",\n  \"cniVersion\": \"1.0.0\",\n  \"plugins\": [\n    {\n      \"type\": \"flannel\",\n      \"delegate\": { \"hairpinMode\": true, \"isDefaultGateway\": true }\n    },\n    { \"type\": \"portmap\", \"capabilities\": { \"portMappings\": true } }\n  ]\n}",
+              "output": null,
+              "note": "Other plugins use their own files, e.g. 05-cilium.conflist."
+            },
+            {
+              "type": "text",
+              "title": "About this example: EndpointSlices and kube-proxy rules",
+              "body": "This block shows the Service-to-backend path in two views. `kubectl get endpointslices` lists the ready Pod IPs the control plane tracks for the `web` Service (selector app=web, port 80 to targetPort 8080), and `iptables-save` on a node shows how kube-proxy converts them to rules. Follow the chain: `KUBE-SERVICES` matches the ClusterIP, jumps to a `KUBE-SVC-` chain, which picks a `KUBE-SEP-` chain by probability, which DNATs to a Pod IP. Look at the `--probability` lines: with three backends the first gets 0.33 and the second 0.5 of the remainder."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Endpoints and iptables NAT rules",
+              "code": "kubectl get endpointslices -l kubernetes.io/service-name=web\nsudo iptables-save -t nat | grep -E 'default/web'",
+              "output": "NAME        ADDRESSTYPE   PORTS   ENDPOINTS                          AGE\nweb-h7x2k   IPv4          8080    10.244.1.15,10.244.2.8,10.244.1.16   3d\n-A KUBE-SERVICES -d 10.96.45.12/32 -p tcp -m comment --comment \"default/web:http cluster IP\" -m tcp --dport 80 -j KUBE-SVC-WEBHTTP\n-A KUBE-SVC-WEBHTTP -m statistic --mode random --probability 0.33333 -j KUBE-SEP-AAA\n-A KUBE-SVC-WEBHTTP -m statistic --mode random --probability 0.50000 -j KUBE-SEP-BBB\n-A KUBE-SVC-WEBHTTP -j KUBE-SEP-CCC\n-A KUBE-SEP-AAA -p tcp -m tcp -j DNAT --to-destination 10.244.1.15:8080",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: tuning DNS for a Pod",
+              "body": "By default Pods get `ndots:5`, so a lookup of `api.example.com` first tries several cluster search domains, multiplying queries. This Pod lowers `ndots` and adds an option, which cuts external lookup latency. Check `dnsConfig` and then run the Pod's `cat /etc/resolv.conf` to see the effect."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "Pod with dnsConfig",
+              "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: dns-tuned\nspec:\n  containers:\n  - name: app\n    image: busybox:1.36\n    command: [\"sleep\",\"3600\"]\n  dnsPolicy: ClusterFirst\n  dnsConfig:\n    options:\n    - name: ndots\n      value: \"2\"\n    - name: single-request-reopen",
+              "output": "pod/dns-tuned created",
+              "note": "Verify: kubectl exec dns-tuned -- cat /etc/resolv.conf"
+            },
+            {
+              "type": "callout",
+              "tone": "tip",
+              "title": "Scale DNS deliberately",
+              "body": "Run NodeLocal DNSCache to cut CoreDNS load and conntrack pressure, scale CoreDNS with the cluster-proportional-autoscaler, and use fully qualified names ending in a dot for hot external lookups."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "List Service endpoints",
+              "prompt": "Show the EndpointSlices behind the kube-dns Service.",
+              "command": "kubectl get endpointslices -n kube-system -l kubernetes.io/service-name=kube-dns",
+              "expected": "Slices listing CoreDNS Pod IPs on port 53.",
+              "hint": "The label key is kubernetes.io/service-name.",
+              "solution": "kubectl get endpointslices -n kube-system"
+            },
+            {
+              "title": "Check the kube-proxy mode",
+              "prompt": "Read the configured proxy mode from its ConfigMap.",
+              "command": "kubectl get cm kube-proxy -n kube-system -o yaml | grep mode",
+              "expected": "A line such as mode: \"\" (iptables default) or ipvs.",
+              "hint": "An empty mode means the default.",
+              "solution": "kubectl logs -n kube-system -l k8s-app=kube-proxy | head"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which kube-proxy mode scales best to very large numbers of Services?",
+                "options": [
+                  "iptables with linear rules",
+                  "IPVS or eBPF",
+                  "userspace",
+                  "None differ"
+                ],
+                "answer": 1,
+                "explain": "IPVS uses hash tables and eBPF avoids per-rule traversal."
+              },
+              {
+                "question": "What does a CNI plugin configure for a new Pod?",
+                "options": [
+                  "The container image",
+                  "Its network namespace, interface and IP",
+                  "Its CPU limit",
+                  "Its volumes"
+                ],
+                "answer": 1,
+                "explain": "CNI wires the Pod network namespace, assigns IPs and routes."
+              },
+              {
+                "question": "In the iptables chains, which chain finally performs DNAT to a Pod?",
+                "options": [
+                  "KUBE-SERVICES",
+                  "KUBE-SVC",
+                  "KUBE-SEP",
+                  "KUBE-MARK-MASQ"
+                ],
+                "answer": 2,
+                "explain": "KUBE-SEP chains hold the DNAT to one endpoint."
+              },
+              {
+                "question": "Why lower ndots in Pod dnsConfig?",
+                "options": [
+                  "To disable DNS",
+                  "To reduce search-domain query amplification for external names",
+                  "To change the cluster domain",
+                  "To speed up scheduling"
+                ],
+                "answer": 1,
+                "explain": "With ndots 5 names with fewer than 5 dots try search suffixes first."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-network-model",
+            "k8s-services",
+            "k8s-network-policies"
+          ],
+          "tags": [
+            "cni",
+            "kube-proxy",
+            "dns",
+            "iptables"
+          ],
+          "commands": [
+            "iptables-save",
+            "kubectl get endpointslices",
+            "ipvsadm"
+          ],
+          "sources": [
+            {
+              "title": "Cluster networking",
+              "url": "https://kubernetes.io/docs/concepts/cluster-administration/networking/"
+            },
+            {
+              "title": "Virtual IPs and Service proxies",
+              "url": "https://kubernetes.io/docs/reference/networking/virtual-ips/"
+            },
+            {
+              "title": "EndpointSlices",
+              "url": "https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/"
+            },
+            {
+              "title": "DNS for Services and Pods",
+              "url": "https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-storage-internals",
+          "title": "Storage internals: CSI, snapshots, expansion and topology",
+          "duration": "12 min",
+          "summary": "Understand how CSI drivers provision and attach volumes, and use snapshots, expansion and topology-aware binding.",
+          "objectives": [
+            "Describe the CSI controller and node plugin roles",
+            "Create and restore VolumeSnapshots",
+            "Expand a PVC online",
+            "Use WaitForFirstConsumer for topology-aware provisioning"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "How CSI works",
+              "body": "The **Container Storage Interface** lets storage vendors ship drivers without changing Kubernetes. A driver has two parts. The **controller plugin** (a Deployment with sidecars such as external-provisioner, external-attacher, external-snapshotter and external-resizer) talks to the storage API to create, attach and snapshot volumes. The **node plugin** (a DaemonSet) mounts and formats volumes on the node when the kubelet asks.\n\nThe flow is: a PVC references a StorageClass, the provisioner creates the volume and a PV, the attacher binds it to a node (VolumeAttachment), and the kubelet calls NodeStage/NodePublish to mount it into the Pod."
+            },
+            {
+              "type": "table",
+              "title": "StorageClass fields that matter",
+              "head": [
+                "Field",
+                "Meaning",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "provisioner",
+                  "CSI driver name",
+                  "ebs.csi.aws.com"
+                ],
+                [
+                  "volumeBindingMode",
+                  "Immediate or WaitForFirstConsumer",
+                  "WaitForFirstConsumer"
+                ],
+                [
+                  "allowVolumeExpansion",
+                  "Permits growing PVCs",
+                  "true"
+                ],
+                [
+                  "reclaimPolicy",
+                  "Delete or Retain on PVC removal",
+                  "Retain for databases"
+                ],
+                [
+                  "parameters",
+                  "Driver-specific options",
+                  "type: gp3, encrypted: \"true\""
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a topology-aware StorageClass",
+              "body": "This StorageClass uses `WaitForFirstConsumer`, so the volume is created only after the scheduler picks a node. That ensures the volume lands in the same zone as the Pod, avoiding the unschedulable 'volume node affinity conflict'. Apply it with kubectl; check `volumeBindingMode` and `allowVolumeExpansion`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "StorageClass fast-zonal",
+              "code": "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: fast-zonal\nprovisioner: ebs.csi.aws.com\nvolumeBindingMode: WaitForFirstConsumer\nallowVolumeExpansion: true\nreclaimPolicy: Delete\nparameters:\n  type: gp3\n  encrypted: \"true\"",
+              "output": "storageclass.storage.k8s.io/fast-zonal created",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: expanding a volume",
+              "body": "Growing a volume means editing the PVC request to a larger value; the external-resizer grows the backing disk and the kubelet resizes the filesystem, usually while the Pod runs. Use `kubectl patch` and then watch the PVC conditions. Volumes can only grow, never shrink."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Expand a PVC",
+              "code": "kubectl patch pvc data-db-0 -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"50Gi\"}}}}'\nkubectl get pvc data-db-0",
+              "output": "persistentvolumeclaim/data-db-0 patched\nNAME        STATUS   VOLUME      CAPACITY   ACCESS MODES   STORAGECLASS   AGE\ndata-db-0   Bound    pvc-8a1f   50Gi       RWO            fast-zonal     12d",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: a VolumeSnapshot",
+              "body": "This block holds two manifests applied together. The VolumeSnapshot names the source PVC and a VolumeSnapshotClass tied to the driver; `kubectl get volumesnapshot` must show READYTOUSE true before a restore. The PVC then uses `dataSource` pointing to the snapshot, so the provisioner creates a volume pre-populated with its data; the requested size must be at least the snapshot size."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "VolumeSnapshot and restored PVC",
+              "code": "apiVersion: snapshot.storage.k8s.io/v1\nkind: VolumeSnapshot\nmetadata:\n  name: db-snap-1\nspec:\n  volumeSnapshotClassName: ebs-snapclass\n  source:\n    persistentVolumeClaimName: data-db-0\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data-db-restored\nspec:\n  storageClassName: fast-zonal\n  dataSource:\n    name: db-snap-1\n    kind: VolumeSnapshot\n    apiGroup: snapshot.storage.k8s.io\n  accessModes: [\"ReadWriteOnce\"]\n  resources:\n    requests:\n      storage: 50Gi",
+              "output": "volumesnapshot.snapshot.storage.k8s.io/db-snap-1 created\npersistentvolumeclaim/data-db-restored created",
+              "note": "Check: kubectl get volumesnapshot db-snap-1"
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Snapshots are not backups by themselves",
+              "body": "Most snapshots live in the same storage system and failure domain as the volume. Combine them with application-consistent quiescing (for example a database flush) and copy data off-cluster with a tool such as Velero for real disaster recovery."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "List StorageClasses",
+              "prompt": "See which classes exist and which is the default.",
+              "command": "kubectl get storageclass",
+              "expected": "A table with PROVISIONER and VOLUMEBINDINGMODE columns.",
+              "hint": "The default class has (default) next to its name.",
+              "solution": "kubectl get sc -o wide"
+            },
+            {
+              "title": "List CSI drivers",
+              "prompt": "Show registered CSI drivers.",
+              "command": "kubectl get csidrivers",
+              "expected": "One row per installed driver, e.g. ebs.csi.aws.com.",
+              "hint": "CSIDriver is a cluster-scoped resource.",
+              "solution": "kubectl get csinodes"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which binding mode avoids zone mismatch between Pod and volume?",
+                "options": [
+                  "Immediate",
+                  "WaitForFirstConsumer",
+                  "Retain",
+                  "ReadWriteMany"
+                ],
+                "answer": 1,
+                "explain": "The volume is provisioned after scheduling so it is in the Pod's zone."
+              },
+              {
+                "question": "Which part of a CSI driver mounts volumes on a node?",
+                "options": [
+                  "Controller Deployment",
+                  "Node plugin DaemonSet",
+                  "external-snapshotter",
+                  "Scheduler"
+                ],
+                "answer": 1,
+                "explain": "The node plugin runs on every node and performs stage and publish."
+              },
+              {
+                "question": "Can a PVC be shrunk?",
+                "options": [
+                  "Yes, by editing the request",
+                  "No, only grown",
+                  "Only with Retain",
+                  "Only for RWX"
+                ],
+                "answer": 1,
+                "explain": "Kubernetes supports expansion only."
+              },
+              {
+                "question": "How do you restore a snapshot?",
+                "options": [
+                  "kubectl restore",
+                  "Create a PVC with dataSource pointing to the VolumeSnapshot",
+                  "Edit the PV",
+                  "Delete the snapshot"
+                ],
+                "answer": 1,
+                "explain": "dataSource tells the provisioner to populate the new volume from the snapshot."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-persistent-storage",
+            "k8s-quotas-limitranges"
+          ],
+          "tags": [
+            "csi",
+            "snapshots",
+            "storage"
+          ],
+          "commands": [
+            "kubectl get storageclass",
+            "kubectl patch pvc",
+            "kubectl get volumesnapshot"
+          ],
+          "sources": [
+            {
+              "title": "Volumes and CSI",
+              "url": "https://kubernetes.io/docs/concepts/storage/volumes/#csi"
+            },
+            {
+              "title": "Volume Snapshots",
+              "url": "https://kubernetes.io/docs/concepts/storage/volume-snapshots/"
+            },
+            {
+              "title": "Storage Classes",
+              "url": "https://kubernetes.io/docs/concepts/storage/storage-classes/"
+            },
+            {
+              "title": "Expanding PVCs",
+              "url": "https://kubernetes.io/docs/concepts/storage/persistent-volumes/#expanding-persistent-volumes-claims"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-mod-tenancy",
+      "title": "Multi-tenancy and fleets",
+      "summary": "Isolation models and managing many clusters.",
+      "lessons": [
+        {
+          "id": "k8s-multi-tenancy-fleet",
+          "title": "Multi-cluster, multi-tenancy and fleet management",
+          "duration": "12 min",
+          "summary": "Choose between namespaces, virtual clusters and separate clusters, enforce per-tenant limits and manage many clusters as a fleet.",
+          "objectives": [
+            "Compare isolation levels of namespaces, vclusters and clusters",
+            "Apply quotas, limits and policies per tenant",
+            "Describe federation and GitOps fleet patterns",
+            "Pick a tenancy model from requirements"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Three tenancy models",
+              "body": "**Namespace per tenant** is the cheapest: tenants share the control plane and nodes, and isolation comes from RBAC, ResourceQuota, NetworkPolicy and Pod Security. It suits trusted teams in one company. **Virtual clusters** (vcluster) give each tenant their own API server and control plane data running as Pods inside a host cluster, so tenants can install CRDs and cluster-scoped objects safely, while sharing worker nodes. **Cluster per tenant** gives the strongest isolation at the highest cost and operational load.\n\nThe key trade-off is blast radius versus overhead. Shared control planes mean one noisy tenant can exhaust API server capacity, and a kernel escape affects all tenants on a node.\n\nBeyond one cluster, teams want consistent configuration and workload placement. Classic **KubeFed** (federation v2) has been archived; today the common patterns are **GitOps fleets** (Argo CD ApplicationSets or Flux with a cluster per directory), **Cluster API** for declarative cluster lifecycle, and **multi-cluster services** (MCS API, Cilium ClusterMesh) for cross-cluster discovery. Group clusters by environment and region, promote changes through them, and keep a single policy source such as Kyverno or Gatekeeper bundles applied everywhere."
+            },
+            {
+              "type": "table",
+              "title": "Isolation comparison",
+              "head": [
+                "Model",
+                "Isolation",
+                "Cost",
+                "Tenant can install CRDs",
+                "Best for"
+              ],
+              "rows": [
+                [
+                  "Namespaces",
+                  "Logical (RBAC, policy)",
+                  "Lowest",
+                  "No",
+                  "Internal teams"
+                ],
+                [
+                  "vcluster",
+                  "Separate API server, shared nodes",
+                  "Medium",
+                  "Yes",
+                  "Dev/test, platform products"
+                ],
+                [
+                  "Cluster per tenant",
+                  "Full",
+                  "Highest",
+                  "Yes",
+                  "Regulated or hostile tenants"
+                ],
+                [
+                  "Dedicated node pools",
+                  "Node-level, added to any model",
+                  "Medium",
+                  "Depends",
+                  "Noisy or sensitive workloads"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a tenant namespace with a quota",
+              "body": "This single file onboards a tenant: a Namespace labelled for Pod Security `restricted`, a RoleBinding granting the built-in `edit` ClusterRole to the tenant group only inside that namespace, a ResourceQuota capping CPU, memory, Pods and PVCs, and a default-deny NetworkPolicy (needs a CNI that enforces policy). Apply with kubectl in one step; look at `roleRef` versus `subjects`, the `hard` limits and the empty `podSelector` that matches every Pod."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "Tenant onboarding bundle",
+              "code": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team-a\n  labels:\n    pod-security.kubernetes.io/enforce: restricted\n    tenant: team-a\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: team-a-editors\n  namespace: team-a\nsubjects:\n- kind: Group\n  name: team-a-developers\n  apiGroup: rbac.authorization.k8s.io\nroleRef:\n  kind: ClusterRole\n  name: edit\n  apiGroup: rbac.authorization.k8s.io\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: team-a-quota\n  namespace: team-a\nspec:\n  hard:\n    requests.cpu: \"20\"\n    requests.memory: 64Gi\n    limits.cpu: \"40\"\n    limits.memory: 128Gi\n    pods: \"100\"\n    persistentvolumeclaims: \"20\"\n---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny-all\n  namespace: team-a\nspec:\n  podSelector: {}\n  policyTypes:\n  - Ingress\n  - Egress",
+              "output": "namespace/team-a created\nrolebinding.rbac.authorization.k8s.io/team-a-editors created\nresourcequota/team-a-quota created\nnetworkpolicy.networking.k8s.io/default-deny-all created",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking tenant usage",
+              "body": "After the quota exists, this command shows consumed versus allowed resources. The USED column should never exceed HARD; once a limit is reached, new Pods are rejected with a 'exceeded quota' error."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Inspect quota usage",
+              "code": "kubectl describe quota team-a-quota -n team-a",
+              "output": "Name:                   team-a-quota\nNamespace:              team-a\nResource                Used   Hard\n--------                ----   ----\nlimits.cpu              12     40\nlimits.memory           24Gi   128Gi\npersistentvolumeclaims  4      20\npods                    18     100\nrequests.cpu            6      20\nrequests.memory         12Gi   64Gi",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "info",
+              "title": "Hierarchical namespaces and policy as code",
+              "body": "Use admission policies (ValidatingAdmissionPolicy, Kyverno) to require tenant labels, quotas and registries consistently. Treat tenant onboarding as code: one pull request creates the namespace, quota, RBAC and network policy."
+            },
+            {
+              "type": "steps",
+              "title": "Choose a tenancy model",
+              "items": [
+                {
+                  "title": "List threats",
+                  "body": "Trusted teams, external customers or untrusted code?"
+                },
+                {
+                  "title": "Need CRDs or admin?",
+                  "body": "Choose vcluster or dedicated clusters."
+                },
+                {
+                  "title": "Compliance",
+                  "body": "Regulated data usually needs separate clusters or node pools."
+                },
+                {
+                  "title": "Automate",
+                  "body": "Encode the choice in a template so onboarding is one change."
+                }
+              ]
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Check what a tenant may do",
+              "prompt": "Test the RoleBinding using impersonation.",
+              "command": "kubectl auth can-i create deployments -n team-a --as-group=team-a-developers --as=dev1",
+              "expected": "yes",
+              "hint": "Impersonation needs the group flag together with --as.",
+              "solution": "kubectl auth can-i --list -n team-a --as=dev1 --as-group=team-a-developers"
+            },
+            {
+              "title": "Find quota pressure",
+              "prompt": "List quotas across all namespaces.",
+              "command": "kubectl get resourcequota -A",
+              "expected": "One row per quota with its namespace.",
+              "hint": "-A means all namespaces.",
+              "solution": "kubectl get resourcequota -A -o wide"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which model lets a tenant install their own CRDs without affecting others?",
+                "options": [
+                  "Namespace",
+                  "vcluster or separate cluster",
+                  "Node pool",
+                  "LimitRange"
+                ],
+                "answer": 1,
+                "explain": "Tenants with their own API server can manage cluster-scoped resources safely."
+              },
+              {
+                "question": "What does an empty podSelector in a NetworkPolicy mean?",
+                "options": [
+                  "No Pods",
+                  "All Pods in the namespace",
+                  "Pods with no labels",
+                  "Only system Pods"
+                ],
+                "answer": 1,
+                "explain": "An empty selector matches every Pod in the namespace."
+              },
+              {
+                "question": "What does ResourceQuota prevent?",
+                "options": [
+                  "Pod restarts",
+                  "One namespace consuming unbounded shared capacity",
+                  "Image pulls",
+                  "DNS errors"
+                ],
+                "answer": 1,
+                "explain": "Quotas cap aggregate consumption per namespace."
+              },
+              {
+                "question": "Which approach is recommended today for syncing config across clusters?",
+                "options": [
+                  "KubeFed v2",
+                  "GitOps with ApplicationSets or Flux",
+                  "Copying kubeconfig",
+                  "etcd mirroring"
+                ],
+                "answer": 1,
+                "explain": "KubeFed is archived; GitOps fleet patterns are the common choice."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-rbac",
+            "k8s-quotas-limitranges",
+            "k8s-network-policies"
+          ],
+          "tags": [
+            "multi-tenancy",
+            "vcluster",
+            "fleet"
+          ],
+          "commands": [
+            "kubectl auth can-i",
+            "kubectl describe quota",
+            "kubectl get resourcequota"
+          ],
+          "sources": [
+            {
+              "title": "Multi-tenancy",
+              "url": "https://kubernetes.io/docs/concepts/security/multi-tenancy/"
+            },
+            {
+              "title": "Resource Quotas",
+              "url": "https://kubernetes.io/docs/concepts/policy/resource-quotas/"
+            },
+            {
+              "title": "Pod Security Admission",
+              "url": "https://kubernetes.io/docs/concepts/security/pod-security-admission/"
+            },
+            {
+              "title": "Cluster API",
+              "url": "https://cluster-api.sigs.k8s.io/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "k8s-operations"
+  ],
+  "track": "kubernetes"
+}

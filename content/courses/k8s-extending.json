@@ -1,0 +1,1125 @@
+{
+  "id": "k8s-extending",
+  "order": 27,
+  "title": "Extending Kubernetes",
+  "subtitle": "The API machinery, CRDs, controllers, operators and admission",
+  "level": "Advanced",
+  "duration": "1h 11m",
+  "icon": "layers",
+  "accent": "violet",
+  "description": "Understand how Kubernetes is extended: the API machinery, custom resources, controllers and operators, admission control and the plugin interfaces for networking, storage and runtimes.",
+  "outcomes": [
+    "Explain API groups, discovery, server-side apply, finalizers and ownerReferences",
+    "Design CRDs with validation schemas, printer columns and versions",
+    "Describe the reconcile loop and run controllers with leader election",
+    "Use operators such as cert-manager and CloudNativePG, and enforce policy with admission"
+  ],
+  "modules": [
+    {
+      "id": "k8s-ext-api-crds",
+      "title": "The API and custom resources",
+      "summary": "How the API server works and how to add new kinds to it.",
+      "lessons": [
+        {
+          "id": "k8s-api-machinery",
+          "title": "The API machinery",
+          "duration": "14 min",
+          "summary": "Groups, versions and resources, discovery, server-side apply, field managers, ownerReferences and finalizers.",
+          "objectives": [
+            "Read an apiVersion as group/version and find resources with kubectl api-resources",
+            "Explain server-side apply and field ownership",
+            "Use ownerReferences and finalizers to understand garbage collection and stuck deletions"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Everything is a resource in an API group",
+              "body": "The Kubernetes API server is a REST API. Every object lives at a path built from its **group**, **version** and **resource** (the plural lowercase name). The core group (empty name) is served under `/api/v1`, every other group under `/apis/<group>/<version>`. In a manifest, `apiVersion: apps/v1` means group `apps`, version `v1`; `apiVersion: v1` means the core group.\n\nVersions signal stability: `v1alpha1` is experimental and usually off by default, `v1beta1` is pre-release, `v1` is stable. etcd stores each object in exactly one **storage version**, and the API server converts to whichever version a client asks for. Custom resources, added later in this course, join this same machinery and get the same paths, RBAC, watches and `kubectl` support."
+            },
+            {
+              "type": "table",
+              "title": "Request paths and the metadata fields that drive lifecycle",
+              "head": [
+                "Item",
+                "Value or setter",
+                "Purpose",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "Namespaced path",
+                  "/apis/apps/v1/namespaces/shop/deployments",
+                  "group apps, version v1, resource deployments",
+                  "Deployment web"
+                ],
+                [
+                  "Core path",
+                  "/api/v1/namespaces/shop/pods",
+                  "core group has no name and lives under /api",
+                  "Pod web-0"
+                ],
+                [
+                  "Extension path",
+                  "/apis/cert-manager.io/v1/namespaces/shop/certificates",
+                  "custom resources look exactly like built-in ones",
+                  "Certificate shop-tls"
+                ],
+                [
+                  "metadata.managedFields",
+                  "API server",
+                  "tracks which field manager owns each field (server-side apply)",
+                  "manager: team-a, operation: Apply"
+                ],
+                [
+                  "metadata.ownerReferences",
+                  "controller or user",
+                  "declares the parent; deleting it garbage-collects the child",
+                  "ReplicaSet owns its Pods"
+                ],
+                [
+                  "metadata.finalizers",
+                  "controllers",
+                  "blocks removal until cleanup is done",
+                  "kubernetes.io/pvc-protection"
+                ],
+                [
+                  "metadata.deletionTimestamp",
+                  "API server",
+                  "set when a delete is requested but finalizers remain",
+                  "2026-11-13T09:20:00Z"
+                ],
+                [
+                  "metadata.generation",
+                  "API server",
+                  "increments on spec change, compared with status.observedGeneration",
+                  "generation: 4"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: discovering what the API serves",
+              "body": "These read-only commands ask the API server what it offers, so they are safe on any cluster. `kubectl api-resources` lists each resource with its short name, group, kind and whether it is namespaced; `kubectl api-versions` lists group/version pairs; `kubectl get --raw` sends a raw authenticated GET and shows the discovery document kubectl itself caches. Look at `APIVERSION` and `NAMESPACED` in the table and at the `verbs` array in the JSON."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Discovery commands",
+              "code": "kubectl api-resources --api-group=apps\nkubectl api-versions | head -6\nkubectl explain deployment.spec.strategy\nkubectl get --raw /apis/apps/v1 | head -c 300",
+              "output": "$ kubectl api-resources --api-group=apps\nNAME                  SHORTNAMES   APIVERSION   NAMESPACED   KIND\ncontrollerrevisions                apps/v1      true         ControllerRevision\ndaemonsets            ds           apps/v1      true         DaemonSet\ndeployments           deploy       apps/v1      true         Deployment\nreplicasets           rs           apps/v1      true         ReplicaSet\nstatefulsets          sts          apps/v1      true         StatefulSet\n\n$ kubectl api-versions | head -6\nadmissionregistration.k8s.io/v1\napiextensions.k8s.io/v1\napiregistration.k8s.io/v1\napps/v1\nauthentication.k8s.io/v1\nauthorization.k8s.io/v1\n\n$ kubectl explain deployment.spec.strategy\nGROUP:      apps\nKIND:       Deployment\nVERSION:    v1\n\nFIELD: strategy <DeploymentStrategy>\n\nDESCRIPTION:\n    The deployment strategy to use to replace existing pods with new ones.\nFIELDS:\n  rollingUpdate <RollingUpdateDeployment>\n  type  <string>\n    Type of deployment. Can be \"Recreate\" or \"RollingUpdate\". Default is RollingUpdate.\n\n$ kubectl get --raw /apis/apps/v1 | head -c 300\n{\"kind\":\"APIResourceList\",\"apiVersion\":\"v1\",\"groupVersion\":\"apps/v1\",\"resources\":[{\"name\":\"controllerrevisions\",\"singularName\":\"\",\"namespaced\":true,\"kind\":\"ControllerRevision\",\"verbs\":[\"create\",\"delete\",\"deletecollection\",\"get\",\"list\",\"patch\",\"update\",\"watch\"]},{\"name\":\"daemonsets\"",
+              "note": "kubectl explain reads the OpenAPI schema from the server, so it also documents custom resources once their CRD is installed."
+            },
+            {
+              "type": "text",
+              "title": "About this example: server-side apply and a field conflict",
+              "body": "Classic client-side apply stores the last manifest in an annotation and computes a three-way patch in kubectl. **Server-side apply** moves that logic into the API server, which records an owner (the **field manager**) for every field in `managedFields`. In this session we apply a ConfigMap as `team-a`, then try to change `LOG_LEVEL` as `team-b`; the server refuses with a conflict instead of overwriting. Read the error text, which names the field and the current owner, and the `managedFields` entry afterwards."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Applying with named field managers",
+              "code": "cat > cm.yaml <<'EOF'\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ssa-demo\n  namespace: default\ndata:\n  LOG_LEVEL: info\n  REGION: eu-west-1\nEOF\nkubectl apply --server-side --field-manager=team-a -f cm.yaml\nsed -i 's/info/debug/' cm.yaml\nkubectl apply --server-side --field-manager=team-b -f cm.yaml\nkubectl get cm ssa-demo --show-managed-fields -o yaml | sed -n '1,18p'",
+              "output": "configmap/ssa-demo serverside-applied\nApply failed with 1 conflict: conflict with \"team-a\": .data.LOG_LEVEL\nPlease review the fields above--they currently have other managers. Here\nare the ways you can resolve this warning:\n* If you intend to manage all of these fields, please re-run the apply\n  command with the `--force-conflicts` flag.\n* If you do not intend to manage all of the fields, please edit your\n  manifest to remove references to the fields that should keep their\n  current managers.\n\napiVersion: v1\ndata:\n  LOG_LEVEL: info\n  REGION: eu-west-1\nkind: ConfigMap\nmetadata:\n  managedFields:\n  - apiVersion: v1\n    fieldsType: FieldsV1\n    fieldsV1:\n      f:data:\n        f:LOG_LEVEL: {}\n        f:REGION: {}\n    manager: team-a\n    operation: Apply\n    time: \"2026-11-13T09:12:44Z\"",
+              "note": "Controllers should use server-side apply with one stable --field-manager name, so humans and automation can share an object without clobbering each other."
+            },
+            {
+              "type": "text",
+              "title": "About this example: an object guarded by a finalizer",
+              "body": "This ConfigMap carries a **finalizer** named `example.com/cleanup`. Apply it with `kubectl apply -f`, then run `kubectl delete cm protected`: the API server only sets `deletionTimestamp`, and the object stays in Terminating state until whatever controller owns that finalizer finishes cleanup and removes it. Here no controller exists, so you play the controller in the exercise. Compare this with `ownerReferences`, which is how a ReplicaSet's Pods are removed when the ReplicaSet goes away."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "Object with a finalizer",
+              "code": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: protected\n  namespace: default\n  finalizers:\n  - example.com/cleanup\ndata:\n  note: \"deletion waits until example.com/cleanup is removed\"",
+              "output": null,
+              "note": "After a delete, kubectl get cm protected -o jsonpath='{.metadata.deletionTimestamp}' prints a timestamp while the object is still present."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Do not strip finalizers casually",
+              "body": "A namespace stuck in Terminating usually has a finalizer from an unavailable controller or an API service that is down. Find the real cause first (`kubectl get apiservice`, controller logs). Removing a finalizer with `kubectl patch ... -p '{\"metadata\":{\"finalizers\":null}}' --type=merge` skips the cleanup it protected and can leak load balancers, disks or DNS records."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Find where a resource lives",
+              "prompt": "Find the group, version and namespaced flag for CronJobs.",
+              "command": "kubectl api-resources | grep -i cronjob",
+              "expected": "A row with cronjobs, short name cj, APIVERSION batch/v1, NAMESPACED true.",
+              "hint": "Pipe api-resources through grep.",
+              "solution": "kubectl api-resources --api-group=batch"
+            },
+            {
+              "title": "Release a stuck deletion",
+              "prompt": "Apply the finalizer ConfigMap, delete it, confirm it lingers, then act as the controller and remove the finalizer.",
+              "command": "kubectl delete cm protected --wait=false && kubectl get cm protected -o jsonpath='{.metadata.deletionTimestamp}'",
+              "expected": "A deletionTimestamp is printed and the object remains until the finalizer is patched away.",
+              "hint": "A merge patch with finalizers set to null clears the list.",
+              "solution": "kubectl patch cm protected --type=merge -p '{\"metadata\":{\"finalizers\":null}}'"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does apiVersion: apps/v1 mean?",
+                "options": [
+                  "Resource apps, group v1",
+                  "Group apps, version v1",
+                  "Namespace apps, kind v1",
+                  "Kind apps, version v1"
+                ],
+                "answer": 1,
+                "explain": "The part before the slash is the API group, the part after is the version. The core group has no prefix."
+              },
+              {
+                "question": "What does a field conflict in server-side apply tell you?",
+                "options": [
+                  "The YAML is invalid",
+                  "Another manager owns a field you tried to set to a different value",
+                  "The CRD is missing",
+                  "etcd is full"
+                ],
+                "answer": 1,
+                "explain": "SSA tracks ownership in managedFields and refuses to silently overwrite another manager's value."
+              },
+              {
+                "question": "An object was deleted but remains with a deletionTimestamp. Why?",
+                "options": [
+                  "The API server is read-only",
+                  "A finalizer still blocks removal",
+                  "Its resourceVersion is old",
+                  "It has no labels"
+                ],
+                "answer": 1,
+                "explain": "Finalizers keep the object present until the owning controller completes cleanup and removes them."
+              },
+              {
+                "question": "What happens to children when their owner (via ownerReferences) is deleted by default?",
+                "options": [
+                  "They are kept untouched",
+                  "They are garbage-collected",
+                  "They move to the default namespace",
+                  "They are frozen"
+                ],
+                "answer": 1,
+                "explain": "The garbage collector deletes dependents whose owner no longer exists."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-kubectl-and-declarative",
+            "k8s-rbac"
+          ],
+          "tags": [
+            "api",
+            "server-side-apply",
+            "finalizers",
+            "discovery"
+          ],
+          "commands": [
+            "kubectl api-resources",
+            "kubectl api-versions",
+            "kubectl explain",
+            "kubectl apply --server-side",
+            "kubectl get --raw"
+          ],
+          "sources": [
+            {
+              "title": "Kubernetes API concepts",
+              "url": "https://kubernetes.io/docs/reference/using-api/api-concepts/"
+            },
+            {
+              "title": "Server-Side Apply",
+              "url": "https://kubernetes.io/docs/reference/using-api/server-side-apply/"
+            },
+            {
+              "title": "Finalizers",
+              "url": "https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/"
+            },
+            {
+              "title": "Garbage Collection",
+              "url": "https://kubernetes.io/docs/concepts/architecture/garbage-collection/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-crds",
+          "title": "CustomResourceDefinitions",
+          "duration": "15 min",
+          "summary": "Teach the API server a new kind: CRD anatomy, OpenAPI validation, defaults, printer columns, status subresource and versions.",
+          "objectives": [
+            "Write a complete CRD with a structural schema",
+            "Validate and default custom resources with OpenAPI v3 and enums",
+            "Show custom columns and plan multi-version CRDs"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "A CRD adds a new REST resource to the API server",
+              "body": "A **CustomResourceDefinition** (CRD) is itself an object in the `apiextensions.k8s.io/v1` group. When you create one, the API server immediately starts serving a new endpoint such as `/apis/data.example.com/v1/namespaces/*/backups`, stores the objects in etcd, and makes them work with `kubectl`, RBAC, watches, labels and `kubectl explain`. No server code is compiled in; the CRD only describes the shape.\n\nA CRD on its own does **nothing** beyond storing data. Behavior comes from a controller that watches those objects, covered in the next lessons. Think of a CRD as the schema of a table and the controller as the application using it."
+            },
+            {
+              "type": "table",
+              "title": "Key CRD fields",
+              "head": [
+                "Field",
+                "Meaning",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "spec.group",
+                  "API group, usually a DNS domain you own",
+                  "data.example.com"
+                ],
+                [
+                  "spec.scope",
+                  "Namespaced or Cluster",
+                  "Namespaced"
+                ],
+                [
+                  "spec.names.kind / plural",
+                  "CamelCase kind and lowercase plural used in the URL",
+                  "Backup / backups"
+                ],
+                [
+                  "spec.names.shortNames",
+                  "Aliases for kubectl",
+                  "bkp"
+                ],
+                [
+                  "versions[].served / storage",
+                  "Served to clients; exactly one version is the storage version",
+                  "v1 true / true"
+                ],
+                [
+                  "versions[].schema.openAPIV3Schema",
+                  "Structural schema used for validation, defaulting and pruning",
+                  "type: object"
+                ],
+                [
+                  "versions[].subresources.status",
+                  "Separate /status endpoint so controllers and users do not collide",
+                  "status: {}"
+                ],
+                [
+                  "additionalPrinterColumns",
+                  "Extra columns for kubectl get, each with a jsonPath",
+                  "jsonPath: .status.phase"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: the Backup CRD",
+              "body": "This is a complete CRD defining a `Backup` kind in group `data.example.com`, intended to describe a scheduled database backup. Apply it with `kubectl apply -f backup-crd.yaml`. Look at the `schema` block, where `required`, `minLength`, `pattern`, `minimum`/`maximum`, `enum` and `default` do the validation, and at `additionalPrinterColumns`, which controls what `kubectl get backups` prints."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "backup-crd.yaml",
+              "code": "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: backups.data.example.com\nspec:\n  group: data.example.com\n  scope: Namespaced\n  names:\n    plural: backups\n    singular: backup\n    kind: Backup\n    shortNames:\n    - bkp\n  versions:\n  - name: v1\n    served: true\n    storage: true\n    subresources:\n      status: {}\n    additionalPrinterColumns:\n    - name: Database\n      type: string\n      jsonPath: .spec.database\n    - name: Schedule\n      type: string\n      jsonPath: .spec.schedule\n    - name: Phase\n      type: string\n      jsonPath: .status.phase\n    - name: Age\n      type: date\n      jsonPath: .metadata.creationTimestamp\n    schema:\n      openAPIV3Schema:\n        type: object\n        required: [\"spec\"]\n        properties:\n          spec:\n            type: object\n            required: [\"database\", \"schedule\"]\n            properties:\n              database:\n                type: string\n                minLength: 1\n              schedule:\n                type: string\n                pattern: '^(\\S+\\s+){4}\\S+$'\n              retention:\n                type: integer\n                minimum: 1\n                maximum: 90\n                default: 7\n              storageClass:\n                type: string\n                enum: [\"standard\", \"fast\", \"archive\"]\n          status:\n            type: object\n            properties:\n              phase:\n                type: string\n              lastSuccess:\n                type: string\n                format: date-time",
+              "output": null,
+              "note": "Schemas must be structural: every field needs a type. Unknown fields are pruned unless x-kubernetes-preserve-unknown-fields is set."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a Backup custom resource",
+              "body": "This is an instance of the new kind, created with `kubectl apply -f orders-backup.yaml` after the CRD is established. It sets only `database`, `schedule` and `storageClass`; the API server fills `retention: 7` from the schema default. Look at `apiVersion: data.example.com/v1` and `kind: Backup`, which must match the CRD's group, version and names."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "orders-backup.yaml",
+              "code": "apiVersion: data.example.com/v1\nkind: Backup\nmetadata:\n  name: orders-nightly\n  namespace: default\nspec:\n  database: orders\n  schedule: \"0 2 * * *\"\n  storageClass: fast",
+              "output": null,
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: applying, listing and being rejected",
+              "body": "This session installs the CRD, creates the resource, lists it using the short name and printer columns, and then tries an invalid object to prove validation works. `kubectl get crd` shows the established CRD. In the final error, read the field path (`spec.storageClass`) and the supported values, which come straight from the schema enum."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Install and validate",
+              "code": "kubectl apply -f backup-crd.yaml\nkubectl apply -f orders-backup.yaml\nkubectl get bkp\nkubectl get backup orders-nightly -o jsonpath='{.spec.retention}{\"\\n\"}'\nkubectl patch backup orders-nightly --type=merge -p '{\"spec\":{\"storageClass\":\"tape\"}}'",
+              "output": "customresourcedefinition.apiextensions.k8s.io/backups.data.example.com created\nbackup.data.example.com/orders-nightly created\nNAME             DATABASE   SCHEDULE    PHASE   AGE\norders-nightly   orders     0 2 * * *           5s\n7\nThe Backup \"orders-nightly\" is invalid: spec.storageClass: Unsupported value: \"tape\": supported values: \"standard\", \"fast\", \"archive\"",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "Versions, conversion and removal",
+              "body": "A CRD can serve several versions at once, for example `v1beta1` and `v1`. Only one is the **storage** version; clients can read any served version. If the schemas differ, set `spec.conversion` to `Webhook` and run a conversion service; if they are identical the default `None` strategy just rewrites `apiVersion`.\n\nThe safe lifecycle is: add `v1`, make it the storage version, run `kubectl get backups -A -o yaml | kubectl apply -f -` style migration (or the Storage Version Migrator), then set `served: false` on the old version, and finally remove it from `status.storedVersions`. Deleting a CRD **deletes every custom resource of that kind**, so protect CRDs in production with RBAC and backups.\n\nFor rules beyond OpenAPI keywords, use `x-kubernetes-validations` with CEL, for example `rule: \"self.retention <= 30 || self.storageClass == 'archive'\"`; it runs inside the API server with no webhook."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Inspect your CRD with explain",
+              "prompt": "Use kubectl explain on the new kind to read the schema you defined.",
+              "command": "kubectl explain backup.spec",
+              "expected": "Fields database, schedule, retention and storageClass are listed with their types.",
+              "hint": "explain works for custom kinds once the CRD is established.",
+              "solution": "kubectl explain backup.spec.retention"
+            },
+            {
+              "title": "Break validation on purpose",
+              "prompt": "Try to create a Backup with retention 500.",
+              "command": "kubectl patch backup orders-nightly --type=merge -p '{\"spec\":{\"retention\":500}}'",
+              "expected": "An error that spec.retention must be less than or equal to 90.",
+              "hint": "The schema sets maximum: 90.",
+              "solution": "kubectl get backup orders-nightly -o jsonpath='{.spec.retention}'"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does creating a CRD alone give you?",
+                "options": [
+                  "A running operator",
+                  "A new API endpoint storing objects, with no behavior",
+                  "Automatic backups",
+                  "A new namespace"
+                ],
+                "answer": 1,
+                "explain": "A CRD only adds the resource type. A controller must act on the objects."
+              },
+              {
+                "question": "Which CRD field controls extra columns in kubectl get?",
+                "options": [
+                  "names.shortNames",
+                  "additionalPrinterColumns",
+                  "subresources",
+                  "conversion"
+                ],
+                "answer": 1,
+                "explain": "additionalPrinterColumns maps a jsonPath to a column."
+              },
+              {
+                "question": "What happens to custom resources when their CRD is deleted?",
+                "options": [
+                  "They are kept",
+                  "They are all deleted",
+                  "They become ConfigMaps",
+                  "They are archived"
+                ],
+                "answer": 1,
+                "explain": "Removing the CRD removes the endpoint and all stored objects of that kind."
+              },
+              {
+                "question": "How many versions of a CRD can be the storage version?",
+                "options": [
+                  "Exactly one",
+                  "One per namespace",
+                  "Any number",
+                  "None"
+                ],
+                "answer": 0,
+                "explain": "Exactly one version has storage: true, though several can be served."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-api-machinery",
+            "k8s-controllers-reconcile"
+          ],
+          "tags": [
+            "crd",
+            "custom-resources",
+            "openapi",
+            "validation"
+          ],
+          "commands": [
+            "kubectl get crd",
+            "kubectl explain",
+            "kubectl apply",
+            "kubectl patch"
+          ],
+          "sources": [
+            {
+              "title": "Custom Resources",
+              "url": "https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/"
+            },
+            {
+              "title": "Extend the API with CustomResourceDefinitions",
+              "url": "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/"
+            },
+            {
+              "title": "CRD versioning",
+              "url": "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-ext-controllers-operators",
+      "title": "Controllers, operators and admission",
+      "summary": "Automate with reconcile loops, use operators and guard the API.",
+      "lessons": [
+        {
+          "id": "k8s-controllers-reconcile",
+          "title": "Controllers and the reconcile loop",
+          "duration": "15 min",
+          "summary": "How controllers converge actual state to desired state: informers, caches, work queues, idempotent reconcile and leader election.",
+          "objectives": [
+            "Describe the observe-diff-act loop and why it is level-triggered",
+            "Name the roles of informer, cache, work queue and reconciler",
+            "Run controllers with leader election and read Lease objects"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Level-triggered control: converge, never replay events",
+              "body": "A **controller** is a loop that watches objects and works to make the real world match the `spec`. The Deployment controller, the Job controller and every operator are built this way. The key property is that controllers are **level-triggered**: the reconciler is handed the *name* of an object, re-reads the current state and decides what to do, rather than replaying a list of past events. If an event is missed or a pod restarts, the next reconcile still converges.\n\nThis forces two rules. Reconcile must be **idempotent** (running it ten times equals running it once), and it must not depend on which event woke it up. Failures are returned as errors, and the work queue retries them with exponential backoff."
+            },
+            {
+              "type": "table",
+              "title": "Moving parts of a controller built with client-go or controller-runtime",
+              "head": [
+                "Component",
+                "Job",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "Reflector / informer",
+                  "Does one LIST then a WATCH against the API server and feeds a local cache",
+                  "Watches Backups and CronJobs"
+                ],
+                [
+                  "Cache (indexer)",
+                  "Local read-only copy so reconcile reads do not hit the API server",
+                  "r.Get() served from memory"
+                ],
+                [
+                  "Event handlers",
+                  "Turn add/update/delete into queue keys, often filtered by predicates",
+                  "Enqueue namespace/name"
+                ],
+                [
+                  "Work queue",
+                  "Deduplicates keys, rate-limits, retries with backoff",
+                  "Ten changes to one Backup become one item"
+                ],
+                [
+                  "Reconciler",
+                  "Your function: read, diff, create/update/delete, update status",
+                  "Reconcile(ctx, req)"
+                ],
+                [
+                  "Owner references",
+                  "Link children to the parent so deletion cascades and child events map to the parent",
+                  "SetControllerReference"
+                ],
+                [
+                  "Leader election",
+                  "Only one replica runs the loop at a time",
+                  "Lease backup-controller.data.example.com"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a reconciler in Go",
+              "body": "This is a fragment of a controller-runtime reconciler for the Backup CRD from the previous lesson, shown as plain text because it is Go source and not a manifest. It reads the Backup, checks whether the owned CronJob exists, creates it if not, writes `.status.phase`, and requeues after ten minutes. Look at the three numbered comments (observe, diff and act, report) and at `SetControllerReference`, which makes the CronJob garbage-collected with its Backup."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "BackupReconciler.Reconcile (Go, abridged)",
+              "code": "func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {\n    var b datav1.Backup\n    if err := r.Get(ctx, req.NamespacedName, &b); err != nil {\n        // Deleted before we got here: nothing to do.\n        return ctrl.Result{}, client.IgnoreNotFound(err)\n    }\n\n    // 1. Observe actual state: does the CronJob exist?\n    var cj batchv1.CronJob\n    err := r.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.Name}, &cj)\n\n    // 2. Diff and act: create it, owned by the Backup, if missing.\n    if apierrors.IsNotFound(err) {\n        cj = desiredCronJob(&b)\n        ctrl.SetControllerReference(&b, &cj, r.Scheme)\n        if err := r.Create(ctx, &cj); err != nil {\n            return ctrl.Result{}, err          // retried with backoff\n        }\n    } else if err != nil {\n        return ctrl.Result{}, err\n    }\n\n    // 3. Report observed state back in .status\n    b.Status.Phase = \"Scheduled\"\n    if err := r.Status().Update(ctx, &b); err != nil {\n        return ctrl.Result{}, err\n    }\n    return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil   // periodic resync\n}",
+              "output": null,
+              "note": "Return an error to retry with backoff, ctrl.Result{RequeueAfter: d} to look again later, and an empty Result when converged."
+            },
+            {
+              "type": "text",
+              "title": "About this example: running a controller with two replicas",
+              "body": "This Deployment runs the controller with two replicas for availability. Both pods watch the API, but `--leader-elect=true` makes them compete for a Lease so only one reconciles at a time; the other is a hot standby. Apply it with `kubectl apply -f backup-controller.yaml`. Look at `--leader-election-id`, the health endpoints used by the probes, and the memory limit sized for an informer cache. The image name is an example; substitute your own controller image."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "backup-controller.yaml",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backup-controller\n  namespace: default\n  labels:\n    app: backup-controller\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backup-controller\n  template:\n    metadata:\n      labels:\n        app: backup-controller\n    spec:\n      serviceAccountName: default\n      containers:\n      - name: manager\n        image: registry.example.com/backup-controller:1.4.2\n        args:\n        - --leader-elect=true\n        - --leader-election-id=backup-controller.data.example.com\n        - --metrics-bind-address=:8080\n        - --health-probe-bind-address=:8081\n        ports:\n        - name: metrics\n          containerPort: 8080\n        livenessProbe:\n          httpGet:\n            path: /healthz\n            port: 8081\n        readinessProbe:\n          httpGet:\n            path: /readyz\n            port: 8081\n        resources:\n          requests:\n            cpu: 50m\n            memory: 64Mi\n          limits:\n            memory: 128Mi",
+              "output": null,
+              "note": "In a real install the ServiceAccount also needs RBAC to list/watch backups and manage cronjobs, plus coordination.k8s.io leases."
+            },
+            {
+              "type": "text",
+              "title": "About this example: observing leader election and reconciles",
+              "body": "The Lease is a small object in the `coordination.k8s.io` group that the leader renews every few seconds; `holderIdentity` names the winner. This session shows the Lease, the controller logs with the election and a reconcile, and what happens after the leader pod is deleted. Look at `holderIdentity` changing and at `renewTime`, which should stay within a few seconds of now."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Lease and logs",
+              "code": "kubectl get lease backup-controller.data.example.com -o wide\nkubectl logs backup-controller-6f7b9c8d5-x7k2p --tail=6\nkubectl delete pod backup-controller-6f7b9c8d5-x7k2p\nkubectl get lease backup-controller.data.example.com",
+              "output": "NAME                                  HOLDER                                                         AGE\nbackup-controller.data.example.com    backup-controller-6f7b9c8d5-x7k2p_8e1f3a42-5c0d-4b77-a2d1-9d3f6b7c1a10   3d\n\n2026-11-13T09:30:01Z INFO attempting to acquire leader lease default/backup-controller.data.example.com...\n2026-11-13T09:30:02Z INFO successfully acquired lease\n2026-11-13T09:30:02Z INFO Starting EventSource kind=Backup\n2026-11-13T09:30:02Z INFO Starting workers controller=backup count=1\n2026-11-13T09:30:03Z INFO reconciling backup=default/orders-nightly\n2026-11-13T09:30:03Z INFO created cronjob name=orders-nightly\n\npod \"backup-controller-6f7b9c8d5-x7k2p\" deleted\nNAME                                  HOLDER                                                         AGE\nbackup-controller.data.example.com    backup-controller-6f7b9c8d5-m4q9z_2b7a90d1-8c33-4d1e-b0aa-5e41f2c8d9e3   3d",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common controller bugs",
+              "body": "Watch for: acting on stale cache reads right after a write (re-fetch or tolerate conflicts), forgetting `status.observedGeneration`, non-idempotent creates that fail with AlreadyExists, hot loops caused by writing status on every reconcile, and updating `spec` when you meant to update only `status`. Use finalizers for external cleanup, and ownerReferences for in-cluster children. Most teams generate the scaffolding with kubebuilder or Operator SDK (controller-runtime); kopf and the Java Operator SDK exist for Python and Java."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Watch a controller work",
+              "prompt": "Scale a Deployment and observe the ReplicaSet controller converge it.",
+              "command": "kubectl scale deployment backup-controller --replicas=3 && kubectl get pods -l app=backup-controller -w",
+              "expected": "New pods appear until the count equals 3 without any further input.",
+              "hint": "The Deployment and ReplicaSet controllers do the reconciling.",
+              "solution": "kubectl get rs -l app=backup-controller"
+            },
+            {
+              "title": "Find the current leader",
+              "prompt": "Read the holderIdentity of a controller Lease.",
+              "command": "kubectl get lease -n kube-system kube-controller-manager -o jsonpath='{.spec.holderIdentity}'",
+              "expected": "The name of the control-plane node and unique id currently leading.",
+              "hint": "Leases are in coordination.k8s.io; the built-in ones live in kube-system.",
+              "solution": "kubectl get leases -A"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why must a reconcile function be idempotent?",
+                "options": [
+                  "For speed",
+                  "It may run many times for the same object and must converge safely",
+                  "Kubernetes requires Go",
+                  "It avoids RBAC"
+                ],
+                "answer": 1,
+                "explain": "Level-triggered controllers can reconcile repeatedly due to resyncs, retries and duplicate events."
+              },
+              {
+                "question": "What does the work queue provide?",
+                "options": [
+                  "Persistent storage",
+                  "Deduplication, rate limiting and retry with backoff",
+                  "Admission control",
+                  "Image pulling"
+                ],
+                "answer": 1,
+                "explain": "Many events for one key collapse into one item, and failed items are retried with backoff."
+              },
+              {
+                "question": "What does leader election with a Lease achieve for a 2-replica controller?",
+                "options": [
+                  "Both reconcile in parallel",
+                  "Only one active reconciler, with a standby ready",
+                  "Load balancing of requests",
+                  "Automatic scaling"
+                ],
+                "answer": 1,
+                "explain": "Only the Lease holder runs the loop, which avoids conflicting writes."
+              },
+              {
+                "question": "Why does a controller read from an informer cache instead of the API server?",
+                "options": [
+                  "It is more secure",
+                  "It reduces API server load and latency",
+                  "Caches are always fresh",
+                  "It is required by etcd"
+                ],
+                "answer": 1,
+                "explain": "The cache is populated by LIST+WATCH and serves reads locally, though it can briefly lag behind writes."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-crds",
+            "k8s-operators"
+          ],
+          "tags": [
+            "controllers",
+            "reconcile",
+            "informers",
+            "leader-election"
+          ],
+          "commands": [
+            "kubectl get lease",
+            "kubectl logs",
+            "kubectl scale",
+            "kubectl get pods -w"
+          ],
+          "sources": [
+            {
+              "title": "Controllers",
+              "url": "https://kubernetes.io/docs/concepts/architecture/controller/"
+            },
+            {
+              "title": "Operator pattern",
+              "url": "https://kubernetes.io/docs/concepts/extend-kubernetes/operator/"
+            },
+            {
+              "title": "Leases",
+              "url": "https://kubernetes.io/docs/concepts/architecture/leases/"
+            },
+            {
+              "title": "Kubebuilder book",
+              "url": "https://book.kubebuilder.io/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-operators",
+          "title": "The operator pattern and real operators",
+          "duration": "14 min",
+          "summary": "CRD plus controller equals an operator: install and use cert-manager and CloudNativePG, and judge operators before adopting them.",
+          "objectives": [
+            "Define an operator as domain knowledge encoded in a CRD and controller",
+            "Install operators with Helm and drive them with custom resources",
+            "Evaluate an operator for maturity, upgrades and failure modes"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Operators encode what a human operator would do",
+              "body": "An **operator** is a CRD plus a controller that automates the lifecycle of a piece of software: install, configure, scale, back up, upgrade and recover. Instead of a runbook saying 'promote a replica, repoint the service, reattach storage', you declare `instances: 3` on a database object and the operator performs the steps, reconciling continuously.\n\nIn practice you consume operators far more often than you write them. You install the operator once (CRDs, a Deployment, RBAC), then create small custom resources, and `kubectl get`, `describe` and events work as for built-in kinds."
+            },
+            {
+              "type": "table",
+              "title": "Operators you will meet",
+              "head": [
+                "Operator",
+                "CRDs (examples)",
+                "What it automates",
+                "Typical install"
+              ],
+              "rows": [
+                [
+                  "cert-manager",
+                  "Issuer, ClusterIssuer, Certificate",
+                  "Issues and renews TLS certificates (ACME, Vault, internal CA) into Secrets",
+                  "helm install, installCRDs"
+                ],
+                [
+                  "CloudNativePG",
+                  "Cluster, Backup, ScheduledBackup, Pooler",
+                  "PostgreSQL HA, failover, backups, rolling upgrades",
+                  "helm or kubectl apply of release manifest"
+                ],
+                [
+                  "Prometheus Operator",
+                  "Prometheus, ServiceMonitor, PrometheusRule",
+                  "Runs Prometheus and generates scrape config from CRs",
+                  "kube-prometheus-stack chart"
+                ],
+                [
+                  "Strimzi",
+                  "Kafka, KafkaTopic, KafkaUser",
+                  "Kafka clusters, topics and users",
+                  "helm or OLM"
+                ],
+                [
+                  "Argo CD",
+                  "Application, AppProject",
+                  "GitOps sync of manifests to clusters",
+                  "helm or manifests"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: cert-manager issuer and certificate",
+              "body": "One file with two custom resources. The `ClusterIssuer` tells cert-manager how to obtain certificates (here the Let's Encrypt staging ACME server using HTTP-01 through the nginx ingress class). The `Certificate` asks for a certificate for two DNS names, renewing 15 days before expiry, and stores it in Secret `shop-tls`. Apply it with `kubectl apply -f shop-tls.yaml` after cert-manager is installed; look at `issuerRef` and `secretName`, which your Ingress then consumes."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "shop-tls.yaml",
+              "code": "apiVersion: cert-manager.io/v1\nkind: ClusterIssuer\nmetadata:\n  name: letsencrypt-staging\nspec:\n  acme:\n    server: https://acme-staging-v02.api.letsencrypt.org/directory\n    email: platform@example.com\n    privateKeySecretRef:\n      name: letsencrypt-staging-account-key\n    solvers:\n    - http01:\n        ingress:\n          ingressClassName: nginx\n---\napiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: shop-tls\n  namespace: default\nspec:\n  secretName: shop-tls\n  duration: 2160h\n  renewBefore: 360h\n  dnsNames:\n  - shop.example.com\n  - www.shop.example.com\n  issuerRef:\n    name: letsencrypt-staging\n    kind: ClusterIssuer",
+              "output": null,
+              "note": "Switch to the production ACME URL only after staging works; production has strict rate limits."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a PostgreSQL cluster with CloudNativePG",
+              "body": "This single `Cluster` object makes the operator create three PostgreSQL pods (one primary, two streaming replicas), their PVCs, services (`-rw`, `-ro`, `-r`) and credentials Secret. Apply it with `kubectl apply -f orders-db.yaml` once the operator is running. Look at `instances`, which you change to scale, `storage.size`, and `bootstrap.initdb`, which creates the first database and owner."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "orders-db.yaml",
+              "code": "apiVersion: postgresql.cnpg.io/v1\nkind: Cluster\nmetadata:\n  name: orders-db\n  namespace: default\nspec:\n  instances: 3\n  imageName: ghcr.io/cloudnative-pg/postgresql:16.4\n  primaryUpdateStrategy: unsupervised\n  postgresql:\n    parameters:\n      max_connections: \"200\"\n      shared_buffers: 256MB\n  bootstrap:\n    initdb:\n      database: orders\n      owner: orders\n  storage:\n    size: 20Gi\n    storageClass: standard\n  resources:\n    requests:\n      cpu: 500m\n      memory: 1Gi\n    limits:\n      memory: 1Gi",
+              "output": null,
+              "note": "Add a ScheduledBackup resource and an object-store configuration before calling this production-ready."
+            },
+            {
+              "type": "text",
+              "title": "About this example: installing operators and reading their status",
+              "body": "This session installs both operators from their Helm charts, then inspects the results. Operators put progress in `status` and `Ready` conditions, so `kubectl get` is your first check. In the output, compare the `READY` and `STATUS` columns of the certificate and the cluster, and note `kubectl cnpg status` is a plugin that gives richer detail."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Install and inspect",
+              "code": "helm repo add jetstack https://charts.jetstack.io && helm repo add cnpg https://cloudnative-pg.github.io/charts\nhelm install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --set crds.enabled=true\nhelm install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespace\nkubectl apply -f shop-tls.yaml -f orders-db.yaml\nkubectl get certificate,cluster\nkubectl get pods -l cnpg.io/cluster=orders-db",
+              "output": "NAME: cert-manager\nLAST DEPLOYED: Fri Nov 13 10:02:11 2026\nNAMESPACE: cert-manager\nSTATUS: deployed\nREVISION: 1\nNAME: cnpg\nLAST DEPLOYED: Fri Nov 13 10:02:40 2026\nNAMESPACE: cnpg-system\nSTATUS: deployed\nREVISION: 1\nclusterissuer.cert-manager.io/letsencrypt-staging created\ncertificate.cert-manager.io/shop-tls created\ncluster.postgresql.cnpg.io/orders-db created\n\nNAME                                  READY   SECRET     AGE\ncertificate.cert-manager.io/shop-tls  True    shop-tls   94s\n\nNAME                                 AGE   INSTANCES   READY   STATUS                     PRIMARY\ncluster.postgresql.cnpg.io/orders-db 3m    3           3       Cluster in healthy state   orders-db-1\n\nNAME          READY   STATUS    RESTARTS   AGE\norders-db-1   1/1     Running   0          3m\norders-db-2   1/1     Running   0          2m\norders-db-3   1/1     Running   0          85s",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Operator adoption checklist",
+              "body": "Before adopting: check the project's maturity and release cadence, how CRD upgrades are handled (Helm does not upgrade CRDs in `crds/` after install), what happens if the operator is down (managed workloads usually keep running), backup and restore for stateful operators, resource requests of the operator itself, and RBAC it requests. Pin versions and test upgrades in staging, and never delete a CRD to 'reset' an operator, since that deletes all its data objects."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "List what an operator added",
+              "prompt": "Count the CRDs cert-manager registered and list the certificate resources in all namespaces.",
+              "command": "kubectl get crd | grep cert-manager.io",
+              "expected": "Entries like certificates.cert-manager.io, issuers.cert-manager.io and clusterissuers.cert-manager.io.",
+              "hint": "CRDs are cluster-scoped objects whose names end with their group.",
+              "solution": "kubectl get certificates -A"
+            },
+            {
+              "title": "Scale a database declaratively",
+              "prompt": "Change the CloudNativePG cluster from 3 to 2 instances by patching the custom resource.",
+              "command": "kubectl patch cluster orders-db --type=merge -p '{\"spec\":{\"instances\":2}}'",
+              "expected": "The operator removes a replica; READY becomes 2 after a minute.",
+              "hint": "You edit the desired state; the operator performs the steps.",
+              "solution": "kubectl get cluster orders-db"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What defines an operator?",
+                "options": [
+                  "A Helm chart",
+                  "A CRD plus a controller encoding operational knowledge",
+                  "A kubelet plugin",
+                  "A type of Service"
+                ],
+                "answer": 1,
+                "explain": "The operator pattern pairs custom resources with a controller that automates lifecycle tasks."
+              },
+              {
+                "question": "In the cert-manager example, where does the issued certificate end up?",
+                "options": [
+                  "In etcd as a ConfigMap",
+                  "In the Secret named by spec.secretName",
+                  "On the node filesystem",
+                  "In the Ingress status"
+                ],
+                "answer": 1,
+                "explain": "cert-manager writes tls.crt and tls.key into the Secret you name."
+              },
+              {
+                "question": "If the operator Deployment is down, what usually happens to workloads it created?",
+                "options": [
+                  "They are deleted at once",
+                  "They keep running but are no longer reconciled",
+                  "They restart in a loop",
+                  "They move to another cluster"
+                ],
+                "answer": 1,
+                "explain": "Pods and Services exist independently; only automation (failover, renewal) stops until the operator returns."
+              },
+              {
+                "question": "Why be careful with CRD upgrades from Helm?",
+                "options": [
+                  "CRDs are secret",
+                  "Helm does not upgrade CRDs in the crds/ directory, so they can lag behind the operator",
+                  "CRDs cannot be versioned",
+                  "kubectl blocks it"
+                ],
+                "answer": 1,
+                "explain": "Helm installs crds/ once and skips them on upgrade, so many charts document a separate CRD upgrade step."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-controllers-reconcile",
+            "k8s-helm-basics",
+            "k8s-ingress"
+          ],
+          "tags": [
+            "operators",
+            "cert-manager",
+            "cloudnativepg",
+            "helm"
+          ],
+          "commands": [
+            "helm install",
+            "kubectl get crd",
+            "kubectl get certificate",
+            "kubectl patch"
+          ],
+          "sources": [
+            {
+              "title": "Operator pattern",
+              "url": "https://kubernetes.io/docs/concepts/extend-kubernetes/operator/"
+            },
+            {
+              "title": "cert-manager documentation",
+              "url": "https://cert-manager.io/docs/"
+            },
+            {
+              "title": "CloudNativePG documentation",
+              "url": "https://cloudnative-pg.io/documentation/current/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-admission-extension-points",
+          "title": "Admission, aggregation and extension points",
+          "duration": "13 min",
+          "summary": "Intercept requests with admission policies and webhooks, extend the API with aggregation, and map the CNI, CSI, CRI and device plugin interfaces.",
+          "objectives": [
+            "Place mutating and validating admission in the request flow",
+            "Write a native ValidatingAdmissionPolicy and a webhook configuration safely",
+            "Choose between CRDs, API aggregation and node-level plugin interfaces"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Admission control sits between authorization and etcd",
+              "body": "Every write to the API server passes through authentication, authorization (RBAC), then **admission**, then schema validation and persistence. Admission has two phases: **mutating** admission can change the object (inject a sidecar, set defaults), then **validating** admission can only accept or reject it. Built-in admission plugins such as LimitRanger and ResourceQuota run here, and you can add your own in two ways.\n\nThe modern option is **ValidatingAdmissionPolicy** (GA in v1.30): CEL expressions run inside the API server with no extra service. The classic option is a **webhook**: the API server POSTs an `AdmissionReview` to your HTTPS service, which answers allowed or denied (and for mutation, a JSON patch). Webhooks are powerful but become part of your cluster's availability path."
+            },
+            {
+              "type": "table",
+              "title": "Where each extension mechanism plugs in",
+              "head": [
+                "Mechanism",
+                "Layer",
+                "What it extends",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "CRD + controller",
+                  "API",
+                  "New resource kinds served by the built-in API server",
+                  "Certificate, Cluster"
+                ],
+                [
+                  "Admission policy / webhook",
+                  "API request path",
+                  "Validate or mutate objects on write",
+                  "Require labels, inject Istio sidecar"
+                ],
+                [
+                  "API aggregation (APIService)",
+                  "API",
+                  "Delegates a whole group/version to your own API server",
+                  "metrics.k8s.io served by metrics-server"
+                ],
+                [
+                  "CNI plugin",
+                  "Node networking",
+                  "Pod network setup and IPs; implemented by Calico, Cilium, Flannel",
+                  "/etc/cni/net.d"
+                ],
+                [
+                  "CSI driver",
+                  "Storage",
+                  "Provision, attach and mount volumes; used via StorageClass",
+                  "ebs.csi.aws.com"
+                ],
+                [
+                  "CRI runtime",
+                  "Container runtime",
+                  "Kubelet to runtime gRPC; containerd, CRI-O",
+                  "unix:///run/containerd/containerd.sock"
+                ],
+                [
+                  "Device plugin",
+                  "Node resources",
+                  "Advertise GPUs, FPGAs as extended resources",
+                  "nvidia.com/gpu: 1"
+                ],
+                [
+                  "Scheduler plugins / extender",
+                  "Scheduling",
+                  "Custom filter and score logic",
+                  "Topology-aware scheduling"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a native admission policy",
+              "body": "This pair of objects blocks creation of Deployments without a `team` label, but only in namespaces labeled `env=prod`. The `ValidatingAdmissionPolicy` holds the rule as a CEL `expression`; the binding selects where it applies and sets `validationActions: [Deny]` (use `Warn` or `Audit` first to roll out safely). Apply the file with `kubectl apply -f policy.yaml` and look at `matchConstraints`, `expression` and `message`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "policy.yaml",
+              "code": "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata:\n  name: require-team-label\nspec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n    - apiGroups: [\"apps\"]\n      apiVersions: [\"v1\"]\n      operations: [\"CREATE\", \"UPDATE\"]\n      resources: [\"deployments\"]\n  validations:\n  - expression: \"has(object.metadata.labels) && 'team' in object.metadata.labels\"\n    message: \"Deployments must carry a 'team' label\"\n---\napiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nmetadata:\n  name: require-team-label-prod\nspec:\n  policyName: require-team-label\n  validationActions: [\"Deny\"]\n  matchResources:\n    namespaceSelector:\n      matchLabels:\n        env: prod",
+              "output": null,
+              "note": "Start with validationActions: [Warn, Audit] to see violations in client warnings and audit logs before enforcing."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a validating webhook registration",
+              "body": "This registers an external webhook that is called for every Pod CREATE except in `kube-system` and `policy-system`, and the exclusion of its own namespace is essential. `failurePolicy: Fail` rejects pods when the webhook is unreachable, which is safer for security but can block the whole cluster; `timeoutSeconds: 5` bounds the damage. The CA bundle is injected by cert-manager through the annotation. Look at `rules`, `namespaceSelector` and `clientConfig.service`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "image-policy-webhook.yaml",
+              "code": "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingWebhookConfiguration\nmetadata:\n  name: image-policy.example.com\n  annotations:\n    cert-manager.io/inject-ca-from: policy-system/image-policy-cert\nwebhooks:\n- name: images.policy.example.com\n  admissionReviewVersions: [\"v1\"]\n  sideEffects: None\n  timeoutSeconds: 5\n  failurePolicy: Fail\n  rules:\n  - apiGroups: [\"\"]\n    apiVersions: [\"v1\"]\n    operations: [\"CREATE\"]\n    resources: [\"pods\"]\n  namespaceSelector:\n    matchExpressions:\n    - key: kubernetes.io/metadata.name\n      operator: NotIn\n      values: [\"kube-system\", \"policy-system\"]\n  clientConfig:\n    service:\n      namespace: policy-system\n      name: image-policy\n      path: /validate\n      port: 443",
+              "output": null,
+              "note": "The backing Deployment and Service (image-policy in policy-system) must exist and serve HTTPS /validate before this is applied."
+            },
+            {
+              "type": "text",
+              "title": "About this example: seeing denials and aggregated APIs",
+              "body": "This session creates a Deployment without the label in a prod namespace to see the policy message, then lists APIService objects, which is how aggregated APIs are registered. In the `APIService` list, `Local` means the built-in server answers, while an entry with a service name (such as metrics-server) is aggregated; its `AVAILABLE` column must be `True` or discovery and namespace deletion can hang."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Denials and APIServices",
+              "code": "kubectl create deployment web --image=nginx -n shop-prod\nkubectl get apiservice | head -6\nkubectl get validatingwebhookconfigurations",
+              "output": "error: failed to create deployment: deployments.apps \"web\" is forbidden: ValidatingAdmissionPolicy 'require-team-label' with binding 'require-team-label-prod' denied request: Deployments must carry a 'team' label\n\nNAME                              SERVICE                      AVAILABLE   AGE\nv1.                               Local                        True        41d\nv1.admissionregistration.k8s.io   Local                        True        41d\nv1.apps                           Local                        True        41d\nv1beta1.metrics.k8s.io            kube-system/metrics-server   True        41d\nv1.autoscaling                    Local                        True        41d\n\nNAME                       WEBHOOKS   AGE\nimage-policy.example.com   1          12d",
+              "note": null
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Webhooks can take down a cluster",
+              "body": "A Fail-closed webhook whose pods are themselves blocked by that webhook creates a deadlock. Always exclude the webhook's namespace and `kube-system`, run at least two replicas with a PodDisruptionBudget, keep `timeoutSeconds` low, avoid matching `*` resources, and prefer ValidatingAdmissionPolicy when CEL is enough. Recovery from a broken webhook is `kubectl delete validatingwebhookconfiguration <name>`."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Audit before you enforce",
+              "prompt": "Change the binding from Deny to Warn and create an unlabeled Deployment.",
+              "command": "kubectl create deployment web --image=nginx -n shop-prod",
+              "expected": "The Deployment is created and a Warning line shows the policy message.",
+              "hint": "Edit validationActions in the binding.",
+              "solution": "kubectl patch validatingadmissionpolicybinding require-team-label-prod --type=merge -p '{\"spec\":{\"validationActions\":[\"Warn\"]}}'"
+            },
+            {
+              "title": "Check aggregated APIs are healthy",
+              "prompt": "List APIServices and show any that are not available.",
+              "command": "kubectl get apiservice | grep -v True",
+              "expected": "Only the header line is printed when every APIService is healthy.",
+              "hint": "The AVAILABLE column is the 3rd column.",
+              "solution": "kubectl describe apiservice v1beta1.metrics.k8s.io"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What is the order of API request handling?",
+                "options": [
+                  "Admission, authentication, authorization",
+                  "Authentication, authorization, admission, persistence",
+                  "Persistence, admission, authorization",
+                  "Authorization, persistence, authentication"
+                ],
+                "answer": 1,
+                "explain": "The request is authenticated, authorized, then passes mutating and validating admission before being stored."
+              },
+              {
+                "question": "Which phase can modify an object?",
+                "options": [
+                  "Validating admission",
+                  "Mutating admission",
+                  "Authorization",
+                  "Discovery"
+                ],
+                "answer": 1,
+                "explain": "Mutating webhooks run first and can patch the object; validating ones only allow or deny."
+              },
+              {
+                "question": "What is the main advantage of ValidatingAdmissionPolicy over a webhook?",
+                "options": [
+                  "It can mutate",
+                  "It runs CEL in the API server with no extra service to operate",
+                  "It needs no RBAC",
+                  "It works only on nodes"
+                ],
+                "answer": 1,
+                "explain": "There is no network hop or service to keep available."
+              },
+              {
+                "question": "Which extension point lets you advertise GPUs to the scheduler?",
+                "options": [
+                  "CNI plugin",
+                  "Device plugin",
+                  "CSI driver",
+                  "Ingress controller"
+                ],
+                "answer": 1,
+                "explain": "Device plugins register extended resources like nvidia.com/gpu with the kubelet."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-crds",
+            "k8s-quotas-limitranges",
+            "k8s-rbac"
+          ],
+          "tags": [
+            "admission",
+            "webhooks",
+            "aggregation",
+            "cni",
+            "csi",
+            "cri"
+          ],
+          "commands": [
+            "kubectl get apiservice",
+            "kubectl get validatingwebhookconfigurations",
+            "kubectl create deployment"
+          ],
+          "sources": [
+            {
+              "title": "Admission Controllers",
+              "url": "https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/"
+            },
+            {
+              "title": "Validating Admission Policy",
+              "url": "https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/"
+            },
+            {
+              "title": "Dynamic Admission Control",
+              "url": "https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/"
+            },
+            {
+              "title": "Aggregation layer",
+              "url": "https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/"
+            },
+            {
+              "title": "Compute, Storage, and Networking Extensions",
+              "url": "https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "k8s-operations"
+  ],
+  "track": "kubernetes"
+}

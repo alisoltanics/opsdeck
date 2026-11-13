@@ -1,0 +1,1514 @@
+{
+ "id": "k8s-terraform-essentials",
+ "order": 33,
+ "title": "Terraform: Infrastructure as Code from Zero",
+ "subtitle": "Workflow, HCL, variables, state and safe habits with a hands-on AWS example",
+ "level": "Beginner",
+ "duration": "1h 51m",
+ "icon": "layers",
+ "accent": "violet",
+ "description": "Learn Terraform from scratch using a small AWS example (S3, VPC, EC2): the write, init, plan, apply, destroy workflow, the HCL language, variables and outputs, loops and functions, state, providers and safe plan reading.",
+ "outcomes": [
+  "Describe AWS infrastructure in HCL and manage it with the Terraform workflow",
+  "Make configuration reusable with variables, locals, outputs, for_each and functions",
+  "Protect and inspect state, import resources and detect drift",
+  "Pin provider versions and read plans to avoid risky changes"
+ ],
+ "modules": [
+  {
+   "id": "k8s-tf-foundations",
+   "title": "Foundations",
+   "summary": "Concepts, the workflow, installation and the HCL language.",
+   "lessons": [
+    {
+     "id": "k8s-tf-iac-workflow",
+     "title": "What you will build and the path through this course",
+     "duration": "16 min",
+     "summary": "What Infrastructure as Code is, the five-step Terraform workflow, installing Terraform and giving it AWS credentials without leaking them.",
+     "objectives": [
+      "Explain what Infrastructure as Code is and why it beats clicking in a console",
+      "Run the full write, init, plan, apply, destroy cycle on a real S3 bucket",
+      "Install Terraform 1.6 or newer and verify the version",
+      "Configure AWS credentials with SSO or a named profile and never commit a key"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What you will build and the path through this course",
+       "body": "This course teaches **Terraform** from zero. You do not need to know AWS, HCL or Kubernetes first. Everything is taught with one small AWS example that grows lesson by lesson: first an **S3 bucket**, then a **VPC** (a private network), then an **EC2 instance** (a virtual machine) inside it. At the end you will be able to describe infrastructure in text files, preview every change, apply it safely and tear it down.\n\nThe path: **lesson 1** (this one) gives the concept, the workflow and a working setup. **Lesson 2** teaches the HCL language: blocks, resources, arguments, expressions and data sources. **Lesson 3** adds variables, locals, outputs, types and validation so one code base serves many environments. **Lesson 4** covers the dependency graph, `count`, `for_each`, conditionals, dynamic blocks and functions. **Lesson 5** explains state, the file that makes Terraform work. **Lesson 6** covers providers, version pinning, `fmt` and `validate`. **Lesson 7** teaches how to read a plan and the habits that prevent outages. Later courses (Helm and Amazon EKS) build on this one, because an EKS cluster is created with exactly these tools.\n\n**Infrastructure as Code (IaC)** means you describe servers, networks and storage in text files, keep them in Git, and let a tool make reality match the files. The alternative is clicking in the AWS web console: fast the first time, but nobody can review it, repeat it, or explain six months later why a firewall rule exists.\n\nTerraform is **declarative**. You write the *desired end state* (\"one bucket named X with versioning on\"), not the steps. Terraform compares your files with what exists and computes the steps itself. Running it twice does nothing the second time, a property called **idempotence**. Terraform talks to clouds through plugins called **providers**; the AWS provider knows how to call the AWS API for every service. Each thing you declare is a **resource**, and the record of what Terraform has built is its **state** (lesson 5)."
+      },
+      {
+       "type": "table",
+       "title": "The five-step workflow",
+       "head": [
+        "Step",
+        "Command",
+        "What it does",
+        "Changes real infrastructure?"
+       ],
+       "rows": [
+        [
+         "Write",
+         "(your editor)",
+         "Describe resources in `.tf` files",
+         "No"
+        ],
+        [
+         "Init",
+         "`terraform init`",
+         "Downloads providers, prepares the working directory",
+         "No"
+        ],
+        [
+         "Plan",
+         "`terraform plan`",
+         "Shows exactly what would be created, changed or destroyed",
+         "No"
+        ],
+        [
+         "Apply",
+         "`terraform apply`",
+         "Executes the plan after you type `yes`",
+         "Yes"
+        ],
+        [
+         "Destroy",
+         "`terraform destroy`",
+         "Deletes everything this configuration manages",
+         "Yes"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a first configuration with one S3 bucket",
+       "body": "This is `main.tf`, the smallest useful Terraform project. The `terraform` block pins the Terraform and provider versions, the `provider` block selects the region, and the `resource` block declares one bucket. You will run `terraform init`, `plan` and `apply` against this file in the next examples. Look at the resource: `aws_s3_bucket` is the type, `logs` is your local name, and `bucket` is the real bucket name, which must be globally unique across all AWS accounts."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "main.tf",
+       "code": "terraform {\n  required_version = \">= 1.6.0\"\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"us-east-1\"\n}\n\nresource \"aws_s3_bucket\" \"logs\" {\n  bucket = \"opsdeck-demo-logs-123456789012\"\n\n  tags = {\n    Environment = \"dev\"\n    ManagedBy   = \"terraform\"\n  }\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: init, plan, apply and destroy in one session",
+       "body": "This session runs the four commands in order against the `main.tf` above. `init` downloads the AWS provider and writes `.terraform.lock.hcl`. `plan` is the read-only preview whose left-hand symbols matter: `+` create, `~` update in place, `-` destroy, `-/+` destroy and recreate. `apply` shows the plan again and asks for `yes`, and `destroy` is the mirror image. Values shown as `(known after apply)` are assigned by AWS, and the final `Plan:` and `Apply complete!` lines count the changes."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "The full cycle",
+       "code": "terraform init\nterraform plan\nterraform apply\nterraform destroy",
+       "output": "Initializing the backend...\nInitializing provider plugins...\n- Finding hashicorp/aws versions matching \"~> 5.0\"...\n- Installing hashicorp/aws v5.72.1...\n- Installed hashicorp/aws v5.72.1 (signed by HashiCorp)\n\nTerraform has created a lock file .terraform.lock.hcl to record the provider\nselections it made above. Include this file in your version control repository.\n\nTerraform has been successfully initialized!\n\n--- terraform plan ---\nTerraform used the selected providers to generate the following execution plan.\nResource actions are indicated with the following symbols:\n  + create\n\nTerraform will perform the following actions:\n\n  # aws_s3_bucket.logs will be created\n  + resource \"aws_s3_bucket\" \"logs\" {\n      + arn           = (known after apply)\n      + bucket        = \"opsdeck-demo-logs-123456789012\"\n      + force_destroy = false\n      + id            = (known after apply)\n      + tags          = {\n          + \"Environment\" = \"dev\"\n          + \"ManagedBy\"   = \"terraform\"\n        }\n    }\n\nPlan: 1 to add, 0 to change, 0 to destroy.\n\n--- terraform apply ---\nDo you want to perform these actions?\n  Enter a value: yes\n\naws_s3_bucket.logs: Creating...\naws_s3_bucket.logs: Creation complete after 2s [id=opsdeck-demo-logs-123456789012]\n\nApply complete! Resources: 1 added, 0 changed, 0 destroyed.\n\n--- terraform destroy ---\n  Enter a value: yes\n\naws_s3_bucket.logs: Destroying... [id=opsdeck-demo-logs-123456789012]\naws_s3_bucket.logs: Destruction complete after 1s\n\nDestroy complete! Resources: 1 destroyed.",
+       "note": "Commit `.terraform.lock.hcl` to Git. Never commit the `.terraform/` directory."
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistake: credentials in the code",
+       "body": "Never write `access_key` and `secret_key` inside `.tf` files, and never commit them. Keys in Git are found by scanners within minutes and abused for crypto mining. Use **AWS IAM Identity Center (SSO)** or a named profile in `~/.aws/credentials`, and let Terraform pick them up through the standard AWS credential chain. Add `*.tfstate`, `.terraform/` and `*.auto.tfvars` with secrets to `.gitignore`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: installing Terraform and configuring AWS credentials",
+       "body": "These commands install Terraform from HashiCorp's apt repository on Ubuntu, then configure AWS access with SSO, which issues short-lived credentials instead of permanent keys. `aws configure sso` asks for your start URL and region and creates a named profile. `aws sts get-caller-identity` is the safest first check: it changes nothing and proves which account and role Terraform will act as. Look at the `Account` field to make sure you are not about to change production."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Install and authenticate",
+       "code": "wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg\necho \"deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/hashicorp.list\nsudo apt update && sudo apt install terraform\nterraform version\n\naws configure sso --profile opsdeck-dev\naws sso login --profile opsdeck-dev\nexport AWS_PROFILE=opsdeck-dev\naws sts get-caller-identity",
+       "output": "Terraform v1.9.8\non linux_amd64\n\n{\n    \"UserId\": \"AROAXXXXXXXXXXXXXXXXX:ali\",\n    \"Account\": \"123456789012\",\n    \"Arn\": \"arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Developer_abc123/ali\"\n}",
+       "note": "On macOS use `brew tap hashicorp/tap && brew install hashicorp/tap/terraform`. OpenTofu is a compatible fork; this course uses HashiCorp Terraform."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "IaC means infrastructure described in files and reviewed like code. Terraform is declarative: you state the end result and it computes the steps. The loop is **write, init, plan, apply, destroy**, and `plan` is your safety net because it changes nothing. Credentials come from SSO or a profile, never from the code, and `.terraform.lock.hcl` goes in Git while `.terraform/` and state do not.\n\nNext lesson opens up the `.tf` file itself: you will learn HCL blocks, arguments and expressions, and grow this bucket into a VPC and an EC2 instance."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Run the workflow",
+       "prompt": "Create a folder, save the main.tf above with your own unique bucket name, then initialise it and preview the plan.",
+       "command": "terraform init && terraform plan",
+       "expected": "Plan: 1 to add, 0 to change, 0 to destroy.",
+       "hint": "Bucket names are global; add your account id or initials.",
+       "solution": "terraform init && terraform plan, then terraform apply and terraform destroy when done."
+      },
+      {
+       "title": "Prove who you are",
+       "prompt": "Before any apply, check which AWS account your credentials belong to.",
+       "command": "aws sts get-caller-identity",
+       "expected": "JSON with Account, Arn and UserId of the account you intend to change.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does declarative mean in Terraform?",
+        "options": [
+         "You list the exact steps to run",
+         "You describe the desired end state and Terraform computes the steps",
+         "You write shell scripts",
+         "Changes happen only in the console"
+        ],
+        "answer": 1,
+        "explain": "You state what should exist; Terraform works out the create, update or delete actions."
+       },
+       {
+        "question": "Which command changes nothing and shows what would happen?",
+        "options": [
+         "terraform apply",
+         "terraform destroy",
+         "terraform plan",
+         "terraform init -upgrade"
+        ],
+        "answer": 2,
+        "explain": "plan is read-only; apply and destroy modify infrastructure."
+       },
+       {
+        "question": "In a plan, what does the + symbol mean?",
+        "options": [
+         "Resource will be created",
+         "Resource will be updated in place",
+         "Resource will be destroyed",
+         "Resource is unchanged"
+        ],
+        "answer": 0,
+        "explain": "+ create, ~ update in place, - destroy, -/+ replace."
+       },
+       {
+        "question": "Where should AWS credentials for Terraform come from?",
+        "options": [
+         "access_key in main.tf",
+         "A file committed to Git",
+         "SSO or a named profile via the AWS credential chain",
+         "A public variable default"
+        ],
+        "answer": 2,
+        "explain": "Short-lived SSO or profile credentials keep secrets out of code."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-why-and-architecture",
+      "k8s-helm-basics"
+     ],
+     "tags": [
+      "terraform",
+      "iac",
+      "aws",
+      "workflow"
+     ],
+     "commands": [
+      "terraform init",
+      "terraform plan",
+      "terraform apply",
+      "terraform destroy",
+      "aws sts get-caller-identity"
+     ],
+     "sources": [
+      {
+       "title": "Terraform core workflow",
+       "url": "https://developer.hashicorp.com/terraform/intro/core-workflow"
+      },
+      {
+       "title": "Install Terraform",
+       "url": "https://developer.hashicorp.com/terraform/install"
+      },
+      {
+       "title": "AWS provider authentication",
+       "url": "https://registry.terraform.io/providers/hashicorp/aws/latest/docs#authentication-and-configuration"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tf-hcl-resources",
+     "title": "HCL: blocks, resources, expressions and data sources",
+     "duration": "15 min",
+     "summary": "Read and write the HashiCorp Configuration Language: blocks, arguments, references, expressions and data sources, building a VPC and an EC2 instance.",
+     "objectives": [
+      "Identify block types, labels, arguments and nested blocks in a .tf file",
+      "Reference one resource's attributes from another with resource_type.name.attribute",
+      "Use a data source to look up existing information such as the latest AMI",
+      "Predict what plan will show when an argument changes"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "The shape of HCL: blocks and arguments",
+       "body": "A Terraform configuration is made of **blocks**. A block has a **type**, zero or more **labels**, and a body in braces. Inside the body are **arguments** (`name = value`) and sometimes **nested blocks**. For `resource \"aws_vpc\" \"main\" { ... }` the type is `resource`, the first label `aws_vpc` is the **resource type** (defined by the provider) and the second label `main` is your **local name**, used only inside your code. Together `aws_vpc.main` is the resource's address.\n\nAll `.tf` files in one folder are read together as a single **module**, in any order. The folder you run commands in is the **root module**. Comments start with `#` or `//`, or sit between `/* */`."
+      },
+      {
+       "type": "table",
+       "title": "Block types you use every day",
+       "head": [
+        "Block",
+        "Purpose",
+        "Example"
+       ],
+       "rows": [
+        [
+         "`terraform`",
+         "Version constraints and provider requirements",
+         "`required_version = \">= 1.6.0\"`"
+        ],
+        [
+         "`provider`",
+         "Configures a plugin such as AWS",
+         "`region = \"us-east-1\"`"
+        ],
+        [
+         "`resource`",
+         "Declares something Terraform creates and manages",
+         "`resource \"aws_vpc\" \"main\"`"
+        ],
+        [
+         "`data`",
+         "Reads something that already exists, never creates",
+         "`data \"aws_caller_identity\" \"current\"`"
+        ],
+        [
+         "`variable` / `locals` / `output`",
+         "Inputs, named expressions, results (next lesson)",
+         "`variable \"region\"`"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a VPC, a subnet and expressions",
+       "body": "This `network.tf` file declares a **VPC** (a private virtual network) and one **subnet** (a slice of that network in one availability zone). Look at `vpc_id = aws_vpc.main.id`: that is a **reference**, an expression that reads the `id` attribute of the VPC. Terraform learns from it that the subnet depends on the VPC, so it creates the VPC first. Strings use double quotes, numbers and booleans are bare, and `${}` interpolates a value inside a string."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "network.tf",
+       "code": "resource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n\n  tags = {\n    Name = \"opsdeck-dev\"\n  }\n}\n\nresource \"aws_subnet\" \"public\" {\n  vpc_id                  = aws_vpc.main.id\n  cidr_block              = \"10.0.1.0/24\"\n  availability_zone       = \"us-east-1a\"\n  map_public_ip_on_launch = true\n\n  tags = {\n    Name = \"${aws_vpc.main.tags[\"Name\"]}-public\"\n  }\n}",
+       "output": null,
+       "note": "`cidr_block` is an IP range in CIDR notation; /16 holds 65,536 addresses, /24 holds 256."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a data source and an EC2 instance",
+       "body": "A **data source** (`data` block) reads existing information instead of creating it. Here `aws_ami` asks AWS for the newest Amazon Linux 2023 image, so you never hard-code an AMI id that differs per region. The instance then references it as `data.aws_ami.al2023.id`. This `compute.tf` file uses `aws_subnet.public.id` to place the VM in the subnet; the nested `root_block_device` block shows a block inside a block."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "compute.tf",
+       "code": "data \"aws_ami\" \"al2023\" {\n  most_recent = true\n  owners      = [\"amazon\"]\n\n  filter {\n    name   = \"name\"\n    values = [\"al2023-ami-2023.*-x86_64\"]\n  }\n}\n\nresource \"aws_instance\" \"web\" {\n  ami           = data.aws_ami.al2023.id\n  instance_type = \"t3.micro\"\n  subnet_id     = aws_subnet.public.id\n\n  root_block_device {\n    volume_size = 8\n    encrypted   = true\n  }\n\n  tags = {\n    Name = \"opsdeck-web\"\n  }\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: changing an argument and reading the symbols",
+       "body": "After the first apply, change `instance_type` from `t3.micro` to `t3.small` and run `terraform plan`. The `~` symbol means **update in place**: AWS can resize this instance, so no recreation is needed. Compare it with changing `ami`, which would show `-/+` (destroy and recreate) and a line marked `# forces replacement`. The `->` arrow shows the old value on the left and the new one on the right."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Plan after editing instance_type",
+       "code": "terraform plan",
+       "output": "data.aws_ami.al2023: Reading...\ndata.aws_ami.al2023: Read complete after 1s [id=ami-0c02fb55956c7d316]\naws_vpc.main: Refreshing state... [id=vpc-0a1b2c3d4e5f67890]\naws_subnet.public: Refreshing state... [id=subnet-0123456789abcdef0]\naws_instance.web: Refreshing state... [id=i-0abc123def4567890]\n\nTerraform will perform the following actions:\n\n  # aws_instance.web will be updated in-place\n  ~ resource \"aws_instance\" \"web\" {\n        id            = \"i-0abc123def4567890\"\n      ~ instance_type = \"t3.micro\" -> \"t3.small\"\n        tags          = {\n            \"Name\" = \"opsdeck-web\"\n        }\n        # (30 unchanged attributes hidden)\n    }\n\nPlan: 0 to add, 1 to change, 0 to destroy.",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes in HCL",
+       "body": "Forgetting quotes around a string (`region = us-east-1` is read as an expression and fails). Putting `aws_vpc.main.id` in quotes (`\"aws_vpc.main.id\"` is the literal text, not a reference). Hard-coding ids such as `ami-0c02...` or `vpc-0a1b...` that change per region or account; use data sources and references instead. Reusing the same local name twice for the same resource type, which is an error."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "HCL is blocks with labels, arguments and nested blocks. A resource's address is `type.name`, and writing `type.name.attribute` is a reference that both fetches the value and teaches Terraform the creation order. Data sources read, resources manage. In a plan, `~` is an in-place update with `old -> new`, while `-/+` and `forces replacement` mean downtime risk.\n\nHard-coded values like `10.0.0.0/16` and `us-east-1a` limit reuse. Next lesson introduces variables, locals and outputs to make this code configurable."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Add a subnet",
+       "prompt": "Add a second subnet 10.0.2.0/24 in us-east-1b to network.tf, then plan.",
+       "command": "terraform plan",
+       "expected": "Plan: 1 to add, 0 to change, 0 to destroy.",
+       "hint": "Copy the first subnet and change the local name, cidr_block and availability_zone.",
+       "solution": null
+      },
+      {
+       "title": "Read a data source",
+       "prompt": "Add the aws_caller_identity data source and check it appears in plan output without creating anything.",
+       "command": "terraform plan",
+       "expected": "data.aws_caller_identity.current: Read complete ... and no resource added.",
+       "hint": null,
+       "solution": "data \"aws_caller_identity\" \"current\" {}"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "In resource \"aws_vpc\" \"main\", what is \"main\"?",
+        "options": [
+         "The provider name",
+         "The resource type",
+         "The local name used inside your code",
+         "The AWS id"
+        ],
+        "answer": 2,
+        "explain": "The first label is the type, the second is your local name."
+       },
+       {
+        "question": "What does a data block do?",
+        "options": [
+         "Creates a resource",
+         "Reads existing information",
+         "Stores state",
+         "Destroys a resource"
+        ],
+        "answer": 1,
+        "explain": "Data sources read; they never create or manage anything."
+       },
+       {
+        "question": "What does aws_vpc.main.id inside the subnet do besides reading the id?",
+        "options": [
+         "Nothing",
+         "Creates an implicit dependency so the VPC is made first",
+         "Makes the VPC public",
+         "Deletes the VPC"
+        ],
+        "answer": 1,
+        "explain": "References build the dependency graph."
+       },
+       {
+        "question": "Which plan symbol means update in place?",
+        "options": [
+         "+",
+         "-",
+         "~",
+         "-/+"
+        ],
+        "answer": 2,
+        "explain": "~ means in-place update; -/+ means replacement."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-tf-iac-workflow",
+      "k8s-kubectl-and-declarative"
+     ],
+     "tags": [
+      "terraform",
+      "hcl",
+      "aws",
+      "vpc",
+      "ec2"
+     ],
+     "commands": [
+      "terraform plan",
+      "terraform apply"
+     ],
+     "sources": [
+      {
+       "title": "Terraform configuration language",
+       "url": "https://developer.hashicorp.com/terraform/language"
+      },
+      {
+       "title": "Resources",
+       "url": "https://developer.hashicorp.com/terraform/language/resources/syntax"
+      },
+      {
+       "title": "Data sources",
+       "url": "https://developer.hashicorp.com/terraform/language/data-sources"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-tf-reuse",
+   "title": "Reusable configuration",
+   "summary": "Variables, outputs, loops, conditionals and functions.",
+   "lessons": [
+    {
+     "id": "k8s-tf-variables-outputs",
+     "title": "Variables, locals, outputs and types",
+     "duration": "16 min",
+     "summary": "Make configuration reusable with typed input variables, validation, tfvars files, locals and outputs.",
+     "objectives": [
+      "Declare variables with type, default, description and validation",
+      "Use string, number, bool, list, map, set and object types",
+      "Supply values through tfvars files, -var flags and environment variables, and know their precedence",
+      "Expose results with outputs and mark secrets as sensitive"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Inputs, locals and outputs",
+       "body": "Think of a Terraform module as a function. **Input variables** are its parameters, **locals** are named intermediate values, and **outputs** are its return values. A variable is read as `var.name`, a local as `local.name`. Variables let the same code build `dev` and `prod` with different sizes; locals avoid repeating an expression; outputs print useful facts such as an instance IP and let other modules read your results.\n\nTypes keep inputs honest. Primitive types are `string`, `number` and `bool`. Collection types are `list(string)` (ordered), `set(string)` (unique, unordered) and `map(string)` (key/value). The structural type `object({ ... })` groups named attributes of different types, like a small record."
+      },
+      {
+       "type": "table",
+       "title": "Where variable values come from (lowest to highest precedence)",
+       "head": [
+        "Source",
+        "Example",
+        "Typical use"
+       ],
+       "rows": [
+        [
+         "`default` in the variable block",
+         "`default = \"t3.micro\"`",
+         "Safe fallback"
+        ],
+        [
+         "Environment variable",
+         "`TF_VAR_environment=dev`",
+         "CI pipelines"
+        ],
+        [
+         "`terraform.tfvars` and `*.auto.tfvars`",
+         "`environment = \"dev\"`",
+         "Per-environment file loaded automatically"
+        ],
+        [
+         "`-var-file=prod.tfvars`",
+         "`terraform plan -var-file=prod.tfvars`",
+         "Choosing an environment explicitly"
+        ],
+        [
+         "`-var` flag",
+         "`-var=\"instance_count=3\"`",
+         "One-off override; highest precedence"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: variables.tf with types and validation",
+       "body": "This `variables.tf` declares the inputs for our AWS example. Each variable has a `description`, a `type` and optionally a `default`; a variable with no default is **required** and Terraform prompts for it. The `validation` block runs before any API call and rejects bad input with your own message, which is far friendlier than an AWS error ten minutes into an apply. Note the `object` type with an `optional()` attribute, and `sensitive = true` which hides a value in plan output."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "variables.tf",
+       "code": "variable \"environment\" {\n  description = \"Deployment environment\"\n  type        = string\n\n  validation {\n    condition     = contains([\"dev\", \"staging\", \"prod\"], var.environment)\n    error_message = \"environment must be dev, staging or prod.\"\n  }\n}\n\nvariable \"instance_type\" {\n  type    = string\n  default = \"t3.micro\"\n}\n\nvariable \"allowed_cidrs\" {\n  type    = list(string)\n  default = [\"10.0.0.0/8\"]\n}\n\nvariable \"extra_tags\" {\n  type    = map(string)\n  default = {}\n}\n\nvariable \"volume\" {\n  type = object({\n    size_gb   = number\n    encrypted = optional(bool, true)\n  })\n  default = { size_gb = 8 }\n}\n\nvariable \"db_password\" {\n  type      = string\n  sensitive = true\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: tfvars, locals and outputs",
+       "body": "`dev.tfvars` supplies values for one environment, and you select it with `-var-file`. `locals` builds a common tag map once with `merge()`, so every resource can use `local.common_tags`. The `output` blocks print results after apply; a `sensitive` output is shown as `<sensitive>` in the terminal but still stored in state. Read `dev.tfvars` as plain `name = value` lines with no blocks."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "dev.tfvars, locals.tf and outputs.tf",
+       "code": "# dev.tfvars\nenvironment   = \"dev\"\ninstance_type = \"t3.micro\"\nvolume        = { size_gb = 8 }\nextra_tags    = { Team = \"platform\" }\n\n# locals.tf\nlocals {\n  name_prefix = \"opsdeck-${var.environment}\"\n  common_tags = merge(var.extra_tags, {\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  })\n}\n\n# outputs.tf\noutput \"instance_public_ip\" {\n  description = \"Public IP of the web server\"\n  value       = aws_instance.web.public_ip\n}\n\noutput \"vpc_id\" {\n  value = aws_vpc.main.id\n}",
+       "output": null,
+       "note": "Files named `*.tfvars` holding secrets must be in `.gitignore`. Prefer a secrets manager."
+      },
+      {
+       "type": "text",
+       "title": "About this example: applying with a var file and reading outputs",
+       "body": "`terraform apply -var-file=dev.tfvars` loads the environment values. After `Apply complete!` the **Outputs** block lists each output. `terraform output` reprints them later without applying, and `-raw` prints just the value for use in scripts. An invalid `environment` such as `qa` stops immediately with your validation message and creates nothing."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Apply, output and validation failure",
+       "code": "terraform apply -var-file=dev.tfvars\nterraform output\nterraform output -raw instance_public_ip\nterraform plan -var=\"environment=qa\"",
+       "output": "Apply complete! Resources: 3 added, 0 changed, 0 destroyed.\n\nOutputs:\n\ninstance_public_ip = \"54.210.18.77\"\nvpc_id = \"vpc-0a1b2c3d4e5f67890\"\n\ninstance_public_ip = \"54.210.18.77\"\n54.210.18.77\n\nError: Invalid value for variable\n\n  on variables.tf line 1:\n   1: variable \"environment\" {\n    var.environment is \"qa\"\n\nenvironment must be dev, staging or prod.\n\nThis was checked by the validation rule at variables.tf:5,3-13.",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistakes with variables",
+       "body": "`sensitive = true` only hides values in the terminal. The value is still stored in plain text in the state file, so protect state (lesson 5). Do not give secrets a `default`. Do not confuse `list` with `set`: a set has no order and no duplicates. Remember that `terraform.tfvars` and `*.auto.tfvars` load automatically, but `dev.tfvars` does not unless you pass `-var-file`."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Variables are typed inputs (`var.x`), locals are named expressions (`local.x`), outputs are results. Use `validation` to fail fast with clear messages, tfvars files to separate environments, and remember the precedence: default, environment, tfvars, `-var-file`, `-var`. Mark secrets `sensitive`, but remember state still holds them.\n\nNext lesson shows how Terraform orders operations through its dependency graph and how `count`, `for_each`, conditionals, dynamic blocks and functions remove copy-paste."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Add validation",
+       "prompt": "Add a validation block so instance_type must start with t3.",
+       "command": "terraform plan -var=\"instance_type=m5.large\"",
+       "expected": "Error: Invalid value for variable with your error_message.",
+       "hint": "Use startswith(var.instance_type, \"t3.\").",
+       "solution": "condition = startswith(var.instance_type, \"t3.\")"
+      },
+      {
+       "title": "Print an output",
+       "prompt": "After applying, print only the VPC id for use in a script.",
+       "command": "terraform output -raw vpc_id",
+       "expected": "vpc-0a1b2c3d4e5f67890",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which type groups named attributes of different types?",
+        "options": [
+         "list(string)",
+         "set(string)",
+         "map(string)",
+         "object({...})"
+        ],
+        "answer": 3,
+        "explain": "object defines a record of named, individually typed attributes."
+       },
+       {
+        "question": "A variable without a default is…",
+        "options": [
+         "Optional",
+         "Required, Terraform will prompt for it",
+         "Ignored",
+         "Always empty"
+        ],
+        "answer": 1,
+        "explain": "No default means a value must be provided."
+       },
+       {
+        "question": "Which has the highest precedence?",
+        "options": [
+         "default",
+         "TF_VAR_ environment variable",
+         "terraform.tfvars",
+         "-var on the command line"
+        ],
+        "answer": 3,
+        "explain": "-var and -var-file override everything else."
+       },
+       {
+        "question": "sensitive = true on a variable means…",
+        "options": [
+         "The value is encrypted in state",
+         "The value is hidden in CLI output but still in state",
+         "The variable is optional",
+         "The value is deleted after apply"
+        ],
+        "answer": 1,
+        "explain": "State still stores it in plain text; protect the state."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-tf-hcl-resources",
+      "k8s-kustomize"
+     ],
+     "tags": [
+      "terraform",
+      "variables",
+      "outputs",
+      "tfvars"
+     ],
+     "commands": [
+      "terraform output",
+      "terraform apply -var-file"
+     ],
+     "sources": [
+      {
+       "title": "Input variables",
+       "url": "https://developer.hashicorp.com/terraform/language/values/variables"
+      },
+      {
+       "title": "Output values",
+       "url": "https://developer.hashicorp.com/terraform/language/values/outputs"
+      },
+      {
+       "title": "Type constraints",
+       "url": "https://developer.hashicorp.com/terraform/language/expressions/type-constraints"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tf-graph-loops-functions",
+     "title": "The dependency graph, count, for_each, conditionals, dynamic blocks and functions",
+     "duration": "17 min",
+     "summary": "How Terraform orders operations, and how to remove repetition with count, for_each, conditional expressions, dynamic blocks and built-in functions.",
+     "objectives": [
+      "Explain implicit and explicit dependencies and view the graph",
+      "Choose between count and for_each and know why for_each is safer",
+      "Write conditional expressions and for expressions",
+      "Generate repeated nested blocks with dynamic and use common functions"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "How Terraform decides the order",
+       "body": "Terraform builds a **dependency graph** from your references. If the subnet uses `aws_vpc.main.id`, there is an arrow from subnet to VPC, so the VPC is created first and destroyed last. Resources with no path between them are created **in parallel** (10 at a time by default). This is why you rarely state an order yourself.\n\nA reference creates an **implicit dependency**. When there is a real dependency that Terraform cannot see (for example an IAM policy that must exist before an instance starts, without any attribute being used), add `depends_on = [aws_iam_role_policy.app]`, an **explicit dependency**. Use it sparingly; it makes plans less precise."
+      },
+      {
+       "type": "table",
+       "title": "Ways to repeat or switch resources",
+       "head": [
+        "Feature",
+        "Syntax",
+        "Result",
+        "When to use"
+       ],
+       "rows": [
+        [
+         "`count`",
+         "`count = 3`",
+         "`aws_instance.web[0]`, `[1]`, `[2]`",
+         "N identical copies, or 0/1 as an on/off switch"
+        ],
+        [
+         "`for_each` on a set or map",
+         "`for_each = toset([\"a\",\"b\"])`",
+         "`aws_s3_bucket.b[\"a\"]`",
+         "Distinct items identified by a stable key"
+        ],
+        [
+         "Conditional",
+         "`cond ? x : y`",
+         "Chooses a value",
+         "Environment-specific sizes or flags"
+        ],
+        [
+         "`for` expression",
+         "`[for s in var.list : upper(s)]`",
+         "Builds a new list or map",
+         "Transforming collections"
+        ],
+        [
+         "`dynamic` block",
+         "`dynamic \"ingress\" { for_each = ... }`",
+         "Repeated nested blocks",
+         "Variable-length rules"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: count and for_each",
+       "body": "`count` numbers its copies by position, so removing the middle item shifts every later index and makes Terraform destroy and recreate resources. `for_each` identifies each copy by a **key**, so removing one key affects only that resource. This `buckets.tf` creates one bucket per name with `for_each`, and a bucket that exists only in production using `count` as a switch with a conditional. Inside `for_each`, `each.key` and `each.value` give the current item."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "buckets.tf",
+       "code": "variable \"bucket_names\" {\n  type    = set(string)\n  default = [\"logs\", \"backups\", \"uploads\"]\n}\n\nresource \"aws_s3_bucket\" \"app\" {\n  for_each = var.bucket_names\n  bucket   = \"opsdeck-${var.environment}-${each.key}-123456789012\"\n\n  tags = local.common_tags\n}\n\nresource \"aws_s3_bucket\" \"audit\" {\n  count  = var.environment == \"prod\" ? 1 : 0\n  bucket = \"opsdeck-prod-audit-123456789012\"\n}",
+       "output": null,
+       "note": "Prefer for_each whenever items have natural names. Use count mainly for 0 or 1."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a dynamic block and for expressions",
+       "body": "A security group has many `ingress` nested blocks. Instead of copying them, the `dynamic` block loops over `var.ingress_ports` and creates one block per item; inside it the current item is `ingress.value`. The `locals` block shows a `for` expression building a map from a list. Read it as: for every port, produce an entry. Use dynamic blocks only when the number of blocks truly varies, because they are harder to read than plain blocks."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "security.tf",
+       "code": "variable \"ingress_ports\" {\n  type    = list(number)\n  default = [80, 443]\n}\n\nresource \"aws_security_group\" \"web\" {\n  name   = \"${local.name_prefix}-web\"\n  vpc_id = aws_vpc.main.id\n\n  dynamic \"ingress\" {\n    for_each = var.ingress_ports\n    content {\n      from_port   = ingress.value\n      to_port     = ingress.value\n      protocol    = \"tcp\"\n      cidr_blocks = [\"0.0.0.0/0\"]\n    }\n  }\n}\n\nlocals {\n  port_names = { for p in var.ingress_ports : tostring(p) => \"port-${p}\" }\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: trying functions in terraform console and viewing the graph",
+       "body": "`terraform console` is an interactive prompt where you can test expressions and functions safely, with no changes to infrastructure. Functions are called as `name(args)`. Common ones: `cidrsubnet()` carves a subnet from a bigger range, `merge()` joins maps, `lookup()` reads a map key with a default, `length()`, `join()`, `format()`, `toset()`. `terraform graph` prints the dependency graph in DOT format, which Graphviz can draw."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Console and graph",
+       "code": "terraform console\n> cidrsubnet(\"10.0.0.0/16\", 8, 1)\n> merge({a = 1}, {b = 2})\n> lookup({dev = \"t3.micro\"}, \"prod\", \"t3.large\")\n> join(\"-\", [\"opsdeck\", \"dev\"])\n> [for p in [80, 443] : \"port-${p}\"]\n> exit\nterraform graph | head -8",
+       "output": "> \"10.0.1.0/24\"\n> {\n  \"a\" = 1\n  \"b\" = 2\n}\n> \"t3.large\"\n> \"opsdeck-dev\"\n> [\n  \"port-80\",\n  \"port-443\",\n]\n\ndigraph G {\n  rankdir = \"RL\";\n  node [shape = box];\n  \"aws_instance.web\" [label = \"aws_instance.web\"];\n  \"aws_subnet.public\" [label = \"aws_subnet.public\"];\n  \"aws_instance.web\" -> \"aws_subnet.public\";\n  \"aws_subnet.public\" -> \"aws_vpc.main\";",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes with loops",
+       "body": "Using `count` over a list of names, then deleting one: every later resource is renamed by index and gets replaced. `for_each` keys must be known at plan time, so you cannot key on an attribute like `aws_instance.web.id` that is only known after apply (error: `Invalid for_each argument`). Overusing `depends_on` and `dynamic` makes code and plans hard to read."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "References build the dependency graph; unrelated resources run in parallel; `depends_on` covers hidden dependencies. `for_each` with stable keys beats `count` except for the 0-or-1 switch. Conditionals use `cond ? a : b`, `for` expressions transform collections, `dynamic` blocks repeat nested blocks, and `terraform console` lets you experiment safely.\n\nTerraform can only compute these graphs because it remembers what it built. That memory is the state file, the subject of the next lesson."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Switch with count",
+       "prompt": "Make an audit bucket that exists only when environment is prod, and confirm dev plans it as absent.",
+       "command": "terraform plan -var-file=dev.tfvars",
+       "expected": "No audit bucket in the plan for dev.",
+       "hint": "Use count with a conditional expression.",
+       "solution": null
+      },
+      {
+       "title": "Test a function",
+       "prompt": "In terraform console, carve the third /24 out of 10.0.0.0/16.",
+       "command": "terraform console",
+       "expected": "cidrsubnet(\"10.0.0.0/16\", 8, 2) returns \"10.0.2.0/24\"",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What creates an implicit dependency?",
+        "options": [
+         "depends_on",
+         "A reference to another resource's attribute",
+         "The file order",
+         "The resource name"
+        ],
+        "answer": 1,
+        "explain": "Any reference to another resource builds a graph edge."
+       },
+       {
+        "question": "Why is for_each safer than count for named items?",
+        "options": [
+         "It is faster",
+         "Items are tracked by key, not position",
+         "It uses less memory",
+         "It needs no variables"
+        ],
+        "answer": 1,
+        "explain": "Removing one key affects only that resource; count shifts indexes."
+       },
+       {
+        "question": "What does cond ? \"a\" : \"b\" do?",
+        "options": [
+         "Loops",
+         "Returns a if cond is true, otherwise b",
+         "Imports a resource",
+         "Formats a string"
+        ],
+        "answer": 1,
+        "explain": "It is the conditional expression."
+       },
+       {
+        "question": "When use a dynamic block?",
+        "options": [
+         "Always",
+         "When the number of nested blocks varies",
+         "To create providers",
+         "To declare outputs"
+        ],
+        "answer": 1,
+        "explain": "It generates repeated nested blocks from a collection."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-tf-variables-outputs",
+      "k8s-deployments"
+     ],
+     "tags": [
+      "terraform",
+      "count",
+      "for_each",
+      "functions",
+      "dynamic"
+     ],
+     "commands": [
+      "terraform console",
+      "terraform graph"
+     ],
+     "sources": [
+      {
+       "title": "count",
+       "url": "https://developer.hashicorp.com/terraform/language/meta-arguments/count"
+      },
+      {
+       "title": "for_each",
+       "url": "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+      },
+      {
+       "title": "Dynamic blocks",
+       "url": "https://developer.hashicorp.com/terraform/language/expressions/dynamic-blocks"
+      },
+      {
+       "title": "Functions",
+       "url": "https://developer.hashicorp.com/terraform/language/functions"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-tf-operate",
+   "title": "State, providers and safe operation",
+   "summary": "State, versions, tooling and plan reading.",
+   "lessons": [
+    {
+     "id": "k8s-tf-state",
+     "title": "State: terraform.tfstate, commands, import and drift",
+     "duration": "17 min",
+     "summary": "What the state file is, why losing it hurts, how to inspect and edit it safely, remote state with locking, importing existing resources and detecting drift.",
+     "objectives": [
+      "Explain what terraform.tfstate stores and why Terraform needs it",
+      "Use terraform state list, show, mv and rm",
+      "Configure a remote S3 backend with locking",
+      "Import an existing resource and detect drift with plan -refresh-only"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What state is and why it matters",
+       "body": "The **state** is a JSON file, `terraform.tfstate`, mapping each resource address in your code (`aws_instance.web`) to the real object (`i-0abc123def4567890`) plus all its attributes. Terraform needs it for three jobs: to know what it already manages (so it can plan updates and deletes instead of duplicates), to remember attribute values for the dependency graph, and to speed up planning.\n\nIf state is lost, Terraform believes nothing exists and tries to create everything again. State also contains **secrets in plain text** (database passwords, keys). Therefore: never edit the JSON by hand, never commit it to Git, and for teams keep it in a **remote backend** with encryption, versioning and **locking**, so two people cannot apply at once. **Drift** is when real infrastructure no longer matches state because someone changed it outside Terraform."
+      },
+      {
+       "type": "table",
+       "title": "terraform state and related commands",
+       "head": [
+        "Command",
+        "What it does",
+        "Typical use"
+       ],
+       "rows": [
+        [
+         "`terraform state list`",
+         "Lists every resource address in state",
+         "See what is managed"
+        ],
+        [
+         "`terraform state show ADDR`",
+         "Prints all attributes of one resource",
+         "Inspect a real id or IP"
+        ],
+        [
+         "`terraform state mv OLD NEW`",
+         "Renames an address in state without touching AWS",
+         "After renaming a resource in code"
+        ],
+        [
+         "`terraform state rm ADDR`",
+         "Forgets a resource; AWS object is kept",
+         "Hand a resource to another config"
+        ],
+        [
+         "`terraform import ADDR ID`",
+         "Adopts an existing real resource into state",
+         "Bring console-built resources under control"
+        ],
+        [
+         "`terraform plan -refresh-only`",
+         "Shows drift and offers to update state only",
+         "Detect manual changes"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: inspecting state",
+       "body": "These commands are read-only and safe. `state list` prints one address per line, including data sources and `[\"key\"]` indexes for `for_each`. `state show` prints the full record for one object, so look for `id`, `arn` and tags. Use them when you need a real id for an AWS CLI command or want to confirm that something is managed."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Read the state",
+       "code": "terraform state list\nterraform state show aws_instance.web",
+       "output": "aws_instance.web\naws_subnet.public\naws_vpc.main\ndata.aws_ami.al2023\naws_s3_bucket.app[\"logs\"]\naws_s3_bucket.app[\"backups\"]\n\n# aws_instance.web:\nresource \"aws_instance\" \"web\" {\n    ami                    = \"ami-0c02fb55956c7d316\"\n    arn                    = \"arn:aws:ec2:us-east-1:123456789012:instance/i-0abc123def4567890\"\n    id                     = \"i-0abc123def4567890\"\n    instance_type          = \"t3.small\"\n    private_ip             = \"10.0.1.54\"\n    public_ip              = \"54.210.18.77\"\n    subnet_id              = \"subnet-0123456789abcdef0\"\n    tags                   = {\n        \"Name\" = \"opsdeck-web\"\n    }\n}",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: a remote S3 backend with locking",
+       "body": "This `backend.tf` stores state in an S3 bucket instead of a local file. `use_lockfile = true` (Terraform 1.10 and newer) makes Terraform write a lock object in the same bucket so two applies cannot collide; on older versions use a `dynamodb_table` for locking instead. The bucket should have versioning enabled so you can restore a previous state, and encryption on. After adding or changing the backend you must run `terraform init -migrate-state`, which copies the existing local state into the bucket."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "backend.tf",
+       "code": "terraform {\n  backend \"s3\" {\n    bucket       = \"opsdeck-tfstate-123456789012\"\n    key          = \"dev/network/terraform.tfstate\"\n    region       = \"us-east-1\"\n    encrypt      = true\n    use_lockfile = true\n  }\n}",
+       "output": null,
+       "note": "The state bucket itself is created once by hand or by a separate bootstrap configuration, never by the configuration that uses it."
+      },
+      {
+       "type": "text",
+       "title": "About this example: import and drift detection",
+       "body": "Suppose a teammate created the bucket `opsdeck-dev-legacy-123456789012` in the console. First add an empty `resource \"aws_s3_bucket\" \"legacy\" { bucket = \"opsdeck-dev-legacy-123456789012\" }` block, then `terraform import` attaches the real bucket to that address. Terraform 1.5 and newer also offers a declarative `import` block, which is reviewable in a plan. Afterwards `terraform plan -refresh-only` compares AWS with state: here someone changed a tag by hand and Terraform reports the drift without changing anything."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Import, then detect drift",
+       "code": "terraform import aws_s3_bucket.legacy opsdeck-dev-legacy-123456789012\nterraform plan -refresh-only",
+       "output": "aws_s3_bucket.legacy: Importing from ID \"opsdeck-dev-legacy-123456789012\"...\naws_s3_bucket.legacy: Import prepared!\naws_s3_bucket.legacy: Refreshing state... [id=opsdeck-dev-legacy-123456789012]\n\nImport successful!\n\nThe resources that were imported are shown above. These resources are now in\nyour Terraform state and will henceforth be managed by Terraform.\n\nNote: Objects have changed outside of Terraform\n\nTerraform detected the following changes made outside of Terraform since the\nlast \"terraform apply\" which may have affected this plan:\n\n  # aws_instance.web has changed\n  ~ resource \"aws_instance\" \"web\" {\n        id   = \"i-0abc123def4567890\"\n      ~ tags = {\n          + \"Owner\" = \"someone\"\n            \"Name\"  = \"opsdeck-web\"\n        }\n    }\n\nThis is a refresh-only plan, so Terraform will not take any actions to undo\nthese changes.",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistakes with state",
+       "body": "Committing `terraform.tfstate` to Git (it contains secrets). Deleting `.terraform/` thinking it is state (it is only a cache; state is `terraform.tfstate` or the remote object). Running `state rm` or `state mv` without a backup: first copy it with `terraform state pull > backup.tfstate`. Using `-lock=false` to bypass a lock held by a teammate. Editing infrastructure in the console and forgetting that the next apply will revert it."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "State maps your code to real objects and holds attributes, including secrets. Keep it remote, encrypted, versioned and locked. Inspect it with `state list` and `state show`, rename with `state mv`, forget with `state rm`, adopt existing resources with `import`, and detect drift with `plan -refresh-only`. Always `state pull` a backup before editing.\n\nNext lesson looks at the plugins that do the real work, providers, and how to pin versions so every teammate and CI run behaves identically."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "List and show",
+       "prompt": "List resources in state and show one resource's attributes.",
+       "command": "terraform state list",
+       "expected": "One address per line for each managed resource.",
+       "hint": null,
+       "solution": "terraform state show aws_instance.web"
+      },
+      {
+       "title": "Safe backup",
+       "prompt": "Download a copy of the current state before any risky command.",
+       "command": "terraform state pull > backup.tfstate",
+       "expected": "A JSON file whose top contains \"version\" and \"terraform_version\".",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does terraform.tfstate map?",
+        "options": [
+         "Variables to outputs",
+         "Resource addresses in code to real objects and their attributes",
+         "Providers to versions",
+         "Files to modules"
+        ],
+        "answer": 1,
+        "explain": "It records what exists for each address."
+       },
+       {
+        "question": "What does terraform state rm do?",
+        "options": [
+         "Deletes the AWS resource",
+         "Removes it from state only, the real object stays",
+         "Renames it",
+         "Locks it"
+        ],
+        "answer": 1,
+        "explain": "state rm only forgets the resource."
+       },
+       {
+        "question": "Why use a remote backend with locking?",
+        "options": [
+         "Faster plans only",
+         "Shared, encrypted state and no simultaneous applies",
+         "To avoid providers",
+         "To skip init"
+        ],
+        "answer": 1,
+        "explain": "Teams need a single protected copy and mutual exclusion."
+       },
+       {
+        "question": "Which command shows drift without changing anything?",
+        "options": [
+         "terraform apply",
+         "terraform plan -refresh-only",
+         "terraform destroy",
+         "terraform fmt"
+        ],
+        "answer": 1,
+        "explain": "-refresh-only reports differences between reality and state."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-tf-graph-loops-functions",
+      "k8s-sec-secrets-management"
+     ],
+     "tags": [
+      "terraform",
+      "state",
+      "import",
+      "drift",
+      "backend"
+     ],
+     "commands": [
+      "terraform state list",
+      "terraform state show",
+      "terraform import",
+      "terraform plan -refresh-only"
+     ],
+     "sources": [
+      {
+       "title": "State",
+       "url": "https://developer.hashicorp.com/terraform/language/state"
+      },
+      {
+       "title": "S3 backend",
+       "url": "https://developer.hashicorp.com/terraform/language/backend/s3"
+      },
+      {
+       "title": "Import",
+       "url": "https://developer.hashicorp.com/terraform/language/import"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tf-providers-versions",
+     "title": "Providers, version pinning, fmt and validate",
+     "duration": "14 min",
+     "summary": "How providers work, how to pin Terraform and provider versions, what .terraform.lock.hcl does, and how to keep code tidy and valid.",
+     "objectives": [
+      "Explain what a provider is and declare it in required_providers",
+      "Choose version constraints such as ~> 5.0 and upgrade deliberately",
+      "Explain .terraform.lock.hcl and use terraform init -upgrade",
+      "Use terraform fmt and terraform validate before every commit"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Providers: the plugins that talk to APIs",
+       "body": "Terraform core only knows how to read HCL, build a graph and manage state. Everything else is done by **providers**: separate programs that translate resources into API calls. `hashicorp/aws` knows S3, EC2 and VPC; other providers handle Kubernetes, Helm, GitHub, Cloudflare and more. Providers are downloaded by `terraform init` from the **Terraform Registry** and are versioned independently of Terraform.\n\nYou declare which ones you need in `required_providers`, giving a **source** (`namespace/name`) and a **version constraint**. Version pinning matters because a provider upgrade can rename arguments or change defaults. The big jump from AWS provider 4.x to 5.x, for example, deprecated several inline S3 bucket arguments."
+      },
+      {
+       "type": "table",
+       "title": "Version constraint operators",
+       "head": [
+        "Constraint",
+        "Meaning",
+        "Allows",
+        "Rejects"
+       ],
+       "rows": [
+        [
+         "`= 5.72.1`",
+         "Exactly this version",
+         "5.72.1",
+         "Everything else"
+        ],
+        [
+         "`>= 5.0`",
+         "At least",
+         "5.0, 5.72.1, 6.1",
+         "4.x"
+        ],
+        [
+         "`~> 5.0`",
+         "Pessimistic: stay within 5.x",
+         "5.0 to 5.99",
+         "6.0"
+        ],
+        [
+         "`~> 5.72.0`",
+         "Stay within 5.72.x",
+         "5.72.0 to 5.72.9",
+         "5.73.0"
+        ],
+        [
+         "`>= 5.0, < 6.0`",
+         "Range",
+         "5.x",
+         "6.0 and 4.x"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: versions.tf with two providers and an alias",
+       "body": "This `versions.tf` pins Terraform itself (`required_version`) and two providers. The `aws` provider appears twice: the default one for `us-east-1`, and an **alias** `west` for `us-west-2`, selected on a resource with `provider = aws.west`. The `random` provider is used to generate a unique suffix, a classic fix for the globally-unique bucket name problem. Look at the `~>` constraints, which accept compatible minor updates but never a new major version."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "versions.tf",
+       "code": "terraform {\n  required_version = \">= 1.6.0, < 2.0.0\"\n\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n    random = {\n      source  = \"hashicorp/random\"\n      version = \"~> 3.6\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"us-east-1\"\n\n  default_tags {\n    tags = { ManagedBy = \"terraform\" }\n  }\n}\n\nprovider \"aws\" {\n  alias  = \"west\"\n  region = \"us-west-2\"\n}\n\nresource \"random_id\" \"suffix\" {\n  byte_length = 4\n}\n\nresource \"aws_s3_bucket\" \"dr\" {\n  provider = aws.west\n  bucket   = \"opsdeck-dr-${random_id.suffix.hex}\"\n}",
+       "output": null,
+       "note": "`default_tags` adds the tags to every resource of that provider automatically."
+      },
+      {
+       "type": "text",
+       "title": "About this example: the dependency lock file",
+       "body": "`.terraform.lock.hcl` is created by `terraform init`. It records the exact provider version selected and its checksums (`h1:` and `zh:` hashes), so a teammate or CI job installing later gets the identical binary even if a newer 5.x release exists. Commit it. The constraint says what is *allowed*; the lock file says what was *chosen*. To move forward deliberately run `terraform init -upgrade`, review the diff of the lock file, then plan."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": ".terraform.lock.hcl",
+       "code": "# This file is maintained automatically by \"terraform init\".\n# Manual edits may be lost in future updates.\n\nprovider \"registry.terraform.io/hashicorp/aws\" {\n  version     = \"5.72.1\"\n  constraints = \"~> 5.0\"\n  hashes = [\n    \"h1:Yk3n9qZ0Tn0xk2c7QJd8rG1hX5mY0uWnq1b0m9eZc0M=\",\n    \"zh:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n  ]\n}",
+       "output": null,
+       "note": "Run `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64` so the file has hashes for every OS your team and CI use."
+      },
+      {
+       "type": "text",
+       "title": "About this example: fmt, validate and upgrade",
+       "body": "`terraform fmt` rewrites files to the canonical style (two-space indents, aligned equals signs) and prints the names of files it changed; `-check` only reports and fails in CI. `terraform validate` checks syntax, types and references **without** contacting AWS, so it needs `init` first but no credentials. Here validate catches a typo in a reference. `init -upgrade` moves providers to the newest version allowed by your constraints."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Tidy, check, upgrade",
+       "code": "terraform fmt -recursive\nterraform validate\nterraform init -upgrade",
+       "output": "network.tf\nvariables.tf\n\nError: Reference to undeclared resource\n\n  on compute.tf line 15, in resource \"aws_instance\" \"web\":\n  15:   subnet_id     = aws_subnet.publik.id\n\nA managed resource \"aws_subnet\" \"publik\" has not been declared in the root module.\n\n(after fixing the typo)\nSuccess! The configuration is valid.\n\nInitializing provider plugins...\n- Finding hashicorp/aws versions matching \"~> 5.0\"...\n- Installing hashicorp/aws v5.74.0...\n- Installed hashicorp/aws v5.74.0 (signed by HashiCorp)\n\nTerraform has made some changes to the provider dependency selections recorded\nin the .terraform.lock.hcl file. Review those changes and commit them to your\nversion control system if they represent changes you intended to make.",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes with versions",
+       "body": "No version constraint at all, so a new major release breaks the next init. Pinning too tightly (`= 5.72.1`) and never updating, missing security fixes. Not committing the lock file. Upgrading provider and changing resources in the same commit, which makes plan differences hard to explain. Skipping `fmt` and `validate`, so reviews are full of whitespace noise. Run both in CI, along with `plan`."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Providers are versioned plugins; declare them in `required_providers` with `~>` constraints, and let `.terraform.lock.hcl` freeze the exact build. Upgrade on purpose with `init -upgrade` and review the lock diff. `fmt` standardises style and `validate` catches mistakes offline.\n\nThe last lesson ties everything together: how to read any plan like an expert and the safe habits that prevent production incidents."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Pin a provider",
+       "prompt": "Constrain the aws provider to 5.x and confirm with init.",
+       "command": "terraform init",
+       "expected": "Installed hashicorp/aws v5.x and a lock file entry with constraints = \"~> 5.0\".",
+       "hint": null,
+       "solution": null
+      },
+      {
+       "title": "Check formatting",
+       "prompt": "Run a non-modifying format check, as CI would.",
+       "command": "terraform fmt -check -recursive",
+       "expected": "No output and exit code 0 when everything is formatted; filenames listed otherwise.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does ~> 5.0 allow?",
+        "options": [
+         "Only 5.0",
+         "Any 5.x release, never 6.0",
+         "Any version",
+         "Only 4.x"
+        ],
+        "answer": 1,
+        "explain": "The pessimistic operator allows increases in the last specified component only."
+       },
+       {
+        "question": "What is in .terraform.lock.hcl?",
+        "options": [
+         "Secrets",
+         "State",
+         "Exact selected provider versions and checksums",
+         "Variable values"
+        ],
+        "answer": 2,
+        "explain": "It freezes provider selections; commit it."
+       },
+       {
+        "question": "Does terraform validate call the AWS API?",
+        "options": [
+         "Yes, always",
+         "No, it checks syntax and references offline",
+         "Only for data sources",
+         "Only on apply"
+        ],
+        "answer": 1,
+        "explain": "Validate needs init but no credentials."
+       },
+       {
+        "question": "Which command upgrades providers within constraints?",
+        "options": [
+         "terraform apply",
+         "terraform init -upgrade",
+         "terraform fmt",
+         "terraform refresh"
+        ],
+        "answer": 1,
+        "explain": "init -upgrade re-selects the newest allowed versions."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-tf-state",
+      "k8s-helm-basics"
+     ],
+     "tags": [
+      "terraform",
+      "providers",
+      "versions",
+      "lockfile",
+      "fmt",
+      "validate"
+     ],
+     "commands": [
+      "terraform init -upgrade",
+      "terraform fmt",
+      "terraform validate",
+      "terraform providers"
+     ],
+     "sources": [
+      {
+       "title": "Provider requirements",
+       "url": "https://developer.hashicorp.com/terraform/language/providers/requirements"
+      },
+      {
+       "title": "Dependency lock file",
+       "url": "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+      },
+      {
+       "title": "Version constraints",
+       "url": "https://developer.hashicorp.com/terraform/language/expressions/version-constraints"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tf-plan-reading-safe-habits",
+     "title": "Reading plans and safe habits: common mistakes",
+     "duration": "16 min",
+     "summary": "Read any plan symbol by symbol, spot dangerous replacements, save and review plans, protect critical resources and avoid the classic Terraform mistakes.",
+     "objectives": [
+      "Interpret +, ~, -, -/+ and 'forces replacement' in a plan",
+      "Save a plan with -out and apply exactly that plan",
+      "Protect resources with prevent_destroy, create_before_destroy and ignore_changes",
+      "Follow a checklist that prevents the most common Terraform incidents"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "A plan is a contract: read it before you say yes",
+       "body": "Every apply should be preceded by a plan that a human actually reads. The most important line is the last one: `Plan: X to add, Y to change, Z to destroy.` Anything in the destroy count deserves a pause, especially databases, buckets with data, and networks. The symbols tell the story: **+** create, **~** update in place, **-** destroy, **-/+** destroy then create (replacement), **+/-** create then destroy (when `create_before_destroy` is set), and **<=** read a data source.\n\nWhen a replacement happens, the plan marks the culprit attribute with `# forces replacement`. Some attributes can be changed live (an instance type), others cannot (an AMI, a subnet of a running instance, a bucket name), and Terraform replaces the object instead."
+      },
+      {
+       "type": "table",
+       "title": "Plan symbols and what to do",
+       "head": [
+        "Symbol",
+        "Meaning",
+        "Risk",
+        "Your action"
+       ],
+       "rows": [
+        [
+         "`+`",
+         "Create",
+         "Low, costs money",
+         "Check size and count"
+        ],
+        [
+         "`~`",
+         "Update in place",
+         "Usually low; some updates restart",
+         "Read the `old -> new` values"
+        ],
+        [
+         "`-`",
+         "Destroy",
+         "High, data loss",
+         "Is it intended? Is there a backup?"
+        ],
+        [
+         "`-/+`",
+         "Replace: destroy, then create",
+         "High, downtime and new ids",
+         "Find `# forces replacement` and decide"
+        ],
+        [
+         "`+/-`",
+         "Replace, new one first",
+         "Medium",
+         "Needs `create_before_destroy`"
+        ],
+        [
+         "`<=`",
+         "Read data source",
+         "None",
+         "Informational"
+        ],
+        [
+         "`(known after apply)`",
+         "Value assigned by the provider",
+         "None",
+         "Expected for ids and arns"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a risky plan with a replacement",
+       "body": "Here someone changed the `ami` argument of the web server. Look for the `-/+` marker on the resource, the `# forces replacement` comment on the `ami` line, and the new `public_ip` shown as `(known after apply)`: the server will be destroyed and rebuilt with a new IP address. The summary says `1 to add, 0 to change, 1 to destroy`, a replacement counts once on each side. If this instance held data on its root disk, applying would lose it."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "A plan that forces replacement",
+       "code": "terraform plan",
+       "output": "Terraform will perform the following actions:\n\n  # aws_instance.web must be replaced\n-/+ resource \"aws_instance\" \"web\" {\n      ~ ami           = \"ami-0c02fb55956c7d316\" -> \"ami-0f3c7a1b2d4e5f678\" # forces replacement\n      ~ id            = \"i-0abc123def4567890\" -> (known after apply)\n      ~ public_ip     = \"54.210.18.77\" -> (known after apply)\n      ~ private_ip    = \"10.0.1.54\" -> (known after apply)\n        instance_type = \"t3.small\"\n        tags          = {\n            \"Name\" = \"opsdeck-web\"\n        }\n        # (24 unchanged attributes hidden)\n    }\n\nPlan: 1 to add, 0 to change, 1 to destroy.",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: saving a plan and applying exactly that plan",
+       "body": "`terraform plan -out=tfplan` writes the plan to a binary file. `terraform apply tfplan` then executes precisely that plan without asking again, so nothing can change between review and apply. This is the pattern for CI: plan on the pull request, a human approves, the pipeline applies the saved file. `terraform show` makes a saved plan readable, and `-json` gives machine output for policy tools. Treat the plan file like state: it may contain secrets."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Plan, review, apply the saved plan",
+       "code": "terraform plan -out=tfplan\nterraform show tfplan | head -5\nterraform apply tfplan",
+       "output": "Saved the plan to: tfplan\n\nTo perform exactly these actions, run the following command to apply:\n    terraform apply \"tfplan\"\n\nTerraform will perform the following actions:\n\n  # aws_s3_bucket.app[\"uploads\"] will be created\n\naws_s3_bucket.app[\"uploads\"]: Creating...\naws_s3_bucket.app[\"uploads\"]: Creation complete after 2s [id=opsdeck-dev-uploads-123456789012]\n\nApply complete! Resources: 1 added, 0 changed, 0 destroyed.",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: lifecycle guards for critical resources",
+       "body": "The `lifecycle` block changes how Terraform treats a resource. `prevent_destroy` makes any plan that would destroy the bucket fail with an error, a seatbelt for irreplaceable data. `create_before_destroy` builds the replacement first to reduce downtime. `ignore_changes` tells Terraform to ignore attributes that something else (like an autoscaler) legitimately changes. Look at the `lifecycle` block at the bottom of each resource."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "lifecycle.tf",
+       "code": "resource \"aws_s3_bucket\" \"data\" {\n  bucket = \"opsdeck-prod-data-123456789012\"\n\n  lifecycle {\n    prevent_destroy = true\n  }\n}\n\nresource \"aws_instance\" \"web\" {\n  ami           = data.aws_ami.al2023.id\n  instance_type = \"t3.small\"\n\n  lifecycle {\n    create_before_destroy = true\n    ignore_changes        = [tags[\"LastPatched\"]]\n  }\n}",
+       "output": null,
+       "note": "`prevent_destroy` does not protect you if someone deletes the resource block from the code and removes the guard in the same change; review diffs."
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistakes and safe habits checklist",
+       "body": "1) Applying without reading the destroy count. 2) Using `-auto-approve` on a laptop; reserve it for pipelines that apply a reviewed saved plan. 3) Running against the wrong account: check `aws sts get-caller-identity` first, and use separate state per environment. 4) Hard-coding secrets or committing state. 5) Editing in the console and creating drift. 6) Huge single configurations: split by lifecycle (network, data, apps) so a mistake has a small blast radius. 7) Using `terraform destroy` or `-target` casually; `-target` is for emergencies and leaves state inconsistent with code. 8) Upgrading providers and refactoring at the same time. 9) Not tagging resources, so nobody knows who owns what."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Read the summary line, find every `-` and `-/+`, search for `forces replacement`, and only then approve. Save plans with `-out`, apply that exact file, guard precious resources with `prevent_destroy`, and keep state remote, locked and per environment. With workflow, HCL, variables, loops, state, providers and plan reading you can now manage a real AWS VPC and EC2 stack with confidence.\n\nThe next courses use these skills directly: Helm packages Kubernetes applications, and the Amazon EKS course builds a real cluster with Terraform."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Spot the replacement",
+       "prompt": "Change the ami of the instance and find the line marked forces replacement without applying.",
+       "command": "terraform plan",
+       "expected": "A -/+ block with # forces replacement beside ami.",
+       "hint": null,
+       "solution": null
+      },
+      {
+       "title": "Apply a saved plan",
+       "prompt": "Save a plan to a file and apply exactly that file.",
+       "command": "terraform plan -out=tfplan && terraform apply tfplan",
+       "expected": "Apply complete! with no confirmation prompt.",
+       "hint": null,
+       "solution": null
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does -/+ mean in a plan?",
+        "options": [
+         "Create only",
+         "Replace: destroy and create again",
+         "Read data",
+         "No change"
+        ],
+        "answer": 1,
+        "explain": "A replacement means downtime and new ids."
+       },
+       {
+        "question": "What makes apply run exactly what you reviewed?",
+        "options": [
+         "terraform apply -auto-approve",
+         "terraform apply tfplan from a saved plan",
+         "terraform refresh",
+         "terraform fmt"
+        ],
+        "answer": 1,
+        "explain": "A saved plan file cannot change between review and apply."
+       },
+       {
+        "question": "What does prevent_destroy do?",
+        "options": [
+         "Encrypts the resource",
+         "Fails any plan that would destroy it",
+         "Skips planning",
+         "Hides it from state"
+        ],
+        "answer": 1,
+        "explain": "It acts as a seatbelt against accidental deletion."
+       },
+       {
+        "question": "Which is a safe habit?",
+        "options": [
+         "Share tfstate in Git",
+         "Use -target for routine changes",
+         "Check aws sts get-caller-identity before applying",
+         "Apply with -lock=false"
+        ],
+        "answer": 2,
+        "explain": "Confirming the account prevents changing the wrong environment."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-tf-providers-versions",
+      "k8s-production-checklist"
+     ],
+     "tags": [
+      "terraform",
+      "plan",
+      "lifecycle",
+      "best-practices"
+     ],
+     "commands": [
+      "terraform plan -out",
+      "terraform show",
+      "terraform apply"
+     ],
+     "sources": [
+      {
+       "title": "Plan command",
+       "url": "https://developer.hashicorp.com/terraform/cli/commands/plan"
+      },
+      {
+       "title": "lifecycle meta-argument",
+       "url": "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+      },
+      {
+       "title": "Running Terraform in automation",
+       "url": "https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [],
+ "track": "kubernetes"
+}

@@ -1,0 +1,1487 @@
+{
+ "id": "k8s-helm-essentials",
+ "order": 31,
+ "title": "Helm: Install, Configure and Operate",
+ "subtitle": "Charts, releases, values, upgrades and production practice",
+ "level": "Intermediate",
+ "duration": "2h 2m",
+ "icon": "rocket",
+ "accent": "blue",
+ "description": "Learn Helm 3 from zero: what charts and releases are, how to find and read charts, install them with values files, inspect and operate releases, upgrade and roll back safely, clean up, and run Helm with production discipline.",
+ "outcomes": [
+  "Explain charts, releases, repositories, values and revisions",
+  "Find, read and install charts with --set and values files",
+  "Upgrade, roll back and uninstall releases safely with --atomic and --wait",
+  "Apply production practices: version pinning, per-environment values, diff and OCI",
+  "Troubleshoot failed, pending and conflicting releases"
+ ],
+ "modules": [
+  {
+   "id": "k8s-helm-foundations",
+   "title": "Helm foundations",
+   "summary": "The vocabulary, the client and finding charts.",
+   "lessons": [
+    {
+     "id": "k8s-helm-what-and-why",
+     "title": "Why Helm: charts, releases and values",
+     "duration": "16 min",
+     "summary": "What problem Helm solves, the five core words (chart, release, repository, values, revision) and how to install the Helm CLI.",
+     "objectives": [
+      "Explain the problem Helm solves compared with plain kubectl apply",
+      "Define chart, release, repository, values and revision with an example of each",
+      "Install the Helm 3 client and verify it can reach your cluster",
+      "Describe what a chart directory contains"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What you will build and the path through this course",
+       "body": "In this course you start with an empty cluster and a laptop and end by operating a real application, an **nginx web server from the bitnami/nginx chart**, the way a production team does: installed with a values file, inspected, upgraded safely, rolled back, cleaned up and troubleshot when it fails.\n\nThe path has three modules. **Foundations** (this lesson and the next) defines the vocabulary and shows how to find charts. **Releases** covers installing, inspecting, upgrading, rolling back and uninstalling. **Production** covers version pinning, per-environment values, secrets, the diff plugin, OCI registries and a troubleshooting playbook. Every lesson builds on the previous one, so follow them in order. You should already know Deployments, Services and ConfigMaps from the Workloads course.\n\n**The problem Helm solves:** a real application needs a Deployment, Service, Ingress, ConfigMap and more, copied per environment with image tags and replica counts edited by hand, with no record of what is installed. **Helm** is the package manager for Kubernetes: it bundles manifests as templates, fills them from a few settings, installs them as one named unit and remembers every change so you can upgrade or roll back with one command. Helm 3 is client-only (no server in the cluster) and uses the same kubeconfig as kubectl."
+      },
+      {
+       "type": "table",
+       "title": "The five words you must know",
+       "head": [
+        "Term",
+        "Meaning",
+        "Example"
+       ],
+       "rows": [
+        [
+         "Chart",
+         "A package: a directory (or .tgz) of templates plus default settings and metadata",
+         "bitnami/nginx, version 18.2.4"
+        ],
+        [
+         "Release",
+         "One installed instance of a chart in a cluster and namespace, with a name you choose",
+         "web (nginx chart installed in namespace demo)"
+        ],
+        [
+         "Repository",
+         "An HTTP (or OCI) location that serves an index of charts",
+         "https://charts.bitnami.com/bitnami"
+        ],
+        [
+         "Values",
+         "The settings that fill the templates; chart defaults overridden by your --set or -f",
+         "replicaCount: 3"
+        ],
+        [
+         "Revision",
+         "A numbered snapshot of a release; every install, upgrade or rollback adds one",
+         "REVISION 1, 2, 3 ..."
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a minimal chart layout",
+       "body": "This is what `helm create web` generates, shown as a tree. A chart is only a folder with a fixed shape. Look at **Chart.yaml** (name and version), **values.yaml** (the defaults) and the **templates/** directory (the Kubernetes manifests with Go template placeholders). You will not write charts in this course, but knowing the layout lets you read any chart you install."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "chart layout",
+       "code": "web/\n├── Chart.yaml          # name, chart version, app version, description\n├── values.yaml         # default values (the knobs users can turn)\n├── charts/             # dependency charts (subcharts)\n├── templates/\n│   ├── deployment.yaml # template: image: {{ .Values.image.repository }}\n│   ├── service.yaml\n│   ├── ingress.yaml\n│   ├── _helpers.tpl    # reusable template snippets\n│   └── NOTES.txt       # message printed after install\n└── .helmignore",
+       "output": "$ helm create web\nCreating web",
+       "note": "Templates use Go template syntax: {{ .Values.x }} reads a value, {{ .Release.Name }} reads the release name."
+      },
+      {
+       "type": "text",
+       "title": "About this example: Chart.yaml",
+       "body": "Chart.yaml is the identity card of a chart and is read by `helm show chart`. Note that there are **two** versions: `version` is the version of the chart packaging itself (it changes when templates change) and `appVersion` is the version of the software inside (here nginx). They move independently, which confuses many beginners."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "Chart.yaml",
+       "code": "apiVersion: v2\nname: nginx\ndescription: NGINX Open Source is a web server\ntype: application\nversion: 18.2.4        # chart version: use this when pinning\nappVersion: 1.27.1     # nginx version shipped by default\nkeywords:\n  - nginx\n  - http\n  - web\nmaintainers:\n  - name: Broadcom, Inc. All Rights Reserved.\nkubeVersion: '>=1.23.0-0'",
+       "output": null,
+       "note": "apiVersion: v2 means a Helm 3 chart."
+      },
+      {
+       "type": "text",
+       "title": "About this example: installing the Helm client",
+       "body": "Helm is a single binary. The official install script detects your OS and puts `helm` in /usr/local/bin; package managers such as Homebrew, apt (Helm's official repo), Chocolatey and snap also work. After installing, `helm version` confirms the client, and `helm env` shows where Helm keeps its cache and config. Run these on the machine where kubectl already works."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "install and verify Helm",
+       "code": "curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3\nchmod 700 get_helm.sh\n./get_helm.sh\nhelm version --short\nkubectl config current-context\nhelm env | grep -E 'HELM_(NAMESPACE|KUBECONTEXT|CACHE_HOME|CONFIG_HOME)'",
+       "output": "Downloading https://get.helm.sh/helm-v3.16.2-linux-amd64.tar.gz\nVerifying checksum... Done.\nPreparing to install helm into /usr/local/bin\nhelm installed into /usr/local/bin/helm\nv3.16.2+g13654a5\nkind-opsdeck\nHELM_CACHE_HOME=\"/home/ali/.cache/helm\"\nHELM_CONFIG_HOME=\"/home/ali/.config/helm\"\nHELM_KUBECONTEXT=\"\"\nHELM_NAMESPACE=\"\"",
+       "note": "Helm uses the current kubectl context. Override with --kube-context and -n/--namespace per command."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistake: installing into the wrong cluster",
+       "body": "Helm acts on whatever `kubectl config current-context` points to, with no confirmation. Before any `helm install` or `helm upgrade` on a shared machine, run `kubectl config current-context` or pass `--kube-context` explicitly. Helm 2 needed a server component called Tiller; Helm 3 removed it, so ignore old tutorials that mention `helm init` or Tiller."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Helm packages manifests as a **chart**, fills them with **values**, installs them as a named **release** in a namespace, and records each change as a **revision**. A **repository** is where charts are published. The Helm 3 client needs only a kubeconfig and is now installed. Next lesson: adding repositories, searching for charts and reading a chart's documentation and default values before installing it."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Verify the client",
+       "prompt": "Check your Helm version and that the client sees your kubeconfig context.",
+       "command": "helm version --short && kubectl config current-context",
+       "expected": "A Helm 3 version string such as v3.16.2+g13654a5, then your context name.",
+       "hint": "helm version without --short prints a Go struct.",
+       "solution": "helm version --short; kubectl config current-context"
+      },
+      {
+       "title": "Scaffold a chart",
+       "prompt": "Create a chart skeleton in a temp dir and list its files.",
+       "command": "cd /tmp && helm create demo && ls demo demo/templates",
+       "expected": "Chart.yaml, values.yaml, charts and templates, with deployment.yaml inside templates.",
+       "hint": "helm create writes into the current directory.",
+       "solution": "cd /tmp && helm create demo && ls demo demo/templates"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What is a Helm release?",
+        "options": [
+         "A chart packaged as a .tgz file",
+         "A named installed instance of a chart in a namespace",
+         "A version tag of Kubernetes",
+         "A repository index"
+        ],
+        "answer": 1,
+        "explain": "A release is created by helm install and is identified by name and namespace; the same chart can be installed many times as different releases."
+       },
+       {
+        "question": "Which component does Helm 3 require inside the cluster?",
+        "options": [
+         "Tiller",
+         "A Helm operator",
+         "Nothing; it is client-only",
+         "A dedicated etcd"
+        ],
+        "answer": 2,
+        "explain": "Tiller was removed in Helm 3. The client uses your kubeconfig and stores release state as Secrets."
+       },
+       {
+        "question": "What is the difference between chart version and appVersion?",
+        "options": [
+         "They are always identical",
+         "version is the packaging version, appVersion the software version inside",
+         "appVersion is for Helm itself",
+         "version is for the cluster"
+        ],
+        "answer": 1,
+        "explain": "Chart `version` changes when the chart changes; `appVersion` describes the packaged application and is informational."
+       },
+       {
+        "question": "Which file holds the default settings of a chart?",
+        "options": [
+         "Chart.yaml",
+         "values.yaml",
+         "NOTES.txt",
+         "_helpers.tpl"
+        ],
+        "answer": 1,
+        "explain": "values.yaml provides defaults that --set and -f override."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-deployments",
+      "k8s-configmaps"
+     ],
+     "tags": [
+      "helm",
+      "chart",
+      "release",
+      "values"
+     ],
+     "commands": [
+      "helm version",
+      "helm env",
+      "helm create"
+     ],
+     "sources": [
+      {
+       "title": "Helm documentation",
+       "url": "https://helm.sh/docs/"
+      },
+      {
+       "title": "Using Helm: three big concepts",
+       "url": "https://helm.sh/docs/intro/using_helm/"
+      },
+      {
+       "title": "Installing Helm",
+       "url": "https://helm.sh/docs/intro/install/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helm-repos-search-show",
+     "title": "Repositories, searching and reading a chart",
+     "duration": "15 min",
+     "summary": "Add repositories, search them and Artifact Hub, and use helm show to read a chart's metadata, README and default values before installing.",
+     "objectives": [
+      "Add, update, list and remove chart repositories",
+      "Search added repositories with helm search repo and the public catalog with helm search hub",
+      "List available versions of a chart",
+      "Read chart info with helm show chart, readme, values and all"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Repositories are just an index plus archives",
+       "body": "A chart repository is a web server that exposes an `index.yaml` file listing every chart and version, and the packaged `.tgz` archives it points to. `helm repo add` stores the name and URL locally in your Helm config; `helm repo update` downloads each index into the local cache. Searching and installing then work from that cached index, which is why you must update before looking for new versions.\n\nA repository **name** is a local alias you choose (`bitnami`). Charts are then referred to as `REPO/CHART`, for example `bitnami/nginx`."
+      },
+      {
+       "type": "text",
+       "title": "About this example: adding a repository",
+       "body": "These commands register the Bitnami repository, refresh the local index and list what is configured. The `helm repo list` output shows the alias and URL; the alias is the first half of every `bitnami/...` reference you use later. Run them once per machine."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm repo add, update, list",
+       "code": "helm repo add bitnami https://charts.bitnami.com/bitnami\nhelm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx\nhelm repo update\nhelm repo list",
+       "output": "\"bitnami\" has been added to your repositories\n\"ingress-nginx\" has been added to your repositories\nHang tight while we grab the latest from your chart repositories...\n...Successfully got an update from the \"ingress-nginx\" chart repository\n...Successfully got an update from the \"bitnami\" chart repository\nUpdate Complete. ⎈Happy Helming!⎈\nNAME            URL\nbitnami         https://charts.bitnami.com/bitnami\ningress-nginx   https://kubernetes.github.io/ingress-nginx",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: searching your repositories",
+       "body": "`helm search repo` searches only the repositories you added and reads the local cache. Without flags it shows the latest version of each match. The columns are the full chart name, the chart version, the app version and the description. Add `--versions` to see every published version, which you need when pinning."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm search repo",
+       "code": "helm search repo nginx\nhelm search repo bitnami/nginx --versions | head -5",
+       "output": "NAME                            CHART VERSION   APP VERSION     DESCRIPTION\nbitnami/nginx                   18.2.4          1.27.1          NGINX Open Source is a web server that can be ...\nbitnami/nginx-ingress-controller 11.4.3         1.11.2          NGINX Ingress Controller is an Ingress control...\ningress-nginx/ingress-nginx     4.11.3          1.11.3          Ingress controller for Kubernetes using NGINX a...\nNAME            CHART VERSION   APP VERSION     DESCRIPTION\nbitnami/nginx   18.2.4          1.27.1          NGINX Open Source is a web server that can be ...\nbitnami/nginx   18.2.3          1.27.1          NGINX Open Source is a web server that can be ...\nbitnami/nginx   18.2.2          1.27.0          NGINX Open Source is a web server that can be ...\nbitnami/nginx   18.2.1          1.27.0          NGINX Open Source is a web server that can be ...",
+       "note": "Development and pre-release versions are hidden unless you add --devel."
+      },
+      {
+       "type": "table",
+       "title": "Repo and search commands",
+       "head": [
+        "Command",
+        "Purpose",
+        "Notes"
+       ],
+       "rows": [
+        [
+         "helm repo add NAME URL",
+         "Register a repository alias",
+         "Add --username/--password for private repos"
+        ],
+        [
+         "helm repo update",
+         "Refresh all cached indexes",
+         "Run before searching or upgrading"
+        ],
+        [
+         "helm repo list",
+         "Show configured repositories",
+         "Reads local config only"
+        ],
+        [
+         "helm repo remove NAME",
+         "Delete an alias",
+         "Releases already installed are unaffected"
+        ],
+        [
+         "helm search repo TERM",
+         "Search added repos",
+         "--versions lists all versions; --devel includes pre-releases"
+        ],
+        [
+         "helm search hub TERM",
+         "Search Artifact Hub",
+         "Needs internet; returns URLs"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: reading a chart before installing it",
+       "body": "`helm show` prints information about a chart without installing anything: `chart` is Chart.yaml, `readme` the documentation, `values` the full default values and `all` everything. The values file is the most important: it is the complete list of settings you can override. Save it to a file; it becomes the starting point of your own values file in the next lesson."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm show",
+       "code": "helm show chart bitnami/nginx --version 18.2.4 | head -8\nhelm show values bitnami/nginx --version 18.2.4 > nginx-defaults.yaml\ngrep -nE '^(replicaCount|service:|  type:|  port|image:|  tag)' nginx-defaults.yaml | head\nhelm show readme bitnami/nginx | head -3",
+       "output": "annotations:\n  category: Infrastructure\napiVersion: v2\nappVersion: 1.27.1\ndescription: NGINX Open Source is a web server that can be also used as a reverse proxy\n53:image:\n55:  tag: 1.27.1-debian-12-r2\n188:replicaCount: 1\n380:service:\n382:  type: LoadBalancer\n# NGINX Open Source packaged by Bitnami",
+       "note": "Always pass --version; otherwise Helm shows the newest chart, which may differ from the one you run."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistake: forgetting helm repo update",
+       "body": "If a chart version you were told exists does not appear in `helm search repo`, your cached index is stale. Run `helm repo update` first. Also remember that publishers can change policies: the Bitnami public catalog changed in 2025, so verify in the chart README which image registry and tags a chart uses before relying on it in production."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "You can now add and refresh repositories, search them with `helm search repo` (and the public catalog with `helm search hub`), list versions with `--versions`, and read a chart's defaults with `helm show values`. Next lesson turns this reading into action: installing the nginx chart as a release, overriding values with `--set` and `-f`, choosing a namespace and previewing with `--dry-run` and `helm template`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Add and search",
+       "prompt": "Add the bitnami repo, update, and find the nginx chart.",
+       "command": "helm repo add bitnami https://charts.bitnami.com/bitnami && helm repo update && helm search repo bitnami/nginx",
+       "expected": "A row for bitnami/nginx with chart and app version.",
+       "hint": "The repo must be added before search repo can see it.",
+       "solution": "helm repo add bitnami https://charts.bitnami.com/bitnami; helm repo update; helm search repo bitnami/nginx"
+      },
+      {
+       "title": "Save the defaults",
+       "prompt": "Write the default values of bitnami/nginx to a file and find the service type.",
+       "command": "helm show values bitnami/nginx > nginx-defaults.yaml && grep -n 'type:' nginx-defaults.yaml | head",
+       "expected": "A file with hundreds of lines; service type is LoadBalancer by default.",
+       "hint": "Redirect stdout to a file.",
+       "solution": "helm show values bitnami/nginx > nginx-defaults.yaml"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which command searches only repositories you have added?",
+        "options": [
+         "helm search hub",
+         "helm search repo",
+         "helm repo find",
+         "helm show"
+        ],
+        "answer": 1,
+        "explain": "helm search repo reads the local cache of added repos; search hub queries Artifact Hub."
+       },
+       {
+        "question": "Why run helm repo update?",
+        "options": [
+         "To upgrade releases",
+         "To refresh the cached index of chart versions",
+         "To log in",
+         "To delete old charts"
+        ],
+        "answer": 1,
+        "explain": "It downloads each repo's index.yaml so searches and installs see new versions."
+       },
+       {
+        "question": "Which command prints the default settings of a chart?",
+        "options": [
+         "helm show values",
+         "helm get values",
+         "helm status",
+         "helm show notes"
+        ],
+        "answer": 0,
+        "explain": "helm get values reads an installed release; helm show values reads the chart."
+       },
+       {
+        "question": "How do you list all versions of a chart?",
+        "options": [
+         "helm search repo CHART --versions",
+         "helm list --all",
+         "helm history CHART",
+         "helm repo versions"
+        ],
+        "answer": 0,
+        "explain": "--versions disables the default 'latest only' behaviour."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-what-and-why"
+     ],
+     "tags": [
+      "helm",
+      "repo",
+      "search",
+      "show"
+     ],
+     "commands": [
+      "helm repo add",
+      "helm repo update",
+      "helm search repo",
+      "helm search hub",
+      "helm show values"
+     ],
+     "sources": [
+      {
+       "title": "Helm repo commands",
+       "url": "https://helm.sh/docs/helm/helm_repo/"
+      },
+      {
+       "title": "helm search",
+       "url": "https://helm.sh/docs/helm/helm_search/"
+      },
+      {
+       "title": "helm show",
+       "url": "https://helm.sh/docs/helm/helm_show/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-helm-releases",
+   "title": "Working with releases",
+   "summary": "Install, inspect, upgrade, roll back and remove.",
+   "lessons": [
+    {
+     "id": "k8s-helm-install-release",
+     "title": "Installing a release step by step",
+     "duration": "20 min",
+     "summary": "Install bitnami/nginx, override values with --set and -f, target a namespace, and preview with --dry-run, --debug and helm template.",
+     "objectives": [
+      "Run helm install with a release name, chart and version",
+      "Override values with --set and a values file and know their precedence",
+      "Create the namespace with --create-namespace",
+      "Preview output safely with --dry-run=server, --debug and helm template"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Anatomy of helm install",
+       "body": "`helm install RELEASE_NAME CHART` renders the chart's templates with the effective values, sends the resulting manifests to the API server and records the release as revision 1. The release name must be unique inside its namespace. Namespaces are **not** created by the chart: you pass `-n NAMESPACE` and, if it does not exist, `--create-namespace`.\n\nBefore installing for real, write down four decisions: the release name (`web`), the chart and version (`bitnami/nginx --version 18.2.4`), the namespace (`demo`) and your value overrides. The following examples go from the simplest form to the production form."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a values file",
+       "body": "A values file is plain YAML that mirrors the structure of the chart's values.yaml; you only include keys you change, and Helm merges them over the defaults. Keep it in Git next to your deployment code. Because it is a fragment of a chart configuration and not a Kubernetes object, it is shown as text."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "values-demo.yaml",
+       "code": "replicaCount: 2\n\nservice:\n  type: ClusterIP\n\nresources:\n  requests:\n    cpu: 50m\n    memory: 64Mi\n  limits:\n    memory: 128Mi\n\npodLabels:\n  team: platform\n\nserverBlock: |-\n  server {\n    listen 8080;\n    location / { return 200 'hello from helm\\n'; add_header Content-Type text/plain; }\n    location /healthz { return 200 'ok'; }\n  }",
+       "output": null,
+       "note": "Maps are merged key by key; lists are replaced entirely, not merged."
+      },
+      {
+       "type": "text",
+       "title": "About this example: installing with a values file",
+       "body": "Here `-f` points to the file above. When you pass several `-f` files, later files win, and `--set` wins over every file. This is the precedence chain: chart defaults, then each -f in order, then --set. `--wait` makes Helm wait until Pods are ready, and `--timeout` caps the wait."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm install -f",
+       "code": "helm install web bitnami/nginx --version 18.2.4 -n demo --create-namespace \\\n  -f values-demo.yaml --wait --timeout 3m\nkubectl get deploy web-nginx -n demo",
+       "output": "NAME: web\nLAST DEPLOYED: Thu Nov 13 10:30:19 2026\nNAMESPACE: demo\nSTATUS: deployed\nREVISION: 1\nTEST SUITE: None\nNAME        READY   UP-TO-DATE   AVAILABLE   AGE\nweb-nginx   2/2     2            2           15m",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Install flags you will use daily",
+       "head": [
+        "Flag",
+        "What it does",
+        "Example"
+       ],
+       "rows": [
+        [
+         "-n / --namespace",
+         "Target namespace",
+         "-n demo"
+        ],
+        [
+         "--create-namespace",
+         "Create the namespace if missing",
+         "with -n demo"
+        ],
+        [
+         "--version",
+         "Pin the chart version",
+         "--version 18.2.4"
+        ],
+        [
+         "-f / --values",
+         "Values file, repeatable, later wins",
+         "-f base.yaml -f prod.yaml"
+        ],
+        [
+         "--set / --set-string / --set-json",
+         "Inline overrides, highest precedence",
+         "--set replicaCount=3"
+        ],
+        [
+         "--wait / --timeout",
+         "Wait for readiness, bound the wait",
+         "--wait --timeout 5m"
+        ],
+        [
+         "--dry-run=client|server",
+         "Render without installing; server also validates against the API",
+         "--dry-run=server --debug"
+        ],
+        [
+         "--atomic",
+         "Roll back automatically on failure (see upgrades lesson)",
+         "--atomic"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: previewing with helm template",
+       "body": "`helm template` renders the chart locally and prints the manifests without contacting the cluster, so it works in CI and lets you review exactly what would be created. This is the rendered Service for our values: `type: ClusterIP` came from values-demo.yaml and the labels from the chart's helpers. Pipe it to `kubectl apply --dry-run=server -f -` for API validation."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm template and --dry-run",
+       "code": "helm template web bitnami/nginx --version 18.2.4 -n demo -f values-demo.yaml \\\n  --show-only templates/svc.yaml\nhelm install web bitnami/nginx -n demo -f values-demo.yaml --dry-run=server --debug | head -12",
+       "output": "---\n# Source: nginx/templates/svc.yaml\napiVersion: v1\nkind: Service\nmetadata:\n  name: web-nginx\n  namespace: \"demo\"\n  labels:\n    app.kubernetes.io/instance: web\n    app.kubernetes.io/name: nginx\nspec:\n  type: ClusterIP\n  ports:\n    - name: http\n      port: 80\n      targetPort: http\ninstall.go:225: [debug] Original chart version: \"\"\ninstall.go:242: [debug] CHART PATH: /home/ali/.cache/helm/repository/nginx-18.2.4.tgz\n\nNAME: web\nSTATUS: pending-install\nREVISION: 1",
+       "note": "helm template does not know cluster capabilities; add --validate or --api-versions if a chart branches on them."
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistake: dry-run that hides problems",
+       "body": "`--dry-run=client` (the old default) never asks the API server, so errors such as an unknown API version or an existing object with a conflicting owner appear only on the real install. Use `--dry-run=server` for the closest rehearsal, and add `--debug` to print the computed values and rendered manifests."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "`helm install RELEASE CHART -n NS --create-namespace --version X -f values.yaml` is the production shape; `helm upgrade --install` makes it idempotent. Values precedence is chart defaults, then `-f` files in order, then `--set`. Preview with `helm template` or `--dry-run=server --debug`. Next lesson: inspect the release you created with `helm list`, `status`, `get` and `history`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Install with a values file",
+       "prompt": "Write values-demo.yaml with replicaCount: 2 and install bitnami/nginx as web in demo.",
+       "command": "helm install web bitnami/nginx -n demo --create-namespace -f values-demo.yaml --wait",
+       "expected": "STATUS: deployed and two Running pods.",
+       "hint": "Run kubectl get pods -n demo afterwards.",
+       "solution": "helm install web bitnami/nginx -n demo --create-namespace -f values-demo.yaml --wait"
+      },
+      {
+       "title": "Render only the Deployment",
+       "prompt": "Use helm template to show only the deployment template and find the replicas field.",
+       "command": "helm template web bitnami/nginx -n demo -f values-demo.yaml --show-only templates/deployment.yaml | grep replicas",
+       "expected": "replicas: 2",
+       "hint": "--show-only takes a path relative to the chart.",
+       "solution": "helm template web bitnami/nginx -n demo -f values-demo.yaml --show-only templates/deployment.yaml | grep replicas"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which has the highest precedence?",
+        "options": [
+         "Chart values.yaml",
+         "First -f file",
+         "Last -f file",
+         "--set"
+        ],
+        "answer": 3,
+        "explain": "Order is defaults, -f files left to right, then --set."
+       },
+       {
+        "question": "What does helm upgrade --install do?",
+        "options": [
+         "Always reinstalls",
+         "Installs if missing, upgrades otherwise",
+         "Only upgrades",
+         "Deletes then installs"
+        ],
+        "answer": 1,
+        "explain": "It is the idempotent deployment command."
+       },
+       {
+        "question": "Which flag creates the target namespace?",
+        "options": [
+         "--namespace",
+         "--create-namespace",
+         "--new-ns",
+         "--ns"
+        ],
+        "answer": 1,
+        "explain": "-n only selects the namespace; --create-namespace creates it."
+       },
+       {
+        "question": "Which command renders manifests without a cluster connection?",
+        "options": [
+         "helm template",
+         "helm status",
+         "helm get manifest",
+         "helm lint --strict"
+        ],
+        "answer": 0,
+        "explain": "helm template is purely local."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-repos-search-show",
+      "k8s-namespaces-labels"
+     ],
+     "tags": [
+      "helm",
+      "install",
+      "values",
+      "template"
+     ],
+     "commands": [
+      "helm install",
+      "helm upgrade --install",
+      "helm template",
+      "--dry-run"
+     ],
+     "sources": [
+      {
+       "title": "helm install",
+       "url": "https://helm.sh/docs/helm/helm_install/"
+      },
+      {
+       "title": "Values files",
+       "url": "https://helm.sh/docs/chart_template_guide/values_files/"
+      },
+      {
+       "title": "helm template",
+       "url": "https://helm.sh/docs/helm/helm_template/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helm-inspect-operate",
+     "title": "Inspecting and operating releases",
+     "duration": "15 min",
+     "summary": "Use helm list, status, get values, manifest, notes and hooks, and history to know exactly what is deployed and how it got there.",
+     "objectives": [
+      "List releases across namespaces and read each column",
+      "Read release status and the deployed notes",
+      "Retrieve user-supplied versus computed values and the exact manifest",
+      "Read the revision history of a release"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Where Helm stores release state",
+       "body": "Helm keeps each revision of a release as a Kubernetes **Secret** of type `helm.sh/release.v1` in the release's namespace, named `sh.helm.release.v1.RELEASE.vREVISION`. It contains the chart, the values and the rendered manifest, compressed. This is why Helm needs no server and why `helm list` only needs access to Secrets in the namespace. You can see them with kubectl, but you should read them through Helm commands instead."
+      },
+      {
+       "type": "text",
+       "title": "About this example: helm list",
+       "body": "`helm list` shows releases in the current namespace; `-A` shows all namespaces; `-a` includes failed and uninstalled ones and `--failed` or `--pending` filters by state. Check **STATUS** first: anything other than deployed needs attention. **CHART** is name-version and **APP VERSION** the software version."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm list",
+       "code": "helm list -A\nhelm list -n demo --output yaml | head -9\nhelm status web -n demo | head -6",
+       "output": "NAME      NAMESPACE  REVISION  UPDATED                                  STATUS    CHART         APP VERSION\nweb       demo       3         2026-11-13 10:30:19.4 +0000 UTC          deployed  nginx-18.2.4  1.27.1\ningress   ingress    1         2026-11-12 16:02:55.1 +0000 UTC          deployed  ingress-nginx-4.11.3  1.11.3\n- app_version: 1.27.1\n  chart: nginx-18.2.4\n  name: web\n  namespace: demo\n  revision: \"3\"\n  status: deployed\nNAME: web\nLAST DEPLOYED: Thu Nov 13 10:30:19 2026\nNAMESPACE: demo\nSTATUS: deployed\nREVISION: 3\nTEST SUITE: None",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: helm get values and manifest",
+       "body": "`helm get values` prints only what **you** supplied (the overrides); adding `--all` also prints the merged chart defaults. `helm get manifest` prints the exact YAML that Helm applied for the current revision, and `--revision N` reads an older one. Use these to answer 'what is really deployed?' without trusting your memory or the repository."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm get",
+       "code": "helm get values web -n demo\nhelm get values web -n demo --all | head -5\nhelm get manifest web -n demo | grep -E '^(kind|  name):' | head -6\nhelm get all web -n demo --revision 1 | head -3",
+       "output": "USER-SUPPLIED VALUES:\npodLabels:\n  team: platform\nreplicaCount: 2\nresources:\n  limits:\n    memory: 128Mi\n  requests:\n    cpu: 50m\n    memory: 64Mi\nservice:\n  type: ClusterIP\nCOMPUTED VALUES:\naffinity: {}\narchitecture: standalone\nkind: Deployment\n  name: web-nginx\nkind: Service\n  name: web-nginx\nNAME: web\nLAST DEPLOYED: Thu Nov 13 10:15:42 2026\nNAMESPACE: demo",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: helm history",
+       "body": "`helm history` lists every revision with its status and a description. Statuses: `deployed` (live), `superseded` (replaced by a newer one), `failed`, `uninstalled`, `pending-*` (an operation is in flight or crashed). The history is your audit trail and the menu for rollbacks in the next lesson. Helm keeps 10 revisions by default; change that with `--history-max`."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm history",
+       "code": "helm history web -n demo",
+       "output": "REVISION  UPDATED                   STATUS      CHART         APP VERSION  DESCRIPTION\n1         Thu Nov 13 10:15:42 2026  superseded  nginx-18.2.4  1.27.1       Install complete\n2         Thu Nov 13 10:22:07 2026  superseded  nginx-18.2.4  1.27.1       Upgrade complete\n3         Thu Nov 13 10:30:19 2026  deployed    nginx-18.2.4  1.27.1       Upgrade complete",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Release states",
+       "head": [
+        "Status",
+        "Meaning",
+        "What to do"
+       ],
+       "rows": [
+        [
+         "deployed",
+         "Latest successful revision, live",
+         "Nothing"
+        ],
+        [
+         "superseded",
+         "Replaced by a newer revision",
+         "Candidate for rollback"
+        ],
+        [
+         "failed",
+         "Install or upgrade did not complete",
+         "Read the error, fix, upgrade or rollback"
+        ],
+        [
+         "pending-install / pending-upgrade / pending-rollback",
+         "An operation is running or was interrupted",
+         "Wait; if stuck see troubleshooting lesson"
+        ],
+        [
+         "uninstalling / uninstalled",
+         "Removal in progress or kept by --keep-history",
+         "helm uninstall again or rollback"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "tip",
+       "title": "Compare live objects with the release",
+       "body": "`helm get manifest web -n demo | kubectl diff -f -` shows differences between what Helm believes it deployed and the cluster. Differences mean someone ran `kubectl edit` by hand; the next `helm upgrade` will overwrite them in most cases."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "`helm list` finds releases, `helm status` shows health and notes, `helm get values/manifest/notes/all` show what was configured and applied, and `helm history` is the audit trail. All state lives in Secrets in the release namespace. Next lesson: changing a live release safely with `helm upgrade`, the `--reuse-values` trap, `--atomic`, `--wait`, `--timeout` and `helm rollback`."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "List and read values",
+       "prompt": "List releases in all namespaces, then print the values you supplied to web.",
+       "command": "helm list -A && helm get values web -n demo",
+       "expected": "A table of releases and a YAML block of USER-SUPPLIED VALUES.",
+       "hint": "Use -A for all namespaces.",
+       "solution": "helm list -A; helm get values web -n demo"
+      },
+      {
+       "title": "Read an old revision",
+       "prompt": "Print the manifest of revision 1 of web and count its objects.",
+       "command": "helm get manifest web -n demo --revision 1 | grep -c '^kind:'",
+       "expected": "A number such as 2 or 3.",
+       "hint": "--revision picks the snapshot.",
+       "solution": "helm get manifest web -n demo --revision 1 | grep -c '^kind:'"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Where does Helm store release data?",
+        "options": [
+         "In a database pod",
+         "In Secrets in the release namespace",
+         "In ConfigMaps in kube-system",
+         "On the client only"
+        ],
+        "answer": 1,
+        "explain": "Secrets of type helm.sh/release.v1."
+       },
+       {
+        "question": "Which command shows only your overrides?",
+        "options": [
+         "helm get values RELEASE",
+         "helm show values",
+         "helm get manifest",
+         "helm status"
+        ],
+        "answer": 0,
+        "explain": "get values (without --all) prints user-supplied values."
+       },
+       {
+        "question": "A revision replaced by a newer one has status:",
+        "options": [
+         "deployed",
+         "superseded",
+         "failed",
+         "pending"
+        ],
+        "answer": 1,
+        "explain": "superseded."
+       },
+       {
+        "question": "How do you view an older revision's manifest?",
+        "options": [
+         "helm get manifest --revision N",
+         "helm show manifest N",
+         "helm history N",
+         "helm status N"
+        ],
+        "answer": 0,
+        "explain": "get commands accept --revision."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-install-release",
+      "k8s-secrets"
+     ],
+     "tags": [
+      "helm",
+      "list",
+      "status",
+      "history"
+     ],
+     "commands": [
+      "helm list",
+      "helm status",
+      "helm get values",
+      "helm get manifest",
+      "helm history"
+     ],
+     "sources": [
+      {
+       "title": "helm list",
+       "url": "https://helm.sh/docs/helm/helm_list/"
+      },
+      {
+       "title": "helm get",
+       "url": "https://helm.sh/docs/helm/helm_get/"
+      },
+      {
+       "title": "helm history",
+       "url": "https://helm.sh/docs/helm/helm_history/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helm-upgrade-rollback-uninstall",
+     "title": "Upgrading, rolling back and uninstalling",
+     "duration": "20 min",
+     "summary": "Change a live release safely: --reuse-values versus --reset-values, --atomic, --wait, rollback, and a clean uninstall including PVCs and CRDs.",
+     "objectives": [
+      "Upgrade a release and understand how values are merged",
+      "Choose between --reuse-values, --reset-values and --reset-then-reuse-values",
+      "Use --wait, --timeout and --atomic to make upgrades safe",
+      "Roll back to a previous revision",
+      "Uninstall, use --keep-history and clean up PVCs and CRDs"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "How upgrade computes values",
+       "body": "`helm upgrade RELEASE CHART` renders a new revision and applies it as a three-way merge between the old manifest, the live state and the new manifest. The value handling is the part that surprises people. **By default, upgrade resets to the new chart's defaults and applies only the values you pass this time**; settings from the previous install are forgotten unless you pass them again. Two flags change that:\n\n- `--reuse-values` reuses the previous revision's computed values and merges your new ones on top. New defaults added by a newer chart version are **ignored**, which can break upgrades.\n- `--reset-values` explicitly resets to the new chart defaults, then applies what you pass.\n- `--reset-then-reuse-values` (Helm 3.14+) resets to new chart defaults, then re-applies your previously supplied values, then your new ones. This is usually what people mean by reuse."
+      },
+      {
+       "type": "table",
+       "title": "Value handling during upgrade",
+       "head": [
+        "Flag",
+        "Starting point",
+        "Risk"
+       ],
+       "rows": [
+        [
+         "(none)",
+         "New chart defaults + values you pass now",
+         "Previous overrides silently lost if not re-passed"
+        ],
+        [
+         "--reuse-values",
+         "Last revision's computed values + new ones",
+         "New chart defaults missing, rendering errors after chart bumps"
+        ],
+        [
+         "--reset-values",
+         "New chart defaults + new ones",
+         "Same as none; explicit"
+        ],
+        [
+         "--reset-then-reuse-values",
+         "New defaults + last user values + new ones",
+         "Best of both; needs Helm 3.14 or newer"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "About this example: a failing upgrade with --atomic",
+       "body": "Here an invalid image tag makes the new Pods hang in ImagePullBackOff. Helm waits until the timeout, then automatically restores the previous revision and records both events. The error line tells you why it failed and the history shows the failed revision followed by the rollback. Without --atomic, the release would stay `failed` with broken Pods running."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "atomic failure and auto rollback",
+       "code": "helm upgrade web bitnami/nginx -n demo -f values-demo.yaml \\\n  --set image.tag=does-not-exist --atomic --timeout 90s\nhelm history web -n demo | tail -3",
+       "output": "Error: UPGRADE FAILED: release web failed, and has been rolled back due to atomic being set: context deadline exceeded\nREVISION  UPDATED                   STATUS      CHART         APP VERSION  DESCRIPTION\n4         Thu Nov 13 11:02:14 2026  superseded  nginx-18.2.4  1.27.1       Upgrade complete\n5         Thu Nov 13 11:09:40 2026  failed      nginx-18.2.4  1.27.1       Upgrade \"web\" failed: context deadline exceeded\n6         Thu Nov 13 11:11:12 2026  deployed    nginx-18.2.4  1.27.1       Rollback to 4",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: manual rollback",
+       "body": "`helm rollback RELEASE REVISION` creates a **new** revision whose content is a copy of the chosen old one; history only grows. Omit the revision number to go back one step. Add `--wait` so the command returns when Pods are ready, and `--cleanup-on-fail` to delete resources created during a failed rollback. Rollback restores Kubernetes objects, not data inside PVCs or databases."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm rollback",
+       "code": "helm rollback web 3 -n demo --wait --timeout 3m\nhelm history web -n demo | tail -2",
+       "output": "Rollback was a success! Happy Helming!\nREVISION  UPDATED                   STATUS      CHART         APP VERSION  DESCRIPTION\n6         Thu Nov 13 11:11:12 2026  superseded  nginx-18.2.4  1.27.1       Rollback to 4\n7         Thu Nov 13 11:15:03 2026  deployed    nginx-18.2.4  1.27.1       Rollback to 3",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: what uninstall leaves behind",
+       "body": "This example first uninstalls a release named db (a database chart) with --keep-history, then looks for what Helm left behind. Helm deletes objects it created from templates, but **not** PersistentVolumeClaims created by StatefulSet volumeClaimTemplates, not CRDs installed from a chart's `crds/` directory, and not the namespace. Look for leftovers by the release label and clean them deliberately: deleting a PVC deletes data, so confirm first."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "post-uninstall cleanup",
+       "code": "helm uninstall db -n demo --keep-history\nkubectl get pvc,secret -n demo -l app.kubernetes.io/instance=db\nkubectl delete pvc -n demo -l app.kubernetes.io/instance=db\nkubectl get crd | grep -i monitoring.coreos.com\nkubectl delete namespace demo",
+       "output": "release \"db\" uninstalled\nNAME                                STATUS   VOLUME      CAPACITY   ACCESS MODES   AGE\npersistentvolumeclaim/data-db-0     Bound    pvc-9a1c…   8Gi        RWO            2d\npersistentvolumeclaim \"data-db-0\" deleted\nalertmanagerconfigs.monitoring.coreos.com   2026-11-01T08:00:00Z\nnamespace \"demo\" deleted",
+       "note": "CRDs are shared cluster-wide; deleting one deletes every custom resource of that kind in all namespaces."
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistakes",
+       "body": "1) Upgrading without re-passing earlier --set values, which silently reverts them. 2) Using --reuse-values across chart version bumps. 3) Upgrading without --wait or --atomic and believing 'deployed' means healthy. 4) Deleting CRDs or PVCs to 'clean up' without checking what else uses them. 5) Expecting rollback to undo database migrations or data changes."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Keep all values in files and pass them on every `helm upgrade`; prefer `--reset-then-reuse-values` to `--reuse-values` if you must reuse. Use `--atomic --timeout` for safe upgrades, `helm rollback` to go to an earlier revision (a new revision is created), and `helm uninstall [--keep-history]` followed by deliberate PVC and CRD cleanup. Next: production practices that make all of this repeatable across environments."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Break and recover",
+       "prompt": "Upgrade web with a nonexistent image tag using --atomic and a 60s timeout, then check history.",
+       "command": "helm upgrade web bitnami/nginx -n demo -f values-demo.yaml --set image.tag=nope --atomic --timeout 60s; helm history web -n demo",
+       "expected": "Error ... rolled back; history shows a failed revision then a rollback revision.",
+       "hint": "Pods will sit in ImagePullBackOff until the timeout.",
+       "solution": "helm upgrade web bitnami/nginx -n demo -f values-demo.yaml --set image.tag=nope --atomic --timeout 60s"
+      },
+      {
+       "title": "Uninstall with history",
+       "prompt": "Uninstall web keeping history, list uninstalled releases, then roll it back to life.",
+       "command": "helm uninstall web -n demo --keep-history && helm list -n demo --uninstalled && helm rollback web -n demo",
+       "expected": "The release returns to deployed with a new revision.",
+       "hint": "Only works if history was kept.",
+       "solution": "helm uninstall web -n demo --keep-history; helm rollback web -n demo"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does a plain helm upgrade do with values from the previous install?",
+        "options": [
+         "Keeps them all",
+         "Discards them unless passed again",
+         "Merges them with new defaults",
+         "Stores them in a ConfigMap"
+        ],
+        "answer": 1,
+        "explain": "Without --reuse-values, previous overrides are not retained."
+       },
+       {
+        "question": "What does --atomic do?",
+        "options": [
+         "Disables hooks",
+         "Rolls back automatically on failure and implies --wait",
+         "Deletes old revisions",
+         "Runs tests"
+        ],
+        "answer": 1,
+        "explain": "It restores the previous revision if the upgrade fails or times out."
+       },
+       {
+        "question": "After helm rollback web 3, what happens to history?",
+        "options": [
+         "Revisions 4+ are deleted",
+         "A new revision is added copying revision 3",
+         "Revision 3 becomes current in place",
+         "Nothing"
+        ],
+        "answer": 1,
+        "explain": "Rollback creates a new revision."
+       },
+       {
+        "question": "Which is usually left after helm uninstall of a StatefulSet chart?",
+        "options": [
+         "Deployments",
+         "Services",
+         "PVCs",
+         "ConfigMaps"
+        ],
+        "answer": 2,
+        "explain": "PVCs from volumeClaimTemplates are kept to protect data."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-inspect-operate",
+      "k8s-deployments",
+      "k8s-persistent-storage"
+     ],
+     "tags": [
+      "helm",
+      "upgrade",
+      "rollback",
+      "uninstall"
+     ],
+     "commands": [
+      "helm upgrade",
+      "helm rollback",
+      "helm uninstall",
+      "--atomic",
+      "--reuse-values"
+     ],
+     "sources": [
+      {
+       "title": "helm upgrade",
+       "url": "https://helm.sh/docs/helm/helm_upgrade/"
+      },
+      {
+       "title": "helm rollback",
+       "url": "https://helm.sh/docs/helm/helm_rollback/"
+      },
+      {
+       "title": "helm uninstall",
+       "url": "https://helm.sh/docs/helm/helm_uninstall/"
+      },
+      {
+       "title": "Custom Resource Definitions in Helm",
+       "url": "https://helm.sh/docs/chart_best_practices/custom_resource_definitions/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-helm-production",
+   "title": "Production and troubleshooting",
+   "summary": "Repeatable deployments and fixing failures.",
+   "lessons": [
+    {
+     "id": "k8s-helm-production-practices",
+     "title": "Production practices: versions, environments, secrets, diff and OCI",
+     "duration": "18 min",
+     "summary": "Make Helm deployments repeatable: pin versions, layer values per environment, handle secrets, preview changes with helm diff and use OCI registries.",
+     "objectives": [
+      "Pin chart versions and image tags",
+      "Structure values files per environment and layer them",
+      "Keep secrets out of Git and out of values",
+      "Preview upgrades with the helm diff plugin",
+      "Pull and install charts from an OCI registry"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "About this example: values layered per environment",
+       "body": "Pin the image tag in the base file and pass `--version` for the chart on every deploy. Keep one shared base file and one small file per environment containing only differences. Because later `-f` files win and maps merge key by key, `values-prod.yaml` stays short. Remember lists are replaced wholesale, so avoid putting lists in the base if environments need to extend them."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "values per environment",
+       "code": "# values-base.yaml (shared)\nimage:\n  tag: 1.27.1-debian-12-r2   # pinned, never latest\nreplicaCount: 2\nservice:\n  type: ClusterIP\nresources:\n  requests: { cpu: 50m, memory: 64Mi }\n\n# values-staging.yaml\nreplicaCount: 2\n\n# values-prod.yaml\nreplicaCount: 6\nresources:\n  requests: { cpu: 250m, memory: 256Mi }\n  limits: { memory: 512Mi }\npodDisruptionBudget:\n  create: true\n  minAvailable: 4",
+       "output": "$ helm get values web -n prod\nUSER-SUPPLIED VALUES:\npodDisruptionBudget: {create: true, minAvailable: 4}\nreplicaCount: 6\nresources:\n  limits: {memory: 512Mi}\n  requests: {cpu: 250m, memory: 256Mi}\nservice: {type: ClusterIP}",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: the helm diff plugin",
+       "body": "`helm diff` is a community plugin (databus23/helm-diff) that compares a proposed upgrade with the live release and prints a colored diff of rendered manifests, like `terraform plan`. Install it once, then run it in CI on every pull request. Lines starting with `-` are removed, `+` are added; here only replicas and a PDB change, so the change is safe to approve."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "helm diff upgrade",
+       "code": "helm plugin install https://github.com/databus23/helm-diff\nhelm diff upgrade web bitnami/nginx --version 18.2.4 -n prod \\\n  -f values-base.yaml -f values-prod.yaml --context 2",
+       "output": "Successfully installed plugin: diff\nprod, web-nginx, Deployment (apps) has changed:\n  spec:\n-   replicas: 2\n+   replicas: 6\nprod, web-nginx, PodDisruptionBudget (policy) has been added:\n+ spec:\n+   minAvailable: 4",
+       "note": "Add --detailed-exitcode in CI: exit 2 means changes exist."
+      },
+      {
+       "type": "text",
+       "title": "About this example: referencing an existing Secret",
+       "body": "Values are stored in plain text inside the release Secret and are visible to `helm get values`, so never commit passwords in values files; reference a Secret that lives outside Helm (or use External Secrets, the Secrets Store CSI driver, or SOPS with helm-secrets). This manifest is the Secret you create outside Helm (with SealedSecrets, External Secrets or kubectl). The chart's values then only contain its name. Check the chart README for the exact key (`auth.existingSecret`, `existingSecret` and so on) since it differs per chart."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "title": "web-credentials Secret",
+       "code": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: web-credentials\n  namespace: demo\ntype: Opaque\nstringData:\n  password: change-me-in-real-life\n  token: example-token",
+       "output": "secret/web-credentials created",
+       "note": "Then in values: auth:\\n  existingSecret: web-credentials (chart specific)."
+      },
+      {
+       "type": "text",
+       "title": "About this example: OCI registries",
+       "body": "Helm 3.8+ supports storing charts in OCI registries (Docker Hub, GHCR, ECR, Harbor), which removes the need for a separate repository server and uses the same credentials as container images. You use `oci://` URLs directly, without `helm repo add`. Pin the version on every pull or install, because OCI references have no index to search."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "OCI workflow",
+       "code": "helm registry login ghcr.io -u ali --password-stdin < token.txt\nhelm package ./web --version 1.4.0\nhelm push web-1.4.0.tgz oci://ghcr.io/example/charts\nhelm show chart oci://ghcr.io/example/charts/web --version 1.4.0 | head -3\nhelm install web oci://ghcr.io/example/charts/web --version 1.4.0 -n demo",
+       "output": "Login Succeeded\nSuccessfully packaged chart and saved it to: /home/ali/web-1.4.0.tgz\nPushed: ghcr.io/example/charts/web:1.4.0\nDigest: sha256:3e0f6a1d2b8c91c4a5d7e0b3f4c6a8d9e1b2c3d4f5a6b7c8d9e0f1a2b3c4d5e6\napiVersion: v2\nname: web\nNAME: web\nSTATUS: deployed\nREVISION: 1",
+       "note": null
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "Installing unpinned charts; putting passwords in values-prod.yaml; using `--reuse-values` instead of a complete values set; letting different engineers deploy from laptops with different local files; treating `helm lint` as enough (it checks chart structure, not whether your cluster accepts the result). Add `helm template | kubectl apply --dry-run=server -f -` and `helm diff` to CI."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Pin chart and image versions, keep layered values files in Git, store secrets outside values (existing Secrets, operators, SOPS), review `helm diff` output before every upgrade, deploy with `--atomic`, and prefer OCI registries for your own charts. The final lesson is a troubleshooting playbook for when a release still goes wrong."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Layer two files",
+       "prompt": "Render nginx with a base and a prod file and check the replica count.",
+       "command": "helm template web bitnami/nginx -f values-base.yaml -f values-prod.yaml | grep replicas",
+       "expected": "replicas: 6",
+       "hint": "Later -f wins.",
+       "solution": "helm template web bitnami/nginx -f values-base.yaml -f values-prod.yaml | grep replicas"
+      },
+      {
+       "title": "Preview with diff",
+       "prompt": "Install the diff plugin and diff an upgrade that changes replicaCount.",
+       "command": "helm plugin install https://github.com/databus23/helm-diff && helm diff upgrade web bitnami/nginx -n demo --set replicaCount=4",
+       "expected": "A diff showing replicas changed.",
+       "hint": "Release web must exist.",
+       "solution": "helm diff upgrade web bitnami/nginx -n demo --set replicaCount=4"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Why pin the chart version?",
+        "options": [
+         "It speeds installs",
+         "So deployments are reproducible and upgrades deliberate",
+         "Helm requires it",
+         "To hide values"
+        ],
+        "answer": 1,
+        "explain": "Otherwise the newest chart is used, changing what is deployed."
+       },
+       {
+        "question": "Where are values visible after installing?",
+        "options": [
+         "Nowhere",
+         "In the release Secret and helm get values",
+         "Only in Git",
+         "Only in etcd encryption keys"
+        ],
+        "answer": 1,
+        "explain": "Anyone who can read the release Secret can see them."
+       },
+       {
+        "question": "What does helm diff compare?",
+        "options": [
+         "Two charts",
+         "A proposed upgrade and the live release",
+         "Two clusters",
+         "Two Git branches"
+        ],
+        "answer": 1,
+        "explain": "It renders the new revision and diffs it against the deployed manifest."
+       },
+       {
+        "question": "How do you reference a chart in an OCI registry?",
+        "options": [
+         "helm repo add oci://...",
+         "oci://HOST/PATH/CHART with --version",
+         "helm pull docker://...",
+         "It is not supported"
+        ],
+        "answer": 1,
+        "explain": "OCI references are used directly without repo add."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-upgrade-rollback-uninstall",
+      "k8s-secrets"
+     ],
+     "tags": [
+      "helm",
+      "production",
+      "diff",
+      "oci",
+      "secrets"
+     ],
+     "commands": [
+      "helm plugin install",
+      "helm diff upgrade",
+      "helm push",
+      "helm registry login",
+      "helm package"
+     ],
+     "sources": [
+      {
+       "title": "Helm and OCI registries",
+       "url": "https://helm.sh/docs/topics/registries/"
+      },
+      {
+       "title": "Helm plugins",
+       "url": "https://helm.sh/docs/topics/plugins/"
+      },
+      {
+       "title": "helm-diff plugin",
+       "url": "https://github.com/databus23/helm-diff"
+      },
+      {
+       "title": "Kubernetes Secrets",
+       "url": "https://kubernetes.io/docs/concepts/configuration/secret/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-helm-troubleshooting",
+     "title": "Troubleshooting Helm: failed releases and common errors",
+     "duration": "18 min",
+     "summary": "A symptom-driven playbook: rendering errors, 'cannot re-use a name', failed and pending-upgrade releases, stuck hooks, timeouts and ownership conflicts.",
+     "objectives": [
+      "Separate rendering errors from cluster errors",
+      "Fix 'cannot re-use a name that is still in use'",
+      "Recover releases stuck in failed or pending-* states",
+      "Diagnose stuck hooks, timeouts and 'exists and cannot be imported'"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "About this example: rendering errors",
+       "body": "Helm failures fall into three layers: **render** errors (bad values or templates, before anything is sent), **API** errors (the cluster rejects an object) and **rollout** errors (objects accepted, Pods never ready, visible with --wait). `helm template` isolates the first, `--dry-run=server` the second, `kubectl describe` the third. This render error names the template file and line, and the value path involved. Here the values file has `replicaCount` as a string with a typo'd key, and the Service template reads a missing map. Fix by comparing with `helm show values`; run `helm lint` and `helm template --debug` to see the partially rendered output."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "render errors",
+       "code": "helm install web bitnami/nginx -n demo -f values-bad.yaml\nhelm lint ./web -f values-bad.yaml\nhelm template web bitnami/nginx -f values-bad.yaml --debug | tail -5",
+       "output": "Error: INSTALLATION FAILED: template: nginx/templates/svc.yaml:12:25: executing \"nginx/templates/svc.yaml\" at <.Values.service.port>: nil pointer evaluating interface {}.port\n==> Linting ./web\n[ERROR] values.yaml: - (root): Invalid type. Expected: object, given: string\n[ERROR] templates/: values don't meet the specifications of the schema(s) in the chart\nError: 1 chart(s) linted, 1 chart(s) failed",
+       "note": "A nil pointer on .Values.x.y usually means a parent key was replaced (for example service: ClusterIP instead of service.type)."
+      },
+      {
+       "type": "text",
+       "title": "About this example: cannot re-use a name and ownership conflicts",
+       "body": "This error means a release called `web` already exists in the namespace, in any state including `failed` or `uninstalled` with history kept. Look with `helm list -a`. Decide: upgrade it (use `upgrade --install`), remove it, or pick another name. Release names are unique per namespace, so the same name in a different namespace is fine."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "name and ownership conflicts",
+       "code": "helm install web bitnami/nginx -n demo\nhelm list -a -n demo\nhelm uninstall web -n demo\nkubectl create service clusterip web-nginx --tcp=80:80 -n demo\nhelm install web bitnami/nginx -n demo",
+       "output": "Error: INSTALLATION FAILED: cannot re-use a name that is still in use\nNAME  NAMESPACE  REVISION  UPDATED                                  STATUS    CHART         APP VERSION\nweb   demo       1         2026-11-13 10:15:42.1 +0000 UTC          failed    nginx-18.2.4  1.27.1\nrelease \"web\" uninstalled\nservice/web-nginx created\nError: INSTALLATION FAILED: Unable to continue with install: Service \"web-nginx\" in namespace \"demo\" exists and cannot be imported into the current release: invalid ownership metadata; label validation error: missing key \"app.kubernetes.io/managed-by\": must be set to \"Helm\"; annotation validation error: missing key \"meta.helm.sh/release-name\": must be set to \"web\"",
+       "note": "Name conflict: upgrade, uninstall or rename. Ownership conflict: delete the foreign object, or adopt it by setting label app.kubernetes.io/managed-by=Helm and annotations meta.helm.sh/release-name and meta.helm.sh/release-namespace."
+      },
+      {
+       "type": "text",
+       "title": "About this example: failed and pending-upgrade releases",
+       "body": "A `failed` release can be fixed by running a corrected `helm upgrade` or rolled back. `pending-upgrade` or `pending-install` that never clears means the Helm client was killed (CI cancelled, laptop closed) mid-operation, and Helm now refuses with 'another operation (install/upgrade/rollback) is in progress'. First confirm no process is still running, then roll back to the last good revision, which clears the lock."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "stuck pending release",
+       "code": "helm upgrade web bitnami/nginx -n demo -f values-demo.yaml\nhelm history web -n demo | tail -3\nhelm rollback web 4 -n demo --wait",
+       "output": "Error: UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress\nREVISION  UPDATED                   STATUS           CHART         APP VERSION  DESCRIPTION\n4         Thu Nov 13 11:02:14 2026  deployed         nginx-18.2.4  1.27.1       Upgrade complete\n5         Thu Nov 13 11:20:05 2026  pending-upgrade  nginx-18.2.4  1.27.1       Preparing upgrade\nRollback was a success! Happy Helming!",
+       "note": "If no good revision exists, delete the stuck release Secret (kubectl delete secret sh.helm.release.v1.web.v5 -n demo) as a last resort, after backing it up."
+      },
+      {
+       "type": "text",
+       "title": "About this example: stuck hooks and timeouts",
+       "body": "Hooks are Jobs or Pods that charts run at points like pre-install or post-upgrade (for example a database migration). A hook that never completes blocks the release until `--timeout`. Find the hook Job, read its logs and delete it if it is dead; with `--atomic` the rollback also waits for hooks. For rollout timeouts, inspect Pods rather than Helm."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "debugging hooks and rollouts",
+       "code": "helm get hooks web -n demo | grep -E 'kind|name:|helm.sh/hook'\nkubectl get jobs,pods -n demo\nkubectl logs job/web-migrate -n demo --tail=3\nkubectl describe pod -n demo -l app.kubernetes.io/instance=web | grep -A4 Events",
+       "output": "  name: web-migrate\n  kind: Job\n    \"helm.sh/hook\": pre-upgrade\nNAME                    COMPLETIONS   DURATION   AGE\njob.batch/web-migrate   0/1           9m         9m\nNAME                    READY   STATUS             RESTARTS   AGE\npod/web-migrate-4kqzp   0/1     CrashLoopBackOff   6          9m\nError: connection to db:5432 refused\nEvents:\n  Warning  BackOff  3m  kubelet  Back-off restarting failed container migrate",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Error to action map",
+       "head": [
+        "Message contains",
+        "Layer",
+        "First action"
+       ],
+       "rows": [
+        [
+         "nil pointer evaluating / template: ... executing",
+         "Render",
+         "helm show values, helm template --debug, helm lint"
+        ],
+        [
+         "cannot re-use a name",
+         "State",
+         "helm list -a -n NS; upgrade --install or uninstall"
+        ],
+        [
+         "exists and cannot be imported",
+         "Ownership",
+         "Delete the object or add Helm ownership metadata"
+        ],
+        [
+         "another operation ... is in progress",
+         "State",
+         "Confirm no client running; helm rollback to last deployed"
+        ],
+        [
+         "context deadline exceeded / timed out waiting",
+         "Rollout",
+         "kubectl describe pod, logs; raise --timeout only if the app is genuinely slow"
+        ],
+        [
+         "no matches for kind",
+         "API",
+         "CRDs missing; install CRDs first or check kube version"
+        ],
+        [
+         "Kubernetes cluster unreachable",
+         "Connection",
+         "kubectl config current-context; VPN; kubeconfig path"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "You can classify a Helm failure as render, API or rollout, read the exact error, and apply the matching fix: correct values, resolve name or ownership conflicts, roll back stuck pending-* releases, and investigate hooks and Pods. You have completed the course: you can find charts, install and configure releases, inspect and upgrade them safely, roll back, clean up and run Helm with production discipline. Good next steps are writing your own chart with `helm create`, and the Delivery course on GitOps with Argo CD and Flux, which automate these exact commands."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Find a stuck release",
+       "prompt": "List all releases including failed and pending ones in every namespace.",
+       "command": "helm list -A -a --failed --pending",
+       "expected": "A table that is empty or shows only problem releases.",
+       "hint": "Combine -A, -a and the filters.",
+       "solution": "helm list -A -a --failed --pending"
+      },
+      {
+       "title": "Trigger a name conflict",
+       "prompt": "Install the same release name twice in one namespace and read the error.",
+       "command": "helm install web bitnami/nginx -n demo; helm install web bitnami/nginx -n demo",
+       "expected": "Error: INSTALLATION FAILED: cannot re-use a name that is still in use",
+       "hint": "The second command fails.",
+       "solution": "helm upgrade --install web bitnami/nginx -n demo"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What command shows releases in failed state too?",
+        "options": [
+         "helm list",
+         "helm list -a",
+         "helm status -a",
+         "helm history -a"
+        ],
+        "answer": 1,
+        "explain": "By default helm list hides some states; -a shows all."
+       },
+       {
+        "question": "What does 'another operation is in progress' usually mean?",
+        "options": [
+         "The cluster is busy",
+         "A previous Helm run was interrupted and left pending-*",
+         "Another user is logged in",
+         "A quota is exceeded"
+        ],
+        "answer": 1,
+        "explain": "The release is locked by a pending revision."
+       },
+       {
+        "question": "How do you inspect hooks of a release?",
+        "options": [
+         "helm get hooks",
+         "helm show hooks",
+         "helm hooks list",
+         "kubectl get hooks"
+        ],
+        "answer": 0,
+        "explain": "helm get hooks prints hook manifests."
+       },
+       {
+        "question": "A nil pointer error in a template usually indicates:",
+        "options": [
+         "Bad kubeconfig",
+         "A missing or wrongly typed value",
+         "A full disk",
+         "An old Helm version"
+        ],
+        "answer": 1,
+        "explain": "A parent key is missing or replaced by a scalar."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-upgrade-rollback-uninstall",
+      "k8s-probes-resources"
+     ],
+     "tags": [
+      "helm",
+      "troubleshooting",
+      "hooks",
+      "rollback"
+     ],
+     "commands": [
+      "helm list -a",
+      "helm rollback",
+      "helm get hooks",
+      "helm lint",
+      "helm template --debug"
+     ],
+     "sources": [
+      {
+       "title": "Helm troubleshooting FAQ",
+       "url": "https://helm.sh/docs/faq/troubleshooting/"
+      },
+      {
+       "title": "Chart hooks",
+       "url": "https://helm.sh/docs/topics/charts_hooks/"
+      },
+      {
+       "title": "Debugging templates",
+       "url": "https://helm.sh/docs/chart_template_guide/debugging/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-workloads"
+ ],
+ "track": "kubernetes"
+}

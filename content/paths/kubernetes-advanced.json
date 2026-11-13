@@ -1,0 +1,67 @@
+{
+  "id": "kubernetes-advanced",
+  "title": "Advanced Kubernetes",
+  "subtitle": "Scheduling, security, extending, delivery and reliability",
+  "level": "Advanced",
+  "duration": "8h 09m",
+  "icon": "server-cog",
+  "accent": "red",
+  "description": "Go beyond day-to-day operations: scheduling and capacity, security in depth, extending the API, delivery pipelines, reliability and cluster internals.",
+  "prerequisites": [],
+  "outcomes": [
+    "Place and scale workloads deliberately",
+    "Harden a cluster end to end",
+    "Build on the Kubernetes API",
+    "Ship with GitOps and progressive delivery",
+    "Run and debug production clusters"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "k8s-operations",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "k8s-scheduling-advanced",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "k8s-security-advanced",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "k8s-extending",
+      "description": ""
+    },
+    {
+      "title": "Stage 5",
+      "courseId": "k8s-delivery",
+      "description": ""
+    },
+    {
+      "title": "Stage 6",
+      "courseId": "k8s-reliability",
+      "description": ""
+    },
+    {
+      "title": "Stage 7",
+      "courseId": "k8s-cluster-admin",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "k8s-operations",
+      "k8s-scheduling-advanced",
+      "k8s-security-advanced",
+      "k8s-extending",
+      "k8s-delivery",
+      "k8s-reliability",
+      "k8s-cluster-admin"
+    ]
+  }
+}

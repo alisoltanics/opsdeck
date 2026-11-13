@@ -1,0 +1,47 @@
+{
+  "id": "eks-engineer",
+  "title": "EKS Engineer",
+  "subtitle": "Build, secure and operate Kubernetes on AWS",
+  "level": "Advanced",
+  "duration": "8h 17m",
+  "icon": "cloud",
+  "accent": "amber",
+  "description": "Create an EKS cluster, understand access and networking, then run it in production with IAM, Karpenter, observability and upgrades.",
+  "prerequisites": [],
+  "outcomes": [
+    "Create and access an EKS cluster",
+    "Give workloads least-privilege AWS access",
+    "Scale, observe and upgrade in production"
+  ],
+  "stages": [
+    {
+      "title": "Stage 1",
+      "courseId": "k8s-workloads",
+      "description": ""
+    },
+    {
+      "title": "Stage 2",
+      "courseId": "k8s-eks-essentials",
+      "description": ""
+    },
+    {
+      "title": "Stage 3",
+      "courseId": "k8s-terraform-essentials",
+      "description": ""
+    },
+    {
+      "title": "Stage 4",
+      "courseId": "k8s-eks-production",
+      "description": ""
+    }
+  ],
+  "completion": {
+    "type": "all_courses",
+    "courseIds": [
+      "k8s-workloads",
+      "k8s-eks-essentials",
+      "k8s-terraform-essentials",
+      "k8s-eks-production"
+    ]
+  }
+}

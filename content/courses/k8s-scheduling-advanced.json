@@ -1,0 +1,1072 @@
+{
+  "id": "k8s-scheduling-advanced",
+  "order": 25,
+  "title": "Advanced Scheduling and Capacity",
+  "subtitle": "Scheduler internals, placement rules, spreading, priorities and autoscaling",
+  "level": "Advanced",
+  "duration": "1h 5m",
+  "icon": "server-cog",
+  "accent": "cyan",
+  "description": "Understand exactly how Kubernetes places pods and plan the capacity behind them: scheduler phases, QoS, affinity, taints, topology spread, priorities, PDBs and autoscaling.",
+  "outcomes": [
+    "Explain why a pod is Pending and which rule blocked it",
+    "Design placement with affinity, taints and topology spread for zone-level HA",
+    "Combine priorities, PDBs and autoscalers into a safe capacity strategy"
+  ],
+  "modules": [
+    {
+      "id": "k8s-sched-foundations",
+      "title": "How placement works",
+      "summary": "Scheduler decisions, resource accounting and placement rules.",
+      "lessons": [
+        {
+          "id": "k8s-scheduler-decisions",
+          "title": "How the scheduler decides",
+          "duration": "13 min",
+          "summary": "Filter and score phases, requests versus limits, QoS classes and node-pressure eviction.",
+          "objectives": [
+            "Describe the scheduler filter and score phases",
+            "Explain why scheduling uses requests, not limits or live usage",
+            "Predict the QoS class of a pod and its eviction order"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Filter, then score, then bind",
+              "body": "For every unscheduled pod, `kube-scheduler` runs a **scheduling cycle**. In the **filter** phase (predicates) it removes every node that cannot run the pod: not enough allocatable CPU or memory, untolerated taints, a failing `nodeSelector` or affinity rule, a missing volume zone, or a port conflict. If no node survives, the pod stays `Pending` with a `FailedScheduling` event.\n\nIn the **score** phase the surviving nodes get 0-100 points from plugins such as `NodeResourcesFit` (spread or bin-pack), `ImageLocality`, `InterPodAffinity` and `PodTopologySpread`. The highest score wins, ties are broken randomly, and the **bind** step writes `spec.nodeName`. The kubelet on that node then starts the containers."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a pod that cannot be scheduled",
+              "body": "This is the output of `kubectl describe pod` for a pod requesting more memory than any node has free. The `Events:` block is where the scheduler explains its filter phase: read the sentence after `0/3 nodes are available` and count how many nodes each reason removed. Run it as soon as a pod stays Pending for more than a few seconds."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "Pending pod events",
+              "code": "kubectl describe pod big-job-7c9d5-x2k4q | sed -n '/Events:/,$p'",
+              "output": "Events:\n  Type     Reason            Age   From               Message\n  ----     ------            ----  ----               -------\n  Warning  FailedScheduling  42s   default-scheduler  0/3 nodes are available: 1 node(s) had untolerated taint {node-role.kubernetes.io/control-plane: }, 2 Insufficient memory. preemption: 0/3 nodes are available: 1 Preemption is not helpful for scheduling, 2 No preemption victims found for incoming pod.",
+              "note": "Reasons are per node and add up to the node count. Here 1 + 2 = 3 nodes."
+            },
+            {
+              "type": "table",
+              "title": "Requests versus limits",
+              "head": [
+                "Field",
+                "Used by",
+                "Meaning",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "requests.cpu",
+                  "Scheduler, kubelet (cpu.shares / weight)",
+                  "Guaranteed share, counted against node allocatable",
+                  "250m = a quarter core"
+                ],
+                [
+                  "requests.memory",
+                  "Scheduler, eviction ranking",
+                  "Reserved amount, counted against allocatable",
+                  "512Mi"
+                ],
+                [
+                  "limits.cpu",
+                  "Kernel CFS quota",
+                  "Throttled above this, never killed",
+                  "1 = one core max"
+                ],
+                [
+                  "limits.memory",
+                  "Kernel OOM killer",
+                  "Container is OOMKilled above this",
+                  "1Gi"
+                ],
+                [
+                  "ephemeral-storage",
+                  "Scheduler and kubelet eviction",
+                  "Scratch disk, logs, emptyDir",
+                  "2Gi"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a pod with explicit requests and limits",
+              "body": "This is a complete Deployment applied with `kubectl apply -f api.yaml`. Look at the `resources` block: the scheduler only reads `requests` (500m CPU, 512Mi memory per replica, 1.5 cores in total) and ignores `limits`, which are enforced later by the kernel. The gap between request and limit is the burst the container may use if the node has spare capacity."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "api.yaml",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: shop\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: api\n  template:\n    metadata:\n      labels:\n        app: api\n    spec:\n      containers:\n        - name: api\n          image: registry.example.com/shop/api:2.4.1\n          ports:\n            - containerPort: 8080\n          resources:\n            requests:\n              cpu: 500m\n              memory: 512Mi\n              ephemeral-storage: 1Gi\n            limits:\n              cpu: \"1\"\n              memory: 768Mi\n              ephemeral-storage: 2Gi\n",
+              "output": "deployment.apps/api created",
+              "note": "Scheduling is based on requests only. A node with 8 CPUs idle but 8 CPUs of requests booked is full."
+            },
+            {
+              "type": "text",
+              "title": "About this example: node capacity versus allocatable",
+              "body": "`kubectl describe node` prints two tables. `Capacity` is the raw hardware, `Allocatable` is what remains for pods after `kube-reserved`, `system-reserved` and the eviction threshold. Below them, `Allocated resources` shows the sum of requests already booked, which is the number the scheduler compares against. Check the percentages in parentheses to find over-booked nodes."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "Node allocatable and booked requests",
+              "code": "kubectl describe node worker-1 | sed -n '/Capacity:/,/Events:/p'",
+              "output": "Capacity:\n  cpu:                4\n  ephemeral-storage:  101430960Ki\n  memory:             16384000Ki\n  pods:               110\nAllocatable:\n  cpu:                3920m\n  ephemeral-storage:  93478772582\n  memory:             15281152Ki\n  pods:               110\nAllocated resources:\n  (Total limits may be over 100 percent, i.e., overcommitted.)\n  Resource           Requests      Limits\n  --------           --------      ------\n  cpu                3350m (85%)   6200m (158%)\n  memory             11200Mi (75%) 14336Mi (96%)\n  ephemeral-storage  0 (0%)        0 (0%)",
+              "note": "Limits can exceed 100 percent (overcommit). Requests cannot: that is why the node is nearly full at 85% CPU."
+            },
+            {
+              "type": "table",
+              "title": "QoS classes and eviction order",
+              "head": [
+                "QoS class",
+                "How it is assigned",
+                "Eviction rank",
+                "OOM score adjust"
+              ],
+              "rows": [
+                [
+                  "Guaranteed",
+                  "Every container has requests == limits for CPU and memory",
+                  "Last",
+                  "-997"
+                ],
+                [
+                  "Burstable",
+                  "At least one request or limit, but not Guaranteed",
+                  "Middle, ranked by usage above request",
+                  "2 to 999"
+                ],
+                [
+                  "BestEffort",
+                  "No requests or limits at all",
+                  "First",
+                  "1000"
+                ]
+              ]
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Find the over-booked node",
+              "prompt": "List allocated CPU and memory requests for every node and find the one closest to 100 percent.",
+              "command": "kubectl describe nodes | grep -A8 'Allocated resources'",
+              "expected": "Each node shows a Requests column with percentages; the busiest node is the most likely to produce Insufficient cpu errors.",
+              "hint": "Look at the percentage in parentheses, not the limits column.",
+              "solution": "kubectl describe nodes | grep -E '^Name:|cpu  |memory  '"
+            },
+            {
+              "title": "Check a pod's QoS class",
+              "prompt": "Print the QoS class of one pod and say which resources would need to change to make it Guaranteed.",
+              "command": "kubectl get pod api-6d8f7b9c5-4kq2m -n shop -o jsonpath='{.status.qosClass}'",
+              "expected": "Burstable, because requests differ from limits.",
+              "hint": "Guaranteed needs requests == limits on every container, including sidecars.",
+              "solution": "Set cpu and memory requests equal to limits in each container, then recreate the pod."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which resource value does the scheduler use to decide if a pod fits a node?",
+                "options": [
+                  "limits",
+                  "requests",
+                  "Current live usage",
+                  "The QoS class"
+                ],
+                "answer": 1,
+                "explain": "The scheduler sums requests of pods already on the node and compares against allocatable. Limits and live usage are ignored."
+              },
+              {
+                "question": "A pod has memory requests 256Mi and limits 512Mi. What is its QoS class?",
+                "options": [
+                  "Guaranteed",
+                  "Burstable",
+                  "BestEffort",
+                  "Critical"
+                ],
+                "answer": 1,
+                "explain": "Requests differ from limits, so it is Burstable. Guaranteed needs both to be equal for all containers."
+              },
+              {
+                "question": "What happens when a container exceeds its CPU limit?",
+                "options": [
+                  "It is OOMKilled",
+                  "It is evicted",
+                  "It is throttled",
+                  "The pod is rescheduled"
+                ],
+                "answer": 2,
+                "explain": "CPU is compressible: the CFS quota throttles the container. Only memory overuse leads to a kill."
+              },
+              {
+                "question": "Which pods does the kubelet evict first under memory pressure?",
+                "options": [
+                  "Guaranteed",
+                  "BestEffort and Burstable over their request",
+                  "Pods with the oldest age",
+                  "System DaemonSets"
+                ],
+                "answer": 1,
+                "explain": "Eviction ranks by QoS and usage above request, so BestEffort goes first."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-probes-resources",
+            "k8s-quotas-limitranges",
+            "k8s-scheduling-affinity"
+          ],
+          "tags": [
+            "scheduler",
+            "requests",
+            "qos",
+            "eviction"
+          ],
+          "commands": [
+            "kubectl describe node",
+            "kubectl get events",
+            "kubectl top"
+          ],
+          "sources": [
+            {
+              "title": "Kubernetes Scheduler",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/"
+            },
+            {
+              "title": "Resource Management for Pods and Containers",
+              "url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+            },
+            {
+              "title": "Pod Quality of Service Classes",
+              "url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/"
+            },
+            {
+              "title": "Node-pressure Eviction",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-scheduling-affinity",
+          "title": "Node selection: affinity, taints and tolerations",
+          "duration": "13 min",
+          "summary": "Steer pods with nodeSelector, node and pod affinity, anti-affinity, taints and tolerations.",
+          "objectives": [
+            "Choose between nodeSelector, node affinity and taints for a given requirement",
+            "Write required and preferred affinity rules with the right operators",
+            "Dedicate nodes to a workload using taint plus toleration plus selector"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Attract and repel",
+              "body": "Placement controls come in two directions. **Attracting** rules live on the pod: `nodeSelector`, `nodeAffinity` (pull to nodes by label) and `podAffinity` / `podAntiAffinity` (pull to or push away from nodes that already run certain pods). **Repelling** rules live on the node: a **taint** keeps every pod away unless it carries a matching **toleration**.\n\nA toleration only *allows* scheduling onto a tainted node, it does not attract. To dedicate a node pool you therefore combine both: taint the nodes so others stay out, and add a selector or affinity so the pods go in."
+            },
+            {
+              "type": "table",
+              "title": "Placement mechanisms compared",
+              "head": [
+                "Mechanism",
+                "Defined on",
+                "Hard or soft",
+                "Typical use"
+              ],
+              "rows": [
+                [
+                  "nodeSelector",
+                  "Pod",
+                  "Hard",
+                  "Simple label match, e.g. disktype=ssd"
+                ],
+                [
+                  "nodeAffinity required...",
+                  "Pod",
+                  "Hard",
+                  "Expressions: In, NotIn, Exists, Gt, Lt"
+                ],
+                [
+                  "nodeAffinity preferred...",
+                  "Pod",
+                  "Soft, weight 1-100",
+                  "Prefer a cheaper instance type"
+                ],
+                [
+                  "podAffinity",
+                  "Pod",
+                  "Hard or soft",
+                  "Co-locate app with its cache"
+                ],
+                [
+                  "podAntiAffinity",
+                  "Pod",
+                  "Hard or soft",
+                  "Spread replicas across nodes"
+                ],
+                [
+                  "Taint + toleration",
+                  "Node and Pod",
+                  "Effect-dependent",
+                  "GPU or dedicated pools"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a Deployment with node affinity",
+              "body": "This Deployment is applied with `kubectl apply -f gpu-infer.yaml`. The `requiredDuringSchedulingIgnoredDuringExecution` block is a hard filter: only nodes labelled `accelerator=nvidia` qualify. The `preferred` block adds up to 80 score points to nodes in the `m5` family without ever excluding others. The `IgnoredDuringExecution` suffix means already-running pods are not moved if labels change later."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "gpu-infer.yaml",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: gpu-infer\n  namespace: ml\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: gpu-infer\n  template:\n    metadata:\n      labels:\n        app: gpu-infer\n    spec:\n      affinity:\n        nodeAffinity:\n          requiredDuringSchedulingIgnoredDuringExecution:\n            nodeSelectorTerms:\n              - matchExpressions:\n                  - key: accelerator\n                    operator: In\n                    values: [\"nvidia\"]\n          preferredDuringSchedulingIgnoredDuringExecution:\n            - weight: 80\n              preference:\n                matchExpressions:\n                  - key: node.kubernetes.io/instance-type\n                    operator: In\n                    values: [\"g5.xlarge\", \"g5.2xlarge\"]\n      containers:\n        - name: infer\n          image: registry.example.com/ml/infer:1.8.0\n          resources:\n            requests:\n              cpu: \"2\"\n              memory: 8Gi\n            limits:\n              memory: 8Gi\n",
+              "output": "deployment.apps/gpu-infer created",
+              "note": "nodeSelector is just shorthand for a required In rule with one value. Use affinity when you need OR, NotIn or soft preferences."
+            },
+            {
+              "type": "text",
+              "title": "About this example: taints on nodes",
+              "body": "Taints are set with `kubectl taint` and read back from the node spec. The format is `key=value:effect`. Look at the three effects: `NoSchedule` blocks new pods, `PreferNoSchedule` is a soft hint, and `NoExecute` also evicts running pods that lack a toleration. Kubernetes itself adds NoExecute taints such as `node.kubernetes.io/unreachable` when a node stops responding."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Tainting a dedicated pool",
+              "code": "kubectl label node worker-gpu-1 accelerator=nvidia\nkubectl taint node worker-gpu-1 dedicated=gpu:NoSchedule\nkubectl get node worker-gpu-1 -o jsonpath='{.spec.taints}'\nkubectl taint node worker-gpu-1 dedicated=gpu:NoSchedule-",
+              "output": "node/worker-gpu-1 labeled\nnode/worker-gpu-1 tainted\n[{\"effect\":\"NoSchedule\",\"key\":\"dedicated\",\"value\":\"gpu\"}]\nnode/worker-gpu-1 untainted",
+              "note": "A trailing minus removes a taint or label. Existing pods stay when you add NoSchedule; use NoExecute to push them out."
+            },
+            {
+              "type": "table",
+              "title": "Taint effects and tolerations",
+              "head": [
+                "Effect",
+                "New pods without toleration",
+                "Running pods without toleration",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "NoSchedule",
+                  "Not scheduled",
+                  "Keep running",
+                  "dedicated=gpu:NoSchedule"
+                ],
+                [
+                  "PreferNoSchedule",
+                  "Avoided if possible",
+                  "Keep running",
+                  "spot=true:PreferNoSchedule"
+                ],
+                [
+                  "NoExecute",
+                  "Not scheduled",
+                  "Evicted (after tolerationSeconds if set)",
+                  "node.kubernetes.io/not-ready:NoExecute"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: pod with toleration and pod anti-affinity",
+              "body": "This Deployment tolerates the `dedicated=gpu` taint and also uses `podAntiAffinity` with the key `kubernetes.io/hostname`, which means no two `web` replicas may share a node. The `topologyKey` defines what counts as the same place: hostname means one node, a zone label means one zone. Also note the `tolerationSeconds: 60` for `not-ready`, which shortens the default 300 seconds before eviction."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "web-spread.yaml",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: shop\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      tolerations:\n        - key: dedicated\n          operator: Equal\n          value: gpu\n          effect: NoSchedule\n        - key: node.kubernetes.io/not-ready\n          operator: Exists\n          effect: NoExecute\n          tolerationSeconds: 60\n      affinity:\n        podAntiAffinity:\n          requiredDuringSchedulingIgnoredDuringExecution:\n            - labelSelector:\n                matchLabels:\n                  app: web\n              topologyKey: kubernetes.io/hostname\n      containers:\n        - name: web\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: 100m\n              memory: 128Mi\n",
+              "output": "deployment.apps/web created",
+              "note": "Required anti-affinity with more replicas than nodes leaves extra pods Pending. Use preferred, or topology spread constraints, when that is not acceptable."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Taint and tolerate",
+              "prompt": "Taint a node with env=batch:NoSchedule and show that the taint is present.",
+              "command": "kubectl taint node worker-2 env=batch:NoSchedule",
+              "expected": "node/worker-2 tainted",
+              "hint": "Check with kubectl describe node worker-2 | grep Taints.",
+              "solution": "kubectl taint node worker-2 env=batch:NoSchedule-   # remove again when done"
+            },
+            {
+              "title": "Why Pending?",
+              "prompt": "A pod is Pending. Print only the scheduling failure message.",
+              "command": "kubectl get events --field-selector reason=FailedScheduling",
+              "expected": "One FailedScheduling line per blocked pod with per-node reasons.",
+              "hint": "Add -A to look across namespaces.",
+              "solution": "kubectl get events -A --field-selector reason=FailedScheduling"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does a toleration do?",
+                "options": [
+                  "Attracts a pod to tainted nodes",
+                  "Allows a pod to be scheduled on a tainted node",
+                  "Evicts pods from a node",
+                  "Labels the node"
+                ],
+                "answer": 1,
+                "explain": "A toleration only permits placement; it does not attract."
+              },
+              {
+                "question": "Which taint effect also evicts already-running pods?",
+                "options": [
+                  "NoSchedule",
+                  "PreferNoSchedule",
+                  "NoExecute",
+                  "NoEvict"
+                ],
+                "answer": 2,
+                "explain": "NoExecute removes running pods that do not tolerate the taint."
+              },
+              {
+                "question": "What does topologyKey kubernetes.io/hostname mean in a podAntiAffinity rule?",
+                "options": [
+                  "Spread across zones",
+                  "Pods may not share the same node",
+                  "Pods must share a node",
+                  "Match by DNS name"
+                ],
+                "answer": 1,
+                "explain": "The topologyKey defines the domain; hostname makes each node its own domain."
+              },
+              {
+                "question": "Why is IgnoredDuringExecution in the field name important?",
+                "options": [
+                  "Pods are evicted when labels change",
+                  "Rules are checked only at scheduling time",
+                  "The rule is optional",
+                  "It disables the rule"
+                ],
+                "answer": 1,
+                "explain": "Running pods are not moved if node labels change after scheduling."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-scheduler-decisions",
+            "k8s-topology-spread",
+            "k8s-daemonsets"
+          ],
+          "tags": [
+            "affinity",
+            "taints",
+            "tolerations",
+            "nodeSelector"
+          ],
+          "commands": [
+            "kubectl taint",
+            "kubectl label",
+            "kubectl get pods -o wide"
+          ],
+          "sources": [
+            {
+              "title": "Assigning Pods to Nodes",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/"
+            },
+            {
+              "title": "Taints and Tolerations",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/"
+            },
+            {
+              "title": "Well-Known Labels, Annotations and Taints",
+              "url": "https://kubernetes.io/docs/reference/labels-annotations-taints/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-topology-spread",
+          "title": "Topology spread and zone-aware HA",
+          "duration": "12 min",
+          "summary": "Use topologySpreadConstraints to spread replicas across zones and nodes and survive a zone outage.",
+          "objectives": [
+            "Write a topologySpreadConstraint with maxSkew, topologyKey and whenUnsatisfiable",
+            "Compute skew for a given pod distribution",
+            "Combine zone and node spreading and handle rolling updates"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Why spread beyond anti-affinity",
+              "body": "Required pod anti-affinity gives a binary rule: one replica per node, and extra replicas stay Pending. **Topology spread constraints** express *evenness*: replicas should be balanced across failure domains such as zones and nodes, within a tolerated imbalance called `maxSkew`.\n\n**Skew** for a domain is the number of matching pods in it minus the minimum count in any eligible domain. With 2, 2 and 1 pods in three zones the skew is 1. With `maxSkew: 1` the next pod must go to the zone holding 1, otherwise it would raise skew to 2."
+            },
+            {
+              "type": "table",
+              "title": "Fields of topologySpreadConstraints",
+              "head": [
+                "Field",
+                "Meaning",
+                "Typical value",
+                "Effect"
+              ],
+              "rows": [
+                [
+                  "maxSkew",
+                  "Largest tolerated difference between domains",
+                  "1",
+                  "Smaller means stricter balance"
+                ],
+                [
+                  "topologyKey",
+                  "Node label defining a domain",
+                  "topology.kubernetes.io/zone",
+                  "Zone, node (kubernetes.io/hostname), region"
+                ],
+                [
+                  "whenUnsatisfiable",
+                  "What to do if skew would be exceeded",
+                  "DoNotSchedule or ScheduleAnyway",
+                  "Hard filter vs soft score"
+                ],
+                [
+                  "labelSelector",
+                  "Which pods are counted",
+                  "app: web",
+                  "Must match the pod's own labels"
+                ],
+                [
+                  "minDomains",
+                  "Minimum number of domains expected",
+                  "3",
+                  "Counts empty domains so new zones get pods"
+                ],
+                [
+                  "matchLabelKeys",
+                  "Extra label keys to scope counting",
+                  "[pod-template-hash]",
+                  "Balance each rollout separately"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: a zone and node spread Deployment",
+              "body": "This Deployment is applied with `kubectl apply -f web-ha.yaml`. The first constraint is hard (`DoNotSchedule`) across zones with `maxSkew: 1`, so a six-replica Deployment on three zones lands 2/2/2. The second constraint is soft across nodes, so the scheduler tries to avoid stacking but never leaves a pod Pending because of it. `matchLabelKeys: [pod-template-hash]` keeps rolling updates balanced per ReplicaSet."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "web-ha.yaml",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web-ha\n  namespace: shop\nspec:\n  replicas: 6\n  selector:\n    matchLabels:\n      app: web-ha\n  template:\n    metadata:\n      labels:\n        app: web-ha\n    spec:\n      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: topology.kubernetes.io/zone\n          whenUnsatisfiable: DoNotSchedule\n          labelSelector:\n            matchLabels:\n              app: web-ha\n          matchLabelKeys:\n            - pod-template-hash\n        - maxSkew: 1\n          topologyKey: kubernetes.io/hostname\n          whenUnsatisfiable: ScheduleAnyway\n          labelSelector:\n            matchLabels:\n              app: web-ha\n      containers:\n        - name: web\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: 200m\n              memory: 256Mi\n",
+              "output": "deployment.apps/web-ha created",
+              "note": "The labelSelector must match the pod template labels, otherwise the constraint counts nothing."
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking the zone distribution",
+              "body": "Zone labels are set by the cloud provider, and you can show them as a column. Then group pods by node and map nodes to zones to confirm the 2/2/2 spread. Use this check after every scaling event or node pool change."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Zone distribution",
+              "code": "kubectl get nodes -L topology.kubernetes.io/zone\nkubectl get pods -n shop -l app=web-ha -o wide --sort-by=.spec.nodeName",
+              "output": "NAME       STATUS   ROLES    AGE   VERSION   ZONE\nworker-1   Ready    <none>   41d   v1.31.2   eu-central-1a\nworker-2   Ready    <none>   41d   v1.31.2   eu-central-1a\nworker-3   Ready    <none>   41d   v1.31.2   eu-central-1b\nworker-4   Ready    <none>   41d   v1.31.2   eu-central-1b\nworker-5   Ready    <none>   41d   v1.31.2   eu-central-1c\nworker-6   Ready    <none>   41d   v1.31.2   eu-central-1c\n\nNAME                      READY   STATUS    NODE\nweb-ha-6b8d9f7c4-2hq8d    1/1     Running   worker-1\nweb-ha-6b8d9f7c4-9xk4m    1/1     Running   worker-2\nweb-ha-6b8d9f7c4-c7vtn    1/1     Running   worker-3\nweb-ha-6b8d9f7c4-lq2rw    1/1     Running   worker-4\nweb-ha-6b8d9f7c4-p5mzs    1/1     Running   worker-5\nweb-ha-6b8d9f7c4-t8bj6    1/1     Running   worker-6",
+              "note": "Each zone holds two pods, so losing one zone leaves 4 of 6 replicas."
+            },
+            {
+              "type": "table",
+              "title": "Skew worked examples (maxSkew 1, 3 zones)",
+              "head": [
+                "Pods in zone a/b/c",
+                "Skew",
+                "Next pod may go to",
+                "Reason"
+              ],
+              "rows": [
+                [
+                  "2 / 2 / 2",
+                  "0",
+                  "Any zone",
+                  "Resulting skew 1 is allowed"
+                ],
+                [
+                  "3 / 2 / 2",
+                  "1",
+                  "b or c",
+                  "Putting it in a would give skew 2"
+                ],
+                [
+                  "2 / 2 / 0 (zone c lost nodes)",
+                  "2",
+                  "Only c, else Pending",
+                  "DoNotSchedule enforces balance"
+                ],
+                [
+                  "3 / 1 / 1",
+                  "2",
+                  "b or c",
+                  "Existing imbalance, must be corrected"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: cluster-wide defaults",
+              "body": "Instead of repeating constraints in every manifest, the scheduler can apply default spreading to pods that define none. This file is a fragment of a `KubeSchedulerConfiguration` passed to `kube-scheduler --config` on self-managed clusters; managed services usually spread by zone by default already. Look at `defaultingType: List`, which replaces the built-in defaults with your own list."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "scheduler-config.yaml fragment",
+              "code": "apiVersion: kubescheduler.config.k8s.io/v1\nkind: KubeSchedulerConfiguration\nprofiles:\n  - schedulerName: default-scheduler\n    pluginConfig:\n      - name: PodTopologySpread\n        args:\n          defaultingType: List\n          defaultConstraints:\n            - maxSkew: 1\n              topologyKey: topology.kubernetes.io/zone\n              whenUnsatisfiable: ScheduleAnyway",
+              "output": null,
+              "note": "The built-in default (defaultingType System) already spreads by hostname and zone softly."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Count by zone",
+              "prompt": "List which node each web-ha pod is on and reason about the skew.",
+              "command": "kubectl get pods -n shop -l app=web-ha -o wide",
+              "expected": "Six pods across six nodes, two per zone.",
+              "hint": "Use kubectl get nodes -L topology.kubernetes.io/zone to map nodes to zones.",
+              "solution": "Skew is max minus min pods per zone; here 2 - 2 = 0."
+            },
+            {
+              "title": "Find constraints on a pod",
+              "prompt": "Print the topologySpreadConstraints of one running pod.",
+              "command": "kubectl get pod web-ha-6b8d9f7c4-2hq8d -n shop -o jsonpath='{.spec.topologySpreadConstraints}'",
+              "expected": "JSON array of the two constraints.",
+              "hint": "The pod spec holds the copy from the template.",
+              "solution": "Pipe through jq for readable output."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "With 3 / 2 / 2 pods across zones and maxSkew 1, where may the next pod go?",
+                "options": [
+                  "Zone a",
+                  "Zone b or c",
+                  "Any zone",
+                  "None, it stays Pending"
+                ],
+                "answer": 1,
+                "explain": "Zone a would raise skew to 2; b or c keep it at 1."
+              },
+              {
+                "question": "Which whenUnsatisfiable value never leaves a pod Pending because of the constraint?",
+                "options": [
+                  "DoNotSchedule",
+                  "ScheduleAnyway",
+                  "Required",
+                  "Preferred"
+                ],
+                "answer": 1,
+                "explain": "ScheduleAnyway only influences scoring."
+              },
+              {
+                "question": "What does skew measure?",
+                "options": [
+                  "Pods per node",
+                  "Difference between the fullest and emptiest domain",
+                  "CPU imbalance",
+                  "Replica count minus ready count"
+                ],
+                "answer": 1,
+                "explain": "Skew is pods in a domain minus the minimum across eligible domains."
+              },
+              {
+                "question": "Why use matchLabelKeys with pod-template-hash?",
+                "options": [
+                  "To pin pods to nodes",
+                  "To balance each ReplicaSet separately during rollouts",
+                  "To disable the constraint",
+                  "To label nodes"
+                ],
+                "answer": 1,
+                "explain": "Old and new ReplicaSets are counted independently, so a rollout stays balanced."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-scheduling-affinity",
+            "k8s-priority-preemption-pdb",
+            "k8s-autoscaling-maintenance"
+          ],
+          "tags": [
+            "topology",
+            "zones",
+            "ha",
+            "spread"
+          ],
+          "commands": [
+            "kubectl get nodes -L",
+            "kubectl get pods -o wide"
+          ],
+          "sources": [
+            {
+              "title": "Pod Topology Spread Constraints",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/"
+            },
+            {
+              "title": "Scheduler Configuration",
+              "url": "https://kubernetes.io/docs/reference/scheduling/config/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-sched-capacity",
+      "title": "Priority, disruption and capacity",
+      "summary": "Who wins under pressure, how to stay available and how to scale.",
+      "lessons": [
+        {
+          "id": "k8s-priority-preemption-pdb",
+          "title": "Priority, preemption and PodDisruptionBudgets",
+          "duration": "13 min",
+          "summary": "Rank workloads with PriorityClass, understand preemption, and protect availability with PDBs.",
+          "objectives": [
+            "Create PriorityClasses and assign them to pods",
+            "Explain how preemption chooses victims and its limits",
+            "Write a PodDisruptionBudget and predict how it affects drains"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Who wins when the cluster is full",
+              "body": "A **PriorityClass** gives pods an integer rank. When a high-priority pod is Pending because no node fits, the scheduler's **PostFilter** step may **preempt**: it finds a node where evicting lower-priority pods would let the pod fit, deletes those victims (respecting their graceful termination), and nominates the node for the pending pod via `status.nominatedNodeName`.\n\nPriority is not QoS. Priority decides who may displace whom at **scheduling** time and ordering in the queue. QoS decides who the kubelet kills first under **node pressure**. A PodDisruptionBudget sits on yet another axis: it limits **voluntary** disruptions such as drains and the eviction API. Preemption honours PDBs only on a best-effort basis."
+            },
+            {
+              "type": "text",
+              "title": "About this example: PriorityClasses",
+              "body": "These two objects are applied with `kubectl apply -f priorities.yaml`. `business-critical` has a high value and may preempt; `batch-low` uses `preemptionPolicy: Never`, meaning its pods queue ahead of lower ones but never evict anyone. `globalDefault: true` would assign a class to every pod without one, so only one class may carry it. Values above 1 billion are reserved for `system-cluster-critical` and `system-node-critical`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "priorities.yaml",
+              "code": "apiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: business-critical\nvalue: 100000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\ndescription: Customer-facing services that may displace batch work.\n---\napiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: batch-low\nvalue: 1000\nglobalDefault: false\npreemptionPolicy: Never\ndescription: Batch jobs that wait rather than evict others.\n",
+              "output": "priorityclass.scheduling.k8s.io/business-critical created\npriorityclass.scheduling.k8s.io/batch-low created",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: a PodDisruptionBudget",
+              "body": "This PDB is applied with `kubectl apply -f checkout-pdb.yaml`. It says at least 2 `checkout` pods must stay available during voluntary disruptions. Use either `minAvailable` or `maxUnavailable`, never both; percentages are allowed. `unhealthyPodEvictionPolicy: AlwaysAllow` lets the drain evict pods that are already not Ready, so a crashlooping pod cannot block node maintenance."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "checkout-pdb.yaml",
+              "code": "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: checkout-pdb\n  namespace: shop\nspec:\n  minAvailable: 2\n  unhealthyPodEvictionPolicy: AlwaysAllow\n  selector:\n    matchLabels:\n      app: checkout\n",
+              "output": "poddisruptionbudget.policy/checkout-pdb created",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: the PDB in action during a drain",
+              "body": "`kubectl get pdb` shows `ALLOWED DISRUPTIONS`, the number of pods that can be evicted right now (healthy pods minus minAvailable). When a drain would drop below the budget the eviction API answers 429 and `kubectl drain` retries every five seconds until pods are rescheduled elsewhere. Read the repeated error line as normal waiting, not as a failure."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Drain respecting a PDB",
+              "code": "kubectl get pdb -n shop\nkubectl drain worker-1 --ignore-daemonsets --delete-emptydir-data",
+              "output": "NAME           MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE\ncheckout-pdb   2               N/A               1                     6m\n\nnode/worker-1 cordoned\nevicting pod shop/checkout-6c5b7d8f9-4lq2w\nerror when evicting pods/\"checkout-6c5b7d8f9-9mtzs\" -n \"shop\" (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.\npod/checkout-6c5b7d8f9-4lq2w evicted\nnode/worker-1 drained",
+              "note": "Three replicas with minAvailable 2 allow one eviction at a time."
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "The two classic PDB mistakes",
+              "body": "A PDB with `minAvailable` equal to the replica count (or a single-replica Deployment with `minAvailable: 1`) allows **zero** disruptions and stalls node upgrades and the cluster autoscaler. The opposite mistake is having no PDB at all, so a drain evicts every replica at once. Also remember a PDB does not protect against node crashes or preemption guarantees: preemption tries to respect PDBs but may violate them if no other victims exist."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Inspect the budget",
+              "prompt": "Show the PDB and how many pods can currently be disrupted.",
+              "command": "kubectl get pdb -n shop",
+              "expected": "ALLOWED DISRUPTIONS column shows an integer.",
+              "hint": "Describe the PDB to see current/desired healthy counts.",
+              "solution": "kubectl describe pdb checkout-pdb -n shop"
+            },
+            {
+              "title": "List priorities used",
+              "prompt": "Show the priority class and value for every pod in a namespace.",
+              "command": "kubectl get pods -n shop -o custom-columns=NAME:.metadata.name,CLASS:.spec.priorityClassName,PRIO:.spec.priority",
+              "expected": "A table with class name and numeric priority.",
+              "hint": "spec.priority is resolved at admission.",
+              "solution": "Pods with no class show <none> and priority 0."
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does preemptionPolicy: Never mean?",
+                "options": [
+                  "Pods of this class are never scheduled",
+                  "The pod is queued by priority but never evicts others",
+                  "The pod cannot be evicted",
+                  "The class is deprecated"
+                ],
+                "answer": 1,
+                "explain": "Never keeps queue ordering but disables evicting lower-priority pods."
+              },
+              {
+                "question": "A PDB applies to which kind of disruption?",
+                "options": [
+                  "Node crashes",
+                  "OOM kills",
+                  "Voluntary evictions such as drain",
+                  "Image pull failures"
+                ],
+                "answer": 2,
+                "explain": "PDBs guard voluntary disruptions through the Eviction API."
+              },
+              {
+                "question": "Three replicas and minAvailable: 3. What happens during kubectl drain?",
+                "options": [
+                  "It succeeds fast",
+                  "It blocks because zero disruptions are allowed",
+                  "It deletes pods anyway",
+                  "It scales the Deployment up"
+                ],
+                "answer": 1,
+                "explain": "No pod may be evicted, so the drain keeps retrying."
+              },
+              {
+                "question": "Which setting can lead to PDB deadlock with crashlooping pods?",
+                "options": [
+                  "unhealthyPodEvictionPolicy: AlwaysAllow",
+                  "Default IfHealthyBudget with unready pods",
+                  "maxUnavailable: 100%",
+                  "Using percentages"
+                ],
+                "answer": 1,
+                "explain": "By default unhealthy pods count against the budget and may block eviction; AlwaysAllow avoids that."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-autoscaling-maintenance",
+            "k8s-topology-spread",
+            "k8s-scheduler-decisions"
+          ],
+          "tags": [
+            "priority",
+            "preemption",
+            "pdb",
+            "drain"
+          ],
+          "commands": [
+            "kubectl get pdb",
+            "kubectl drain",
+            "kubectl get priorityclass"
+          ],
+          "sources": [
+            {
+              "title": "Pod Priority and Preemption",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/"
+            },
+            {
+              "title": "Specifying a Disruption Budget",
+              "url": "https://kubernetes.io/docs/tasks/run-application/configure-pdb/"
+            },
+            {
+              "title": "API-initiated Eviction",
+              "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/api-eviction/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-capacity-scaling",
+          "title": "Cluster autoscaler, VPA, KEDA and capacity planning",
+          "duration": "14 min",
+          "summary": "Scale nodes and pods with Cluster Autoscaler, VPA and KEDA, and plan headroom with real numbers.",
+          "objectives": [
+            "Explain how Cluster Autoscaler reacts to Pending pods and idle nodes",
+            "Use VPA recommendations to right-size requests",
+            "Describe event-driven scaling with KEDA and size cluster headroom"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Three scaling axes",
+              "body": "**Horizontal Pod Autoscaler** changes replica count from metrics. **Vertical Pod Autoscaler (VPA)** changes the CPU and memory *requests* of each pod. **Cluster Autoscaler (CA)** or Karpenter changes the number of *nodes*. They chain: HPA adds pods, pods go Pending, CA sees Pending pods that would fit on a new node and adds one. When nodes sit under about 50 percent utilisation of requests for ten minutes and their pods can move, CA removes them.\n\nCA reasons purely from requests and scheduling constraints. That is why accurate requests (lesson 1) and honest PDBs (lesson 4) decide whether autoscaling is smooth or stuck."
+            },
+            {
+              "type": "text",
+              "title": "About this example: Cluster Autoscaler in action",
+              "body": "These are events and the CA status ConfigMap on a cluster where a burst of pods went Pending. The `TriggeredScaleUp` event shows the node group growing from 3 to 5, and the status block lists health per group. Use this to confirm the autoscaler sees the pods; if `NotTriggerScaleUp` appears, its message tells you the constraint (max size reached, no group has the right taint or label)."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Cluster Autoscaler events",
+              "code": "kubectl get events -A --field-selector reason=TriggeredScaleUp\nkubectl -n kube-system get configmap cluster-autoscaler-status -o jsonpath='{.data.status}' | head -12",
+              "output": "NAMESPACE   LAST SEEN   TYPE     REASON             OBJECT                  MESSAGE\nshop        90s         Normal   TriggeredScaleUp   pod/web-ha-6b8d9f7c4-p5mzs   pod triggered scale-up: [{eks-workers-a 3->5 (max: 8)}]\n\nCluster-autoscaler status at 2026-11-13 09:14:02 +0000 UTC:\nCluster-wide:\n  Health:      Healthy (ready=5 unready=0 notStarted=0 registered=5)\n  ScaleUp:     NoActivity (ready=5 registered=5)\n  ScaleDown:   NoCandidates (candidates=0)\nNodeGroups:\n  Name:        eks-workers-a\n  Health:      Healthy (ready=5 unready=0 cloudProviderTarget=5 (minSize=3, maxSize=8))",
+              "note": "CA adds nodes only when pending pods would fit on a new node of a known group."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a VerticalPodAutoscaler in recommendation mode",
+              "body": "This VPA is applied with `kubectl apply -f api-vpa.yaml` and requires the VPA components installed. `updateMode: \"Off\"` makes it only compute recommendations without restarting pods, the safest way to start. `controlledValues: RequestsOnly` leaves limits alone, and `minAllowed` / `maxAllowed` bound the suggestions."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "api-vpa.yaml",
+              "code": "apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata:\n  name: api-vpa\n  namespace: shop\nspec:\n  targetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: api\n  updatePolicy:\n    updateMode: \"Off\"\n  resourcePolicy:\n    containerPolicies:\n      - containerName: api\n        controlledValues: RequestsOnly\n        minAllowed:\n          cpu: 100m\n          memory: 128Mi\n        maxAllowed:\n          cpu: \"2\"\n          memory: 2Gi\n",
+              "output": "verticalpodautoscaler.autoscaling.k8s.io/api-vpa created",
+              "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: reading VPA recommendations",
+              "body": "After the VPA has watched the pods for a while, `describe` prints a Recommendation block. `Lower Bound` is the minimum safe request, `Target` is what the VPA would set, and `Upper Bound` is the ceiling accounting for uncertainty. Here the Deployment requests 500m / 512Mi but the target is 180m / 310Mi, so you are paying for about 64 percent idle CPU request."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "VPA recommendation output",
+              "code": "kubectl describe vpa api-vpa -n shop | sed -n '/Recommendation:/,$p'",
+              "output": "  Recommendation:\n    Container Recommendations:\n      Container Name:  api\n      Lower Bound:\n        Cpu:     120m\n        Memory:  256Mi\n      Target:\n        Cpu:     180m\n        Memory:  310Mi\n      Uncapped Target:\n        Cpu:     180m\n        Memory:  310Mi\n      Upper Bound:\n        Cpu:     420m\n        Memory:  520Mi",
+              "note": "Copy Target values into your manifests during a review instead of enabling Auto mode in production."
+            },
+            {
+              "type": "text",
+              "title": "About this example: KEDA ScaledObject",
+              "body": "KEDA (a CNCF project) scales a Deployment from external signals, including down to zero. This `ScaledObject` is applied with `kubectl apply -f worker-keda.yaml` once KEDA is installed. The `trigger` of type `rabbitmq` scales so that each replica handles about 20 queued messages, between 0 and 30 replicas, and `cooldownPeriod` waits 5 minutes before returning to zero. The connection string comes from a TriggerAuthentication, never inline."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "worker-keda.yaml",
+              "code": "apiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: order-worker\n  namespace: shop\nspec:\n  scaleTargetRef:\n    name: order-worker\n  minReplicaCount: 0\n  maxReplicaCount: 30\n  cooldownPeriod: 300\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders\n        mode: QueueLength\n        value: \"20\"\n      authenticationRef:\n        name: rabbitmq-auth\n",
+              "output": "scaledobject.keda.sh/order-worker created",
+              "note": null
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Spot scale-up evidence",
+              "prompt": "Find evidence that Cluster Autoscaler added nodes recently.",
+              "command": "kubectl get events -A --field-selector reason=TriggeredScaleUp",
+              "expected": "One event per scale-up with group sizes.",
+              "hint": "If empty, no scale-up happened or it is not installed.",
+              "solution": "kubectl -n kube-system logs deploy/cluster-autoscaler --tail=50"
+            },
+            {
+              "title": "Compare request to recommendation",
+              "prompt": "Read the VPA recommendation for the api Deployment and compare it with its current request.",
+              "command": "kubectl describe vpa api-vpa -n shop",
+              "expected": "Target CPU/memory differ from the current requests.",
+              "hint": "Look at the Target block.",
+              "solution": "kubectl get deploy api -n shop -o jsonpath='{.spec.template.spec.containers[0].resources}'"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What causes Cluster Autoscaler to add a node?",
+                "options": [
+                  "High CPU usage on a node",
+                  "Pending pods that would fit on a new node",
+                  "A failing PDB",
+                  "A node reboot"
+                ],
+                "answer": 1,
+                "explain": "CA reacts to unschedulable pods, not to live CPU load."
+              },
+              {
+                "question": "Which VPA updateMode only computes recommendations?",
+                "options": [
+                  "Auto",
+                  "Recreate",
+                  "Initial",
+                  "Off"
+                ],
+                "answer": 3,
+                "explain": "Off produces recommendations without touching pods."
+              },
+              {
+                "question": "What can KEDA do that plain HPA cannot do out of the box?",
+                "options": [
+                  "Scale on CPU",
+                  "Scale to zero from external event sources",
+                  "Set limits",
+                  "Add nodes"
+                ],
+                "answer": 1,
+                "explain": "KEDA supports many external scalers and scaling workloads to and from zero."
+              },
+              {
+                "question": "Why keep overprovisioning pause pods at a low priority?",
+                "options": [
+                  "They run faster",
+                  "Real pods preempt them to start instantly while new nodes join",
+                  "They bypass PDBs",
+                  "They avoid taints"
+                ],
+                "answer": 1,
+                "explain": "Preemption frees ready-made space immediately, hiding node start-up time."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-autoscaling-maintenance",
+            "k8s-priority-preemption-pdb",
+            "k8s-quotas-limitranges"
+          ],
+          "tags": [
+            "autoscaling",
+            "vpa",
+            "keda",
+            "capacity"
+          ],
+          "commands": [
+            "kubectl describe vpa",
+            "kubectl get events",
+            "kubectl top nodes"
+          ],
+          "sources": [
+            {
+              "title": "Node Autoscaling",
+              "url": "https://kubernetes.io/docs/concepts/cluster-administration/node-autoscaling/"
+            },
+            {
+              "title": "Cluster Autoscaler FAQ",
+              "url": "https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md"
+            },
+            {
+              "title": "Vertical Pod Autoscaler",
+              "url": "https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler"
+            },
+            {
+              "title": "KEDA documentation",
+              "url": "https://keda.sh/docs/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "k8s-operations"
+  ],
+  "track": "kubernetes"
+}

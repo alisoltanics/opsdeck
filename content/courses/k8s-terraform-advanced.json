@@ -1,0 +1,1407 @@
+{
+ "id": "k8s-terraform-advanced",
+ "order": 34,
+ "title": "Terraform in Production: Modules, State and Teams",
+ "subtitle": "Reusable modules, safe state, tested pipelines and Kubernetes add-ons",
+ "level": "Advanced",
+ "duration": "1h 46m",
+ "icon": "server-cog",
+ "accent": "orange",
+ "description": "Take Terraform from a personal tool to a team platform: write versioned modules, store state remotely with locking, refactor safely, test and scan code, deploy through OIDC-authenticated pipelines and manage Kubernetes add-ons.",
+ "outcomes": [
+  "Design, version and consume reusable modules",
+  "Run remote state with locking and environment isolation",
+  "Refactor and repair state with moved, import and removed blocks",
+  "Ship Terraform through tested, keyless CI/CD and manage Kubernetes with it"
+ ],
+ "modules": [
+  {
+   "id": "k8s-tfa-m-modules",
+   "title": "Writing reusable modules",
+   "summary": "Module contracts, sources and versioning.",
+   "lessons": [
+    {
+     "id": "k8s-tfa-module-design",
+     "title": "Writing reusable modules",
+     "duration": "15 min",
+     "summary": "Design modules with a clear contract: typed inputs, minimal outputs, pinned providers and composition.",
+     "objectives": [
+      "Explain root versus child modules",
+      "Write typed, validated variables and focused outputs",
+      "Structure a module repo with examples and tests",
+      "Compose two module calls by passing outputs"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "What you will build and the path through this course",
+       "body": "In this course you move from \"I can run `terraform apply` on my laptop\" to running Terraform as a team in production. You will build a small, versioned module library, store state remotely with locking, recover from broken state, test and scan your code, ship it through a CI pipeline that authenticates to AWS without stored keys, and finally manage Kubernetes objects and Helm releases from Terraform.\n\nThe path: **(1) module design** (this lesson), **(2) module sources, the registry and versioning**, **(3) remote state and environment isolation**, **(4) state surgery** with moved/import/removed blocks, **(5) testing and policy**, **(6) CI/CD and secrets**, **(7) Kubernetes with Terraform and safe refactors**. Each lesson assumes the previous one. This course expects Terraform 1.6 or newer, the AWS provider 5.x, and the basics from Terraform Essentials: resources, variables, outputs, plan and apply.\n\nA **module** is simply a directory of `.tf` files that you call from another configuration. Every Terraform configuration is already a module (the **root module**); modules you call are **child modules**. Modules are how you stop copy-pasting the same VPC or cluster definition between environments."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a module directory layout",
+       "body": "This is the conventional layout of a reusable module in its own repository. You do not run it; it shows which file holds what. Look at `variables.tf` and `outputs.tf`: together they are the module's public interface, while everything else is implementation that callers should never depend on."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "terraform-aws-network/ (layout)",
+       "code": "terraform-aws-network/\n├── main.tf          # resources (aws_vpc, aws_subnet, ...)\n├── variables.tf     # inputs: the module's parameters\n├── outputs.tf       # outputs: what callers can read\n├── versions.tf      # required_version + required_providers\n├── README.md        # usage example, inputs/outputs table\n├── examples/\n│   └── basic/main.tf  # runnable example, also used in tests\n└── tests/\n    └── basic.tftest.hcl",
+       "output": null,
+       "note": "Name repositories terraform-<PROVIDER>-<NAME> so the public registry can index them later."
+      },
+      {
+       "type": "text",
+       "title": "About this example: typed inputs with validation",
+       "body": "The next file declares the module inputs. Each variable has a type, a description and, where sensible, a `validation` block that fails the plan early with a readable message. Look at `cidr_block` (validated with `can(cidrnetmask(...))`) and `azs` (a list with a sane default is deliberately not given, so callers must choose)."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "modules/network/variables.tf",
+       "code": "variable \"name\" {\n  description = \"Name prefix for all resources\"\n  type        = string\n}\n\nvariable \"cidr_block\" {\n  description = \"VPC CIDR, for example 10.20.0.0/16\"\n  type        = string\n  validation {\n    condition     = can(cidrnetmask(var.cidr_block))\n    error_message = \"cidr_block must be a valid IPv4 CIDR.\"\n  }\n}\n\nvariable \"azs\" {\n  description = \"Availability zones to use\"\n  type        = list(string)\n}\n\nvariable \"tags\" {\n  description = \"Extra tags merged onto every resource\"\n  type        = map(string)\n  default     = {}\n}",
+       "output": null,
+       "note": "Prefer precise types (object({...}) with optional()) over `any`; they document intent and catch typos."
+      },
+      {
+       "type": "text",
+       "title": "About this example: calling the module and reading outputs",
+       "body": "This root configuration calls the module twice with different inputs, which is the whole point of reuse. You run it with `terraform init` and `terraform plan`. Notice `module.network_prod.vpc_id`: callers read only declared outputs, never inner resources."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "envs/main.tf (calling a module)",
+       "code": "module \"network_dev\" {\n  source     = \"../modules/network\"\n  name       = \"dev\"\n  cidr_block = \"10.10.0.0/16\"\n  azs        = [\"us-east-1a\", \"us-east-1b\"]\n}\n\nmodule \"network_prod\" {\n  source     = \"../modules/network\"\n  name       = \"prod\"\n  cidr_block = \"10.20.0.0/16\"\n  azs        = [\"us-east-1a\", \"us-east-1b\", \"us-east-1c\"]\n  tags       = { CostCenter = \"platform\" }\n}\n\noutput \"prod_vpc_id\" {\n  value = module.network_prod.vpc_id\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Module design rules of thumb",
+       "head": [
+        "Rule",
+        "Why",
+        "Example"
+       ],
+       "rows": [
+        [
+         "Few, meaningful inputs",
+         "Every input is API you must keep stable",
+         "Expose `cidr_block`, not every subnet attribute"
+        ],
+        [
+         "Typed variables + validation",
+         "Fail at plan, not at apply",
+         "`validation { condition = can(cidrnetmask(...)) }`"
+        ],
+        [
+         "Outputs for what others need",
+         "Callers compose modules via outputs",
+         "`vpc_id`, `private_subnet_ids`"
+        ],
+        [
+         "Pin providers in versions.tf",
+         "Reproducible behaviour",
+         "`aws = { version = \">= 5.40, < 6.0\" }`"
+        ],
+        [
+         "No provider blocks in child modules",
+         "Callers choose region/credentials",
+         "Use `configuration_aliases` when multiple are needed"
+        ],
+        [
+         "Compose, do not nest deeply",
+         "Deep trees are hard to reason about",
+         "Root calls `network` and `cluster`, passes ids between them"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "**Wrapper modules** that just re-expose one resource with 40 passthrough variables add cost, not value. **Hard-coding** region, account ids or names inside a module makes it unusable elsewhere. **Putting `provider` blocks** in a child module blocks `count`/`for_each` on the module and complicates removal. **Outputs of whole resources** leak internals; output specific attributes."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "A module is a directory with an input/output contract. Design it small: typed and validated variables, minimal outputs, pinned provider constraints, an `examples/` directory and no provider blocks. Compose modules in the root by passing outputs of one as inputs of another.\n\nNext lesson covers where modules live: local paths, Git tags and the Terraform Registry, plus how to version and consume them safely."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Validate a module",
+       "prompt": "Run validate in a module directory without configuring a backend.",
+       "command": "terraform init -backend=false && terraform validate",
+       "expected": "Success! The configuration is valid.",
+       "hint": "Use -backend=false when you only want syntax checks.",
+       "solution": "terraform init -backend=false && terraform validate"
+      },
+      {
+       "title": "Format and check",
+       "prompt": "Check formatting recursively without changing files.",
+       "command": "terraform fmt -check -recursive",
+       "expected": "No output and exit code 0 when everything is formatted; filenames are printed otherwise.",
+       "hint": "-check exits non-zero if changes are needed.",
+       "solution": "terraform fmt -recursive"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which file(s) form a module's public interface?",
+        "options": [
+         "main.tf only",
+         "variables.tf and outputs.tf",
+         "versions.tf",
+         "README.md"
+        ],
+        "answer": 1,
+        "explain": "Inputs and outputs are what callers depend on; resources are internal."
+       },
+       {
+        "question": "Why avoid provider blocks inside child modules?",
+        "options": [
+         "They are syntax errors",
+         "They make the module hard to reuse and block count/for_each and clean removal",
+         "They slow plans",
+         "They disable validation"
+        ],
+        "answer": 1,
+        "explain": "Providers should be configured in the root and passed in; embedded providers couple the module to one configuration."
+       },
+       {
+        "question": "What does a variable validation block do?",
+        "options": [
+         "Encrypts the value",
+         "Rejects bad input at plan time with a custom message",
+         "Sets a default",
+         "Hides the value in logs"
+        ],
+        "answer": 1,
+        "explain": "validation conditions are evaluated during plan, giving early readable errors."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-templates",
+      "k8s-kustomize"
+     ],
+     "tags": [
+      "terraform",
+      "modules",
+      "variables",
+      "outputs"
+     ],
+     "commands": [
+      "terraform init",
+      "terraform validate",
+      "terraform fmt",
+      "terraform plan"
+     ],
+     "sources": [
+      {
+       "title": "Modules overview",
+       "url": "https://developer.hashicorp.com/terraform/language/modules"
+      },
+      {
+       "title": "Module development",
+       "url": "https://developer.hashicorp.com/terraform/language/modules/develop"
+      },
+      {
+       "title": "Custom conditions and validation",
+       "url": "https://developer.hashicorp.com/terraform/language/expressions/custom-conditions"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tfa-module-sources",
+     "title": "Module sources, registry and versioning",
+     "duration": "14 min",
+     "summary": "Consume modules from local paths, Git and registries with pinned versions, and upgrade them without surprises.",
+     "objectives": [
+      "Choose between local, registry and Git sources",
+      "Write correct version constraints",
+      "Use for_each on modules",
+      "Upgrade a module and review the plan"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Where modules come from",
+       "body": "Terraform resolves the `source` argument of a module call at `terraform init` and copies the module into `.terraform/modules`. Sources can be a **local path** (`./modules/x`), a **registry address** (`terraform-aws-modules/vpc/aws`), a **Git URL** pinned by tag (`git::https://...?ref=v1.2.0`), or an object-storage archive. Only registry sources support the `version` argument; for Git you pin with `?ref=`.\n\nBecause modules are code you execute with cloud credentials, you must treat them like dependencies: pin exact or tightly bounded versions, review upgrades, and prefer sources you trust."
+      },
+      {
+       "type": "text",
+       "title": "About this example: version constraints and source types",
+       "body": "This file shows the same module consumed three ways. The registry call uses `version = \"~> 5.8\"` (any 5.x at or above 5.8), the Git call pins an immutable tag with `?ref=`, and the local call has no version at all. Read the comments, then run `terraform init` to see each one downloaded."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "main.tf (three module sources)",
+       "code": "module \"vpc\" {\n  source  = \"terraform-aws-modules/vpc/aws\"\n  version = \"~> 5.8\"\n\n  name = \"platform\"\n  cidr = \"10.20.0.0/16\"\n  azs  = [\"us-east-1a\", \"us-east-1b\"]\n  private_subnets = [\"10.20.1.0/24\", \"10.20.2.0/24\"]\n  public_subnets  = [\"10.20.101.0/24\", \"10.20.102.0/24\"]\n  enable_nat_gateway = true\n  single_nat_gateway = true\n}\n\nmodule \"baseline\" {\n  source = \"git::https://github.com/acme/terraform-aws-baseline.git?ref=v1.4.2\"\n}\n\nmodule \"tags\" {\n  source = \"./modules/tags\"\n}",
+       "output": null,
+       "note": "Pin Git sources to a tag or commit SHA, never to a branch."
+      },
+      {
+       "type": "text",
+       "title": "About this example: what terraform init prints",
+       "body": "Running `terraform init` downloads every module and provider and writes `.terraform.lock.hcl`. Look at the lines for each module (registry version resolved, Git ref cloned) and the provider selection; commit the lock file so everyone gets identical provider builds."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Initialising a configuration",
+       "code": "terraform init",
+       "output": "Initializing the backend...\nInitializing modules...\nDownloading registry.terraform.io/terraform-aws-modules/vpc/aws 5.8.1 for vpc...\n- vpc in .terraform/modules/vpc\nDownloading git::https://github.com/acme/terraform-aws-baseline.git?ref=v1.4.2 for baseline...\n- baseline in .terraform/modules/baseline\n- tags in modules/tags\n\nInitializing provider plugins...\n- Finding hashicorp/aws versions matching \">= 5.40.0, < 6.0.0\"...\n- Installing hashicorp/aws v5.72.1...\n- Installed hashicorp/aws v5.72.1 (signed by HashiCorp)\n\nTerraform has created a lock file .terraform.lock.hcl to record the provider\nselections it made above.\n\nTerraform has been successfully initialized!",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: upgrading a module safely",
+       "body": "The sequence below upgrades a registry module: raise the version constraint, run `terraform init -upgrade`, then read the plan carefully. Focus on lines marked `must be replaced`, which indicate that the new module version would recreate a resource."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Upgrade and inspect the diff",
+       "code": "sed -i 's/~> 5.8/~> 5.13/' main.tf\nterraform init -upgrade\nterraform plan -out=upgrade.tfplan | tail -n 8",
+       "output": "Plan: 0 to add, 3 to change, 0 to destroy.\n\nChanges to Outputs:\n  ~ vpc_arn = \"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a1b2c3d4e\" -> (known after apply)\n\nSaved the plan to: upgrade.tfplan",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Module source types",
+       "head": [
+        "Source",
+        "Example",
+        "Versioning",
+        "Use for"
+       ],
+       "rows": [
+        [
+         "Local path",
+         "./modules/network",
+         "None (same repo)",
+         "Code private to one repo"
+        ],
+        [
+         "Registry",
+         "terraform-aws-modules/vpc/aws",
+         "version = \"~> 5.8\"",
+         "Well-known community modules"
+        ],
+        [
+         "Private registry",
+         "app.terraform.io/acme/vpc/aws",
+         "version = ...",
+         "Company library on HCP Terraform"
+        ],
+        [
+         "Git",
+         "git::https://...?ref=v1.4.2",
+         "?ref=tag or SHA",
+         "Internal modules without a registry"
+        ],
+        [
+         "S3/GCS archive",
+         "s3::https://s3.amazonaws.com/b/m.zip",
+         "Object key/version",
+         "Air-gapped distribution"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "**Unpinned Git branches** (`?ref=main`) make plans non-reproducible. **`version = \">= 5.0\"`** will happily jump a major version. **Ignoring the plan after an upgrade**: a module bump can replace NAT gateways or databases. **Copying a registry module's code** into your repo loses security updates; fork only with intent."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Modules come from local paths, registries or Git; pin them tightly, commit `.terraform.lock.hcl`, and read the plan after every upgrade. Use semantic versions (major for breaking changes, with `moved` blocks for renames) for your own releases.\n\nNext: where Terraform keeps its memory. We move state to a remote backend with locking and split it per environment."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Show installed modules",
+       "prompt": "List modules recorded after init.",
+       "command": "terraform providers",
+       "expected": "A tree showing the root and each module with its required providers.",
+       "hint": "Run it after terraform init.",
+       "solution": "terraform providers"
+      },
+      {
+       "title": "Upgrade within constraints",
+       "prompt": "Re-resolve modules and providers to the newest allowed versions.",
+       "command": "terraform init -upgrade",
+       "expected": "Newer versions within the constraints are downloaded and the lock file is updated.",
+       "hint": "The lock file only changes with -upgrade.",
+       "solution": "terraform init -upgrade"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does version = \"~> 5.8\" allow?",
+        "options": [
+         "Only 5.8.0",
+         "5.8 and newer 5.x releases",
+         "Any 5 or 6 release",
+         "Any release"
+        ],
+        "answer": 1,
+        "explain": "The pessimistic operator allows increments of the last specified part: >= 5.8, < 6.0."
+       },
+       {
+        "question": "How do you pin a Git module source?",
+        "options": [
+         "version argument",
+         "?ref=<tag or sha> in the URL",
+         "A branch name",
+         "It cannot be pinned"
+        ],
+        "answer": 1,
+        "explain": "The version argument is only for registries; Git uses ?ref=."
+       },
+       {
+        "question": "Why commit .terraform.lock.hcl?",
+        "options": [
+         "It stores secrets",
+         "It records exact provider versions and hashes for reproducibility",
+         "It stores state",
+         "It is required for fmt"
+        ],
+        "answer": 1,
+        "explain": "The lock file makes all machines and CI use identical providers."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-basics",
+      "k8s-gitops"
+     ],
+     "tags": [
+      "terraform",
+      "registry",
+      "versioning",
+      "git"
+     ],
+     "commands": [
+      "terraform init -upgrade",
+      "terraform providers"
+     ],
+     "sources": [
+      {
+       "title": "Module sources",
+       "url": "https://developer.hashicorp.com/terraform/language/modules/sources"
+      },
+      {
+       "title": "Version constraints",
+       "url": "https://developer.hashicorp.com/terraform/language/expressions/version-constraints"
+      },
+      {
+       "title": "Dependency lock file",
+       "url": "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-tfa-m-state",
+   "title": "State and teams",
+   "summary": "Remote state, isolation and state surgery.",
+   "lessons": [
+    {
+     "id": "k8s-tfa-remote-state",
+     "title": "Remote state and environment isolation",
+     "duration": "16 min",
+     "summary": "Configure an S3 backend with locking, keep one state per stack and choose an environment-separation strategy.",
+     "objectives": [
+      "Create a secure S3 state bucket",
+      "Configure the S3 backend with native or DynamoDB locking",
+      "Migrate local state to a backend",
+      "Compare workspaces, directories and Terragrunt"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Why state must be remote",
+       "body": "Terraform's **state** file maps your configuration to real resources and stores their attributes. Locally it lives in `terraform.tfstate`, which is fine for one person and dangerous for a team: it is easy to lose, to overwrite concurrently, and it may contain secrets. A **backend** stores state remotely and, ideally, takes a **lock** so two applies cannot run at once.\n\nThe standard AWS setup is an **S3 bucket** (versioned, encrypted, private) as backend. Since Terraform 1.10 the S3 backend supports **native locking** with `use_lockfile = true`, which writes a `.tflock` object next to the state; the older approach uses a **DynamoDB table** with a `LockID` key. New setups should prefer native S3 locking; DynamoDB locking is deprecated but still works."
+      },
+      {
+       "type": "text",
+       "title": "About this example: bootstrapping the state bucket",
+       "body": "This small configuration creates the bucket once, with versioning (so you can roll back state), default encryption and public access blocked. Apply it with local state first, then never touch it casually; the bucket name is globally unique, so change it. Look at `versioning_configuration` which is your safety net."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "bootstrap/main.tf",
+       "code": "resource \"aws_s3_bucket\" \"tfstate\" {\n  bucket = \"acme-tfstate-123456789012-us-east-1\"\n  lifecycle { prevent_destroy = true }\n}\n\nresource \"aws_s3_bucket_versioning\" \"tfstate\" {\n  bucket = aws_s3_bucket.tfstate.id\n  versioning_configuration { status = \"Enabled\" }\n}\n\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"tfstate\" {\n  bucket = aws_s3_bucket.tfstate.id\n  rule {\n    apply_server_side_encryption_by_default { sse_algorithm = \"aws:kms\" }\n  }\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"tfstate\" {\n  bucket                  = aws_s3_bucket.tfstate.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}",
+       "output": null,
+       "note": "The bootstrap bucket is the one resource you cannot store in the backend it creates; keep its tiny state in the repo or recreate it by import."
+      },
+      {
+       "type": "text",
+       "title": "About this example: the S3 backend block",
+       "body": "Each environment gets its own `key` (state path). `use_lockfile = true` enables S3 native locking; the commented DynamoDB line is the legacy alternative. Backend blocks cannot use variables, so pass differing values with `-backend-config` or keep one file per environment, as this example does."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "envs/prod/backend.tf",
+       "code": "terraform {\n  required_version = \">= 1.10\"\n\n  backend \"s3\" {\n    bucket       = \"acme-tfstate-123456789012-us-east-1\"\n    key          = \"prod/network/terraform.tfstate\"\n    region       = \"us-east-1\"\n    encrypt      = true\n    use_lockfile = true\n    # dynamodb_table = \"acme-tflocks\"   # legacy locking, deprecated\n  }\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: migrating local state to the backend",
+       "body": "After adding the backend block, `terraform init -migrate-state` offers to copy your existing state. The answer `yes` uploads it. Afterwards the local file is empty and plans read from S3; the lock appears while an apply runs."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Migrate state",
+       "code": "terraform init -migrate-state",
+       "output": "Initializing the backend...\nDo you want to copy existing state to the new backend?\n  Pre-existing state was found while migrating the previous \"local\" backend to the\n  newly configured \"s3\" backend. No existing state was found in the newly\n  configured \"s3\" backend. Do you want to copy this state to the new \"s3\"\n  backend? Enter \"yes\" to copy and \"no\" to start with an empty state.\n\n  Enter a value: yes\n\nSuccessfully configured the backend \"s3\"! Terraform will automatically\nuse this backend unless the backend configuration changes.",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Three ways to separate environments",
+       "head": [
+        "Approach",
+        "How",
+        "Strength",
+        "Weakness"
+       ],
+       "rows": [
+        [
+         "Workspaces",
+         "`terraform workspace new prod`; same code and backend, `terraform.workspace` selects values",
+         "Quick, no duplication",
+         "Same credentials and bucket; easy to apply to the wrong workspace; not for prod isolation"
+        ],
+        [
+         "Directory per environment",
+         "envs/dev, envs/prod each with own backend key and tfvars, calling shared modules",
+         "Explicit, separate blast radius, different accounts possible",
+         "Some repetition of root files"
+        ],
+        [
+         "Terragrunt",
+         "Wrapper that generates backends and DRY-s inputs across directories",
+         "Removes boilerplate, dependency graph between stacks",
+         "Extra tool and concepts"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "**One giant state** for everything: slow plans and a huge blast radius; split by lifecycle and ownership (network, cluster, apps). **Using workspaces for prod versus dev** in one account and bucket. **Disabling locking** with `-lock=false` to get past an error instead of finding who holds the lock. **State bucket without versioning**, leaving no way back after a bad apply."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Store state in a versioned, encrypted, private S3 bucket with native locking (or DynamoDB on older versions), one key per stack and environment. Prefer directory-per-environment for strong isolation; use workspaces for short-lived copies and Terragrunt when boilerplate hurts.\n\nNext: what to do when state and reality diverge, from renames with `moved` to recovering a stuck lock."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Read the current state",
+       "prompt": "List resources tracked in state.",
+       "command": "terraform state list",
+       "expected": "One address per line, such as module.network_prod.aws_vpc.this.",
+       "hint": "Needs an initialised backend.",
+       "solution": "terraform state list"
+      },
+      {
+       "title": "Pull the raw state",
+       "prompt": "Download state to stdout to inspect serial and lineage.",
+       "command": "terraform state pull | head -n 8",
+       "expected": "JSON starting with version, terraform_version, serial and lineage.",
+       "hint": "Never commit this output; it may contain secrets.",
+       "solution": "terraform state pull | head -n 8"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "What does use_lockfile = true do in the S3 backend?",
+        "options": [
+         "Encrypts the bucket",
+         "Enables native S3 state locking via a .tflock object",
+         "Creates a DynamoDB table",
+         "Disables locking"
+        ],
+        "answer": 1,
+        "explain": "Terraform 1.10+ can lock using S3 conditional writes, removing the DynamoDB requirement."
+       },
+       {
+        "question": "Which is the main weakness of workspaces for production isolation?",
+        "options": [
+         "They cost money",
+         "They share the same backend and credentials, so mistakes cross environments",
+         "They cannot use modules",
+         "They have no state"
+        ],
+        "answer": 1,
+        "explain": "Workspaces separate state files only; access control and blast radius stay shared."
+       },
+       {
+        "question": "Why enable versioning on the state bucket?",
+        "options": [
+         "Faster plans",
+         "To recover an earlier state after corruption or a bad apply",
+         "To encrypt data",
+         "To allow variables in backend blocks"
+        ],
+        "answer": 1,
+        "explain": "Each state write creates a version you can restore."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-secrets",
+      "k8s-gitops"
+     ],
+     "tags": [
+      "terraform",
+      "state",
+      "s3",
+      "locking"
+     ],
+     "commands": [
+      "terraform init -migrate-state",
+      "terraform state list",
+      "terraform workspace"
+     ],
+     "sources": [
+      {
+       "title": "S3 backend",
+       "url": "https://developer.hashicorp.com/terraform/language/backend/s3"
+      },
+      {
+       "title": "State",
+       "url": "https://developer.hashicorp.com/terraform/language/state"
+      },
+      {
+       "title": "Workspaces",
+       "url": "https://developer.hashicorp.com/terraform/language/state/workspaces"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tfa-state-surgery",
+     "title": "State surgery: moved, import and removed",
+     "duration": "15 min",
+     "summary": "Refactor safely with declarative state changes and recover from locks and corrupted state.",
+     "objectives": [
+      "Rename and relocate resources with moved blocks",
+      "Adopt existing resources with import blocks",
+      "Forget resources with removed blocks",
+      "Release a stale lock and restore a previous state"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Why state surgery exists",
+       "body": "Refactoring code changes addresses. If you rename `aws_instance.web` to `aws_instance.app`, Terraform sees one resource gone and a new one wanted, so it plans a destroy and create. **State surgery** tells Terraform \"these are the same object\" without touching the real infrastructure. Since 1.1 you do this declaratively in code with `moved` blocks; since 1.5 `import` blocks, and since 1.7 `removed` blocks. The older CLI commands (`terraform state mv`, `rm`, `import`) still exist for one-off fixes.\n\nDeclarative blocks are preferred because they are reviewed in a pull request, planned like any change, and apply identically for every teammate and environment."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a moved block",
+       "body": "This file renames a resource and moves another into a module. Terraform reads each `moved` block during plan and updates the state address, so the plan shows `has moved to` instead of destroy and create. Keep the block in your code until all environments have applied it."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "refactor.tf",
+       "code": "resource \"aws_instance\" \"app\" {      # was: aws_instance.web\n  ami           = \"ami-0abcdef1234567890\"\n  instance_type = \"t3.small\"\n}\n\nmoved {\n  from = aws_instance.web\n  to   = aws_instance.app\n}\n\nmoved {\n  from = aws_s3_bucket.logs\n  to   = module.logging.aws_s3_bucket.this\n}",
+       "output": null,
+       "note": "Never delete a moved block that other environments have not applied yet."
+      },
+      {
+       "type": "text",
+       "title": "About this example: import and removed blocks",
+       "body": "An `import` block adopts an existing resource into state at the next apply; `terraform plan -generate-config-out=generated.tf` can even draft the resource body for you. A `removed` block with `destroy = false` forgets a resource without deleting it, useful when handing ownership to another team."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "adopt.tf",
+       "code": "import {\n  to = aws_s3_bucket.legacy\n  id = \"acme-legacy-assets\"\n}\n\nresource \"aws_s3_bucket\" \"legacy\" {\n  bucket = \"acme-legacy-assets\"\n}\n\nremoved {\n  from = aws_db_instance.old_reporting\n\n  lifecycle {\n    destroy = false\n  }\n}",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: recovering a stuck lock",
+       "body": "If an apply is killed (CI cancelled, laptop closed), the lock may remain. The error names a lock `ID` and who holds it. Confirm nobody is actually running, then release it with `force-unlock`. With S3 native locking you can also delete the `.tflock` object."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Lock error and release",
+       "code": "terraform plan\nterraform force-unlock 3f1c2b9e-77a4-5c1d-9b0e-1a2b3c4d5e6f",
+       "output": "Error: Error acquiring the state lock\n\nLock Info:\n  ID:        3f1c2b9e-77a4-5c1d-9b0e-1a2b3c4d5e6f\n  Path:      acme-tfstate-123456789012-us-east-1/prod/network/terraform.tfstate\n  Operation: OperationTypeApply\n  Who:       ci@runner-42\n  Created:   2026-11-13 09:14:02 UTC\n\nTerraform state has been successfully unlocked!",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Which tool for which situation",
+       "head": [
+        "Situation",
+        "Preferred tool",
+        "Notes"
+       ],
+       "rows": [
+        [
+         "Rename resource or move into module",
+         "`moved` block",
+         "Reviewed in PR, applies everywhere"
+        ],
+        [
+         "Adopt existing cloud resource",
+         "`import` block",
+         "Plan shows `1 to import`"
+        ],
+        [
+         "Stop managing but keep resource",
+         "`removed` block, `destroy = false`",
+         "Or `state rm` for one-offs"
+        ],
+        [
+         "Corrupted or wrongly edited state",
+         "Restore previous S3 version",
+         "`aws s3api list-object-versions`, copy back, `terraform state push` last resort"
+        ],
+        [
+         "Stuck lock",
+         "`force-unlock <ID>`",
+         "Only after confirming no run is active"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "danger",
+       "title": "Common mistakes",
+       "body": "**Editing the state JSON by hand** without a backup and without bumping the serial. **`force-unlock` while an apply is really running** can corrupt state. **Removing a `moved` block too early** so other environments plan a destroy. **`terraform state rm` followed by apply** when the resource is still in code: Terraform will try to create it again and fail on the name conflict."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Use `moved`, `import` and `removed` blocks for refactors, keep CLI surgery for emergencies, always back up state first, and rely on bucket versioning for recovery. Locks are released with `force-unlock` only after you verify no run is active.\n\nNext: raise the quality bar with automated tests, linters, security scanners and policy as code."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Back up state",
+       "prompt": "Save the current state before any surgery.",
+       "command": "terraform state pull > backup.tfstate",
+       "expected": "A JSON file of the current state is created.",
+       "hint": "Use a dated name.",
+       "solution": "terraform state pull > backup-$(date +%F).tfstate"
+      },
+      {
+       "title": "Show one resource",
+       "prompt": "Inspect a single resource in state.",
+       "command": "terraform state show aws_instance.app",
+       "expected": "The attributes recorded for the resource.",
+       "hint": "Use the full address.",
+       "solution": "terraform state show aws_instance.app"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which block renames a resource without destroying it?",
+        "options": [
+         "removed",
+         "moved",
+         "import",
+         "lifecycle"
+        ],
+        "answer": 1,
+        "explain": "moved declares the old and new address."
+       },
+       {
+        "question": "What does removed with destroy = false do?",
+        "options": [
+         "Deletes the real resource",
+         "Removes it from state but leaves it running",
+         "Imports it",
+         "Locks it"
+        ],
+        "answer": 1,
+        "explain": "It forgets the resource without destroying the infrastructure."
+       },
+       {
+        "question": "Before force-unlock you should…",
+        "options": [
+         "Delete state",
+         "Confirm no apply is running",
+         "Run destroy",
+         "Change workspace"
+        ],
+        "answer": 1,
+        "explain": "Unlocking during a live apply risks concurrent writes and corruption."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-gitops"
+     ],
+     "tags": [
+      "terraform",
+      "state",
+      "moved",
+      "import"
+     ],
+     "commands": [
+      "terraform state mv",
+      "terraform state rm",
+      "terraform force-unlock",
+      "terraform plan"
+     ],
+     "sources": [
+      {
+       "title": "Refactoring",
+       "url": "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+      },
+      {
+       "title": "Import",
+       "url": "https://developer.hashicorp.com/terraform/language/import"
+      },
+      {
+       "title": "State command",
+       "url": "https://developer.hashicorp.com/terraform/cli/state"
+      }
+     ],
+     "level": null
+    }
+   ]
+  },
+  {
+   "id": "k8s-tfa-m-delivery",
+   "title": "Quality, delivery and Kubernetes",
+   "summary": "Testing, pipelines, secrets and cluster add-ons.",
+   "lessons": [
+    {
+     "id": "k8s-tfa-testing-quality",
+     "title": "Testing, linting and policy as code",
+     "duration": "15 min",
+     "summary": "Add terraform test, tflint, security scanning, pre-commit and policy-as-code checks to your workflow.",
+     "objectives": [
+      "Write and run terraform test files",
+      "Configure tflint and a security scanner",
+      "Wire checks into pre-commit",
+      "Explain OPA and Sentinel policy enforcement"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Quality gates for infrastructure code",
+       "body": "Infrastructure changes can delete databases, so you want automatic checks before a human reviews a plan. A practical pipeline layers: **formatting** (`terraform fmt`), **validation** (`terraform validate`), **linting** (`tflint`, finds invalid instance types and deprecated syntax), **security scanning** (`checkov` or `trivy config`, the successor to tfsec), **tests** (`terraform test`), and **policy** (OPA or Sentinel) over the plan.\n\nRun the cheap checks first and locally through **pre-commit** hooks, then repeat them in CI where they cannot be skipped."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a native terraform test",
+       "body": "Files ending in `.tftest.hcl` are run by `terraform test` (Terraform 1.6+). This test uses `command = plan` so it creates nothing, then asserts on planned values. Look at the `run` block, its `variables` and each `assert` with a readable message."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "tests/basic.tftest.hcl",
+       "code": "variables {\n  name       = \"test\"\n  cidr_block = \"10.99.0.0/16\"\n  azs        = [\"us-east-1a\", \"us-east-1b\"]\n}\n\nrun \"creates_one_subnet_per_az\" {\n  command = plan\n\n  assert {\n    condition     = length(aws_subnet.private) == 2\n    error_message = \"Expected one private subnet per AZ.\"\n  }\n}\n\nrun \"rejects_bad_cidr\" {\n  command = plan\n  variables { cidr_block = \"nonsense\" }\n  expect_failures = [var.cidr_block]\n}",
+       "output": null,
+       "note": "Use command = apply tests only in a sandbox account; Terraform destroys what the test created afterwards."
+      },
+      {
+       "type": "text",
+       "title": "About this example: security scanning and pre-commit",
+       "body": "Checkov scans Terraform for misconfigurations such as unencrypted buckets. The output lists failed checks with resource and file lines. The second file wires fmt, validate, tflint and checkov into pre-commit so problems are caught before you commit."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Scan with checkov",
+       "code": "checkov -d . --framework terraform --quiet --compact",
+       "output": "Passed checks: 41, Failed checks: 2, Skipped checks: 0\n\nCheck: CKV_AWS_18: \"Ensure the S3 bucket has access logging enabled\"\n\tFAILED for resource: aws_s3_bucket.assets\n\tFile: /main.tf:12-18\n\nCheck: CKV_AWS_145: \"Ensure S3 bucket is encrypted with KMS by default\"\n\tFAILED for resource: aws_s3_bucket.assets\n\tFile: /main.tf:12-18",
+       "note": null
+      },
+      {
+       "type": "text",
+       "title": "About this example: pre-commit hooks",
+       "body": "This `.pre-commit-config.yaml` is not a Kubernetes manifest, so it is shown as text. Install with `pre-commit install`; hooks then run on staged files at every commit. Pin each `rev` to a release tag."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": ".pre-commit-config.yaml",
+       "code": "repos:\n  - repo: https://github.com/antonbabenko/pre-commit-terraform\n    rev: v1.96.1\n    hooks:\n      - id: terraform_fmt\n      - id: terraform_validate\n      - id: terraform_tflint\n      - id: terraform_checkov\n        args: [\"--args=--quiet\"]\n      - id: terraform_docs",
+       "output": null,
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Tools and what they catch",
+       "head": [
+        "Tool",
+        "Layer",
+        "Catches",
+        "Example finding"
+       ],
+       "rows": [
+        [
+         "terraform fmt/validate",
+         "Syntax",
+         "Style, wrong references",
+         "Reference to undeclared variable"
+        ],
+        [
+         "tflint",
+         "Lint",
+         "Provider-aware mistakes",
+         "`t2.supermicro` is an invalid instance type"
+        ],
+        [
+         "checkov / trivy config",
+         "Security",
+         "Misconfiguration",
+         "S3 bucket without encryption"
+        ],
+        [
+         "terraform test",
+         "Behaviour",
+         "Module logic regressions",
+         "Wrong number of subnets"
+        ],
+        [
+         "OPA (conftest) / Sentinel",
+         "Policy over plan",
+         "Organisation rules",
+         "Deny public ingress 0.0.0.0/0 on port 22"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "**Only scanning in CI**, so developers learn about failures late. **Blanket skips** (`#checkov:skip`) without a written reason. **Tests that apply into production accounts.** **Unpinned tool versions**, making pipelines flaky when a scanner adds rules."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Layer cheap to expensive: fmt, validate, tflint, checkov, terraform test, then policy over the JSON plan. Run them in pre-commit and again in CI.\n\nNext: wire these checks into a delivery pipeline: plan on pull request, apply on merge, and no long-lived AWS keys."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Run formatting check",
+       "prompt": "Fail if any file is unformatted.",
+       "command": "terraform fmt -check -recursive",
+       "expected": "Exit code 0 when clean.",
+       "hint": "Add -diff to see changes.",
+       "solution": "terraform fmt -recursive"
+      },
+      {
+       "title": "Export a plan as JSON",
+       "prompt": "Produce JSON that policy tools can read.",
+       "command": "terraform show -json plan.tfplan > plan.json",
+       "expected": "A JSON document with resource_changes.",
+       "hint": "Create plan.tfplan first with terraform plan -out=plan.tfplan.",
+       "solution": "terraform plan -out=plan.tfplan && terraform show -json plan.tfplan > plan.json"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Which command runs .tftest.hcl files?",
+        "options": [
+         "terraform validate",
+         "terraform test",
+         "terraform check",
+         "terraform fmt"
+        ],
+        "answer": 1,
+        "explain": "terraform test is built in since 1.6."
+       },
+       {
+        "question": "What input do OPA/conftest policies usually evaluate?",
+        "options": [
+         "HCL source only",
+         "The JSON form of a plan",
+         "The state bucket",
+         "Docker images"
+        ],
+        "answer": 1,
+        "explain": "terraform show -json produces the plan data policies inspect."
+       },
+       {
+        "question": "What does tflint catch that validate does not?",
+        "options": [
+         "Syntax errors",
+         "Provider-specific issues such as invalid instance types",
+         "Missing braces",
+         "State drift"
+        ],
+        "answer": 1,
+        "explain": "tflint rulesets know provider values."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-sec-admission-policy",
+      "k8s-ci-pipelines"
+     ],
+     "tags": [
+      "terraform",
+      "testing",
+      "tflint",
+      "policy"
+     ],
+     "commands": [
+      "terraform test",
+      "tflint",
+      "checkov",
+      "conftest test"
+     ],
+     "sources": [
+      {
+       "title": "Tests",
+       "url": "https://developer.hashicorp.com/terraform/language/tests"
+      },
+      {
+       "title": "TFLint",
+       "url": "https://github.com/terraform-linters/tflint"
+      },
+      {
+       "title": "Checkov",
+       "url": "https://www.checkov.io/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tfa-cicd-secrets",
+     "title": "CI/CD, OIDC and secrets for Terraform",
+     "duration": "16 min",
+     "summary": "Build a plan-on-PR, apply-on-merge pipeline that authenticates to AWS with OIDC and no stored keys.",
+     "objectives": [
+      "Explain plan on PR and apply on merge",
+      "Keep secrets out of code and protect them in state",
+      "Create an OIDC provider and scoped trust policy",
+      "Write a GitHub Actions workflow with gated apply",
+      "Describe the Atlantis workflow"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "The delivery model: plan on PR, apply on merge",
+       "body": "A safe Terraform workflow mirrors application CI. On every **pull request** the pipeline runs fmt, validate, lint and scans, then `terraform plan` and posts the plan as a comment so reviewers see exactly what will change. After merge to the main branch, the pipeline runs `terraform apply` of **the same saved plan** (or a fresh plan gated by approval). Humans review the plan; machines apply it.\n\nTwo security rules matter most: the pipeline must not hold **long-lived AWS access keys**, and the role used for pull request plans should be **read-only** while only the main branch can assume the write role."
+      },
+      {
+       "type": "text",
+       "title": "About this example: OIDC trust in AWS",
+       "body": "GitHub Actions can obtain short-lived AWS credentials through OpenID Connect. This HCL registers GitHub as an identity provider and creates an apply role whose trust policy accepts only tokens from one repository and branch. The `sub` condition is the critical line: widen it carelessly and any repo could assume the role."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "iam-oidc.tf",
+       "code": "resource \"aws_iam_openid_connect_provider\" \"github\" {\n  url            = \"https://token.actions.githubusercontent.com\"\n  client_id_list = [\"sts.amazonaws.com\"]\n}\n\ndata \"aws_iam_policy_document\" \"trust_apply\" {\n  statement {\n    actions = [\"sts:AssumeRoleWithWebIdentity\"]\n    principals {\n      type        = \"Federated\"\n      identifiers = [aws_iam_openid_connect_provider.github.arn]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"token.actions.githubusercontent.com:aud\"\n      values   = [\"sts.amazonaws.com\"]\n    }\n    condition {\n      test     = \"StringEquals\"\n      variable = \"token.actions.githubusercontent.com:sub\"\n      values   = [\"repo:acme/infrastructure:ref:refs/heads/main\"]\n    }\n  }\n}\n\nresource \"aws_iam_role\" \"terraform_apply\" {\n  name               = \"terraform-apply\"\n  assume_role_policy = data.aws_iam_policy_document.trust_apply.json\n}",
+       "output": null,
+       "note": "Create a second role trusted for pull_request events with read-only permissions for plans."
+      },
+      {
+       "type": "text",
+       "title": "About this example: GitHub Actions workflow",
+       "body": "This workflow is a GitHub file, not a Kubernetes manifest, so it is shown as text. Jobs request `id-token: write` to mint the OIDC token, assume the role with no stored secrets, run checks, and plan on pull requests. The apply job runs only on `main` and uses an environment with required reviewers."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": ".github/workflows/terraform.yml",
+       "code": "name: terraform\non:\n  pull_request:\n  push:\n    branches: [main]\n\npermissions:\n  id-token: write\n  contents: read\n  pull-requests: write\n\njobs:\n  plan:\n    if: github.event_name == 'pull_request'\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: hashicorp/setup-terraform@v3\n        with: { terraform_version: 1.10.5 }\n      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          role-to-assume: arn:aws:iam::123456789012:role/terraform-plan\n          aws-region: us-east-1\n      - run: terraform fmt -check -recursive\n      - run: terraform init -input=false\n      - run: terraform validate\n      - run: terraform plan -input=false -out=tfplan\n\n  apply:\n    if: github.ref == 'refs/heads/main'\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - uses: actions/checkout@v4\n      - uses: hashicorp/setup-terraform@v3\n        with: { terraform_version: 1.10.5 }\n      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          role-to-assume: arn:aws:iam::123456789012:role/terraform-apply\n          aws-region: us-east-1\n      - run: terraform init -input=false\n      - run: terraform apply -input=false -auto-approve",
+       "output": null,
+       "note": "-auto-approve is acceptable only because the environment gate and the PR review already approved the change."
+      },
+      {
+       "type": "text",
+       "title": "About this example: secrets and least privilege",
+       "body": "This file shows three habits. A `sensitive` variable is redacted from plan output (but still stored in state, so the state bucket must be encrypted and locked down). The password is generated and written to Secrets Manager rather than committed. The IAM policy gives the plan role read access to the state object only. Atlantis users declare the same roles in `atlantis.yaml` projects."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "security.tf",
+       "code": "variable \"db_admin_user\" {\n  type      = string\n  sensitive = true\n}\n\nresource \"random_password\" \"db\" {\n  length  = 32\n  special = false\n}\n\nresource \"aws_secretsmanager_secret\" \"db\" {\n  name = \"prod/app/db\"\n}\n\nresource \"aws_secretsmanager_secret_version\" \"db\" {\n  secret_id     = aws_secretsmanager_secret.db.id\n  secret_string = random_password.db.result\n}\n\ndata \"aws_iam_policy_document\" \"plan_state_read\" {\n  statement {\n    actions   = [\"s3:GetObject\", \"s3:ListBucket\"]\n    resources = [\n      \"arn:aws:s3:::acme-tfstate-123456789012-us-east-1\",\n      \"arn:aws:s3:::acme-tfstate-123456789012-us-east-1/prod/*\",\n    ]\n  }\n}",
+       "output": null,
+       "note": "Anything Terraform writes into a resource is in state in plain text, even if marked sensitive. Ephemeral resources (Terraform 1.10+) keep values out of state."
+      },
+      {
+       "type": "table",
+       "title": "Pipeline stage responsibilities",
+       "head": [
+        "Stage",
+        "Trigger",
+        "Credentials",
+        "Output"
+       ],
+       "rows": [
+        [
+         "Checks (fmt, lint, scan)",
+         "Every PR",
+         "None or read-only",
+         "Pass/fail"
+        ],
+        [
+         "Plan",
+         "Every PR",
+         "Read-only OIDC role",
+         "Plan comment/artifact"
+        ],
+        [
+         "Apply",
+         "Merge to main",
+         "Write OIDC role, gated environment",
+         "Applied saved plan"
+        ],
+        [
+         "Drift detection",
+         "Nightly schedule",
+         "Read-only role",
+         "Alert when `plan -detailed-exitcode` returns 2"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "**Static access keys in CI secrets.** **Trust policy with `sub` of `repo:acme/*`** which lets every repo apply. **Planning in the PR and re-planning at apply** so the applied change differs from the reviewed one. **No concurrency control**, allowing two pipelines to compete for the lock; use a `concurrency` group per stack."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Plan on PR with a read-only OIDC role, apply the reviewed plan on merge with a separate write role, and keep no static keys anywhere. Atlantis offers the same flow driven by PR comments. Mark secrets sensitive, generate them instead of committing them, encrypt state and grant each role the minimum IAM actions.\n\nNext: protecting secrets and permissions, then bringing Kubernetes under Terraform control."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Detect drift with exit code",
+       "prompt": "Run a plan that signals changes through the exit code.",
+       "command": "terraform plan -detailed-exitcode",
+       "expected": "Exit 0 means no changes, 2 means changes present, 1 means error.",
+       "hint": "Check $? after the command.",
+       "solution": "terraform plan -detailed-exitcode; echo $?"
+      },
+      {
+       "title": "Create a saved plan",
+       "prompt": "Write a plan file for later apply.",
+       "command": "terraform plan -out=tfplan",
+       "expected": "Saved the plan to: tfplan",
+       "hint": "Apply it with terraform apply tfplan.",
+       "solution": "terraform plan -input=false -out=tfplan"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Why use OIDC instead of access keys in CI?",
+        "options": [
+         "It is faster",
+         "Credentials are short-lived and tied to repo and branch claims",
+         "It removes IAM",
+         "It is required by S3"
+        ],
+        "answer": 1,
+        "explain": "The token exchange yields temporary credentials with no secret to leak."
+       },
+       {
+        "question": "What does applying a saved plan guarantee?",
+        "options": [
+         "Nothing",
+         "What was reviewed is what is applied",
+         "Lower cost",
+         "No locking"
+        ],
+        "answer": 1,
+        "explain": "A saved plan is bound to the state it was created from."
+       },
+       {
+        "question": "Which claim restricts which repo/branch may assume the role?",
+        "options": [
+         "aud",
+         "sub",
+         "iss",
+         "exp"
+        ],
+        "answer": 1,
+        "explain": "The sub condition matches repository and ref."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-ci-pipelines",
+      "k8s-gitops"
+     ],
+     "tags": [
+      "terraform",
+      "ci-cd",
+      "oidc",
+      "github-actions"
+     ],
+     "commands": [
+      "terraform plan",
+      "terraform apply",
+      "aws sts get-caller-identity"
+     ],
+     "sources": [
+      {
+       "title": "Automate Terraform with GitHub Actions",
+       "url": "https://developer.hashicorp.com/terraform/tutorials/automation/github-actions"
+      },
+      {
+       "title": "GitHub OIDC with AWS",
+       "url": "https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws"
+      },
+      {
+       "title": "Atlantis",
+       "url": "https://www.runatlantis.io/docs/"
+      }
+     ],
+     "level": null
+    },
+    {
+     "id": "k8s-tfa-kubernetes-drift",
+     "title": "Managing Kubernetes with Terraform, drift and refactors",
+     "duration": "15 min",
+     "summary": "Use the kubernetes, helm and kubectl providers without ordering traps and handle drift and big refactors safely.",
+     "objectives": [
+      "Choose between the kubernetes, helm and kubectl providers",
+      "Configure providers so cluster creation and use do not collide",
+      "Install a chart with helm_release",
+      "Detect and resolve drift and plan large refactors"
+     ],
+     "sections": [
+      {
+       "type": "text",
+       "title": "Terraform and Kubernetes together",
+       "body": "Terraform is a good fit for the **platform layer** (the cluster, node pools, IAM, namespaces, and installing controllers with Helm) and a poorer fit for fast-moving application manifests, which are often better handled by GitOps. Three providers matter: **kubernetes** (native resources such as namespaces and ConfigMaps), **helm** (`helm_release`, installs Helm 3 charts) and **kubectl** from the community (`kubectl_manifest`, applies arbitrary YAML including CRDs without needing the schema at plan time).\n\nThe central pitfall is **provider configuration ordering**: the kubernetes and helm providers need the cluster endpoint and credentials, but those only exist after the cluster resource is created. If the cluster and the workloads live in the same state and the providers read attributes of a not-yet-created cluster, the first plan fails or targets the wrong cluster."
+      },
+      {
+       "type": "text",
+       "title": "About this example: provider configuration from a cluster data source",
+       "body": "This file configures the kubernetes and helm providers using values from the cluster. The `exec` block runs the AWS CLI to fetch a short-lived token at each run, so no kubeconfig or static token is stored. Check that the data source reads an existing cluster; that is why a separate stack for workloads is safest."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "providers.tf",
+       "code": "data \"aws_eks_cluster\" \"this\" {\n  name = \"prod-use1\"\n}\n\nprovider \"kubernetes\" {\n  host                   = data.aws_eks_cluster.this.endpoint\n  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)\n\n  exec {\n    api_version = \"client.authentication.k8s.io/v1beta1\"\n    command     = \"aws\"\n    args        = [\"eks\", \"get-token\", \"--cluster-name\", \"prod-use1\"]\n  }\n}\n\nprovider \"helm\" {\n  kubernetes {\n    host                   = data.aws_eks_cluster.this.endpoint\n    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)\n    exec {\n      api_version = \"client.authentication.k8s.io/v1beta1\"\n      command     = \"aws\"\n      args        = [\"eks\", \"get-token\", \"--cluster-name\", \"prod-use1\"]\n    }\n  }\n}",
+       "output": null,
+       "note": "Best practice: stack 1 creates the cluster, stack 2 (this one) installs add-ons. Never create the cluster and configure these providers from it in one apply."
+      },
+      {
+       "type": "text",
+       "title": "About this example: a namespace and a helm_release",
+       "body": "This sample creates a namespace with the kubernetes provider and installs ingress-nginx with `helm_release`. The `values` list holds YAML as a string, `atomic = true` rolls back a failed upgrade, and `depends_on` ensures the namespace exists. These are the same chart concepts as helm install, driven from state."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "title": "addons.tf",
+       "code": "resource \"kubernetes_namespace_v1\" \"ingress\" {\n  metadata {\n    name   = \"ingress-nginx\"\n    labels = { \"pod-security.kubernetes.io/enforce\" = \"baseline\" }\n  }\n}\n\nresource \"helm_release\" \"ingress_nginx\" {\n  name             = \"ingress-nginx\"\n  repository       = \"https://kubernetes.github.io/ingress-nginx\"\n  chart            = \"ingress-nginx\"\n  version          = \"4.11.3\"\n  namespace        = kubernetes_namespace_v1.ingress.metadata[0].name\n  atomic           = true\n  timeout          = 600\n\n  values = [yamlencode({\n    controller = {\n      replicaCount = 2\n      service      = { type = \"LoadBalancer\" }\n    }\n  })]\n}",
+       "output": null,
+       "note": "Always pin `version`; an unpinned chart upgrades silently on the next apply."
+      },
+      {
+       "type": "text",
+       "title": "About this example: applying and checking from both sides",
+       "body": "After `terraform apply`, verify with helm and kubectl: Terraform owns the release, so `helm list` shows it as deployed, and the pods run in the namespace. The output shows revision 1 and ready replicas."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "title": "Apply and verify",
+       "code": "terraform apply -auto-approve\nhelm list -n ingress-nginx\nkubectl get pods -n ingress-nginx",
+       "output": "helm_release.ingress_nginx: Creation complete after 48s [id=ingress-nginx]\nApply complete! Resources: 2 added, 0 changed, 0 destroyed.\n\nNAME         \tNAMESPACE    \tREVISION\tSTATUS  \tCHART               \tAPP VERSION\ningress-nginx\tingress-nginx\t1       \tdeployed\tingress-nginx-4.11.3\t1.11.3\n\nNAME                                       READY   STATUS    RESTARTS   AGE\ningress-nginx-controller-6f8d5b7c9-h2k4p   1/1     Running   0          52s\ningress-nginx-controller-6f8d5b7c9-x9v7m   1/1     Running   0          52s",
+       "note": null
+      },
+      {
+       "type": "table",
+       "title": "Drift and large refactors",
+       "head": [
+        "Situation",
+        "Command or practice",
+        "Notes"
+       ],
+       "rows": [
+        [
+         "Detect drift",
+         "`terraform plan -refresh-only`",
+         "Shows differences between state and reality without changing config"
+        ],
+        [
+         "Accept real changes into state",
+         "`terraform apply -refresh-only`",
+         "Use when a manual change is intended; then update the code"
+        ],
+        [
+         "Scheduled detection",
+         "Nightly `plan -detailed-exitcode`",
+         "Exit code 2 means drift; alert on it"
+        ],
+        [
+         "Large refactor",
+         "Split into small PRs with `moved` blocks",
+         "Plan must show no destroys before applying"
+        ],
+        [
+         "Risky change",
+         "Back up state, apply to dev first, use `-target` only for recovery",
+         "Targeted applies leave config and state inconsistent"
+        ],
+        [
+         "Prevent accidents",
+         "`lifecycle { prevent_destroy = true }`",
+         "On databases, clusters and state buckets"
+        ]
+       ]
+      },
+      {
+       "type": "callout",
+       "tone": "warning",
+       "title": "Common mistakes",
+       "body": "**Cluster and workloads in one apply** with providers configured from the new cluster. **Unpinned Helm chart versions.** **Mixing owners**: Terraform and Argo CD or `kubectl apply` fighting over the same objects, causing permanent drift. **Large `-target` workflows** that hide dependency problems. **Giant refactors in one PR** instead of a series of reviewable steps."
+      },
+      {
+       "type": "text",
+       "title": "Recap and what comes next",
+       "body": "Use Terraform for the cluster and platform add-ons, configure the kubernetes and helm providers in a separate stack from the cluster, pin chart versions and let a single tool own each object. Detect drift with refresh-only plans and refactor in small steps using `moved` blocks.\n\nYou have now covered module design, versioning, remote state, surgery, quality gates, secure pipelines and Kubernetes management. A natural next step is the Amazon EKS course, where these patterns create real clusters."
+      }
+     ],
+     "exercises": [
+      {
+       "title": "Detect drift",
+       "prompt": "Run a refresh-only plan.",
+       "command": "terraform plan -refresh-only",
+       "expected": "Lists differences between state and the real infrastructure, or reports no changes.",
+       "hint": "Refresh-only never changes infrastructure.",
+       "solution": "terraform plan -refresh-only"
+      },
+      {
+       "title": "Inspect a release",
+       "prompt": "Confirm the release Terraform manages.",
+       "command": "helm list -n ingress-nginx",
+       "expected": "The ingress-nginx release with STATUS deployed.",
+       "hint": "Use the namespace from the helm_release.",
+       "solution": "helm list -n ingress-nginx"
+      }
+     ],
+     "quiz": {
+      "passScore": 70,
+      "questions": [
+       {
+        "question": "Why keep cluster creation and add-on installation in separate stacks?",
+        "options": [
+         "Terraform forbids it",
+         "Providers need cluster attributes that do not exist until the cluster is created",
+         "Helm requires it",
+         "It is faster"
+        ],
+        "answer": 1,
+        "explain": "Provider configuration is evaluated before resources exist, causing ordering problems."
+       },
+       {
+        "question": "What does helm_release atomic = true do?",
+        "options": [
+         "Locks state",
+         "Rolls back automatically if the install or upgrade fails",
+         "Deletes the chart",
+         "Skips values"
+        ],
+        "answer": 1,
+        "explain": "Atomic upgrades roll back on failure."
+       },
+       {
+        "question": "Which command shows drift without proposing config changes?",
+        "options": [
+         "terraform fmt",
+         "terraform plan -refresh-only",
+         "terraform init",
+         "terraform taint"
+        ],
+        "answer": 1,
+        "explain": "refresh-only compares state with reality."
+       }
+      ]
+     },
+     "lab": null,
+     "related": [
+      "k8s-helm-basics",
+      "k8s-helm-templates",
+      "k8s-gitops"
+     ],
+     "tags": [
+      "terraform",
+      "kubernetes",
+      "helm",
+      "drift"
+     ],
+     "commands": [
+      "terraform plan -refresh-only",
+      "helm list",
+      "kubectl get pods"
+     ],
+     "sources": [
+      {
+       "title": "Helm provider",
+       "url": "https://registry.terraform.io/providers/hashicorp/helm/latest/docs"
+      },
+      {
+       "title": "Kubernetes provider",
+       "url": "https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs"
+      },
+      {
+       "title": "Helm documentation",
+       "url": "https://helm.sh/docs/"
+      }
+     ],
+     "level": null
+    }
+   ]
+  }
+ ],
+ "prerequisites": [
+  "k8s-terraform-essentials"
+ ],
+ "track": "kubernetes"
+}

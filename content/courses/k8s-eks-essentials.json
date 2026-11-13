@@ -1,0 +1,1688 @@
+{
+  "id": "k8s-eks-essentials",
+  "order": 35,
+  "title": "Amazon EKS: Build and Run a Cluster",
+  "subtitle": "VPC, eksctl, access, compute, add-ons, load balancing and cleanup",
+  "level": "Intermediate",
+  "duration": "1h 51m",
+  "icon": "cloud",
+  "accent": "amber",
+  "description": "Build a real Amazon EKS cluster step by step: understand what AWS manages, plan a VPC, create the cluster with eksctl, secure access with IAM, add compute with node groups and Karpenter, install add-ons, expose apps with ALB and NLB, and clean up to avoid costs.",
+  "outcomes": [
+    "Explain the EKS shared-responsibility model, pricing and version support",
+    "Create a cluster in a tagged VPC from an eksctl ClusterConfig",
+    "Grant IAM principals access with access entries and map them to RBAC",
+    "Run workloads on managed nodes, Spot and Karpenter and expose them through ALB/NLB, then delete everything cleanly"
+  ],
+  "modules": [
+    {
+      "id": "k8s-eks-mod-foundations",
+      "title": "Foundations: EKS and your first cluster",
+      "summary": "Understand EKS, plan the VPC and create the cluster.",
+      "lessons": [
+        {
+          "id": "k8s-eks-what-is",
+          "title": "What you will build and what EKS is",
+          "duration": "14 min",
+          "summary": "The path through the course, what AWS manages in EKS versus what you own, the architecture, pricing and the version support policy.",
+          "objectives": [
+            "Describe the end-state cluster you will build in this course and the order of the lessons",
+            "Separate what AWS operates (control plane) from what you operate (nodes, add-ons, workloads)",
+            "Estimate the fixed and variable cost of an EKS cluster",
+            "Explain the 14+12 month version support policy and plan an upgrade cadence"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "What you will build and the path through this course",
+              "body": "By the end of this course you will have a real **Amazon EKS** cluster in `us-east-1`: created from a version-controlled YAML file, reachable with `kubectl`, running on managed nodes, exposing an application through an **Application Load Balancer** with HTTPS, and torn down completely so it stops costing money. Seven lessons get you there in order: (1) what EKS is, (2) a VPC and the cluster itself, (3) who is allowed to talk to it, (4) where pods run, (5) how pods get IPs and which add-ons you need, (6) how traffic enters, (7) a full deployment and cleanup.\n\nEach lesson builds on the previous one, so follow them in sequence. You should already know Pods, Deployments and Services from `k8s-workloads`. You also need an AWS account you can spend a few dollars in. Every command that creates AWS resources is paired with the command that deletes them."
+            },
+            {
+              "type": "text",
+              "title": "The idea: AWS runs the brain, you run the muscle",
+              "body": "A Kubernetes cluster has a **control plane** (API server, etcd, scheduler, controller manager) and **worker nodes** that run your pods. In **Amazon Elastic Kubernetes Service (EKS)** AWS operates the control plane for you: it runs at least two API server instances and three etcd members across three Availability Zones (AZs), patches them, backs them up and replaces failed ones. You never see those machines; you only get an HTTPS endpoint.\n\nEverything else is still yours: the VPC, the worker nodes, the add-ons that run inside the cluster, IAM permissions, the workloads and their cost. EKS is certified Kubernetes, so `kubectl`, Helm and your manifests work unchanged. The AWS-specific parts are authentication (IAM), networking (the VPC CNI) and storage and load balancers (EBS, ELB)."
+            },
+            {
+              "type": "table",
+              "title": "Who is responsible for what",
+              "head": [
+                "Component",
+                "AWS operates",
+                "You operate",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "API server, etcd, scheduler",
+                  "Yes: HA across 3 AZs, patching, backups",
+                  "Choose the version and trigger upgrades",
+                  "`aws eks update-cluster-version`"
+                ],
+                [
+                  "Worker nodes (EC2)",
+                  "Only with Auto Mode or Fargate",
+                  "Managed node groups: you pick type, size, AMI updates",
+                  "`m6i.large` x 3"
+                ],
+                [
+                  "VPC, subnets, security groups",
+                  "No",
+                  "Design, tag and size them",
+                  "Private /19 subnets per AZ"
+                ],
+                [
+                  "Add-ons (CNI, CoreDNS, kube-proxy)",
+                  "Provides tested versions and the install API",
+                  "Enable, update, configure",
+                  "`aws eks create-addon --addon-name vpc-cni`"
+                ],
+                [
+                  "IAM and access",
+                  "IAM service itself",
+                  "Map IAM principals to Kubernetes permissions",
+                  "Access entries, Pod Identity"
+                ],
+                [
+                  "Workloads, ingress, observability",
+                  "No",
+                  "Everything: manifests, scaling, monitoring",
+                  "Deployments, ALB Ingress"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: the architecture at a glance",
+              "body": "This text diagram shows what exists in your AWS account once an EKS cluster is running. The control plane lives in an AWS-owned VPC; EKS attaches **cross-account ENIs** into subnets of your VPC so the API server can reach your nodes and your nodes can reach the API server. Read it from top to bottom: the dashed boundary is the ownership line, and everything below it is billed to you directly."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "EKS architecture (ownership boundary)",
+              "code": "+------------- AWS-managed VPC (not visible to you) -------------+\n|  API server x2+   etcd x3 (3 AZs)   scheduler  controllers   |\n|        |  public/private endpoint  (https://XXXX.gr7.us-east-1.eks.amazonaws.com)\n+--------|------------------------------------------------------+\n         |  cross-account ENIs (EKS-owned, in YOUR subnets)\n- - - - - | - - - - - - - - - - - - - - - - - - - - - - - - - - - -  ownership line\n+--------v------------- YOUR VPC 10.0.0.0/16 ---------------------+\n|  private subnet 1a      private subnet 1b      private subnet 1c |\n|  [node] [node]          [node] [node]          [node]            |\n|     pods get VPC IPs from the same subnets (VPC CNI)             |\n|  public subnets: ALB / NLB, NAT gateways                         |\n+------------------------------------------------------------------+",
+              "note": "Pods run on EC2 nodes in your private subnets and get real VPC IP addresses, which is different from overlay-network clusters."
+            },
+            {
+              "type": "table",
+              "title": "What a cluster costs",
+              "head": [
+                "Item",
+                "Price (us-east-1, check current)",
+                "Notes"
+              ],
+              "rows": [
+                [
+                  "EKS control plane, standard support",
+                  "$0.10 per cluster-hour (about $73/month)",
+                  "Flat per cluster, regardless of size"
+                ],
+                [
+                  "EKS control plane, extended support",
+                  "$0.60 per cluster-hour",
+                  "Charged automatically after standard support ends"
+                ],
+                [
+                  "EC2 worker nodes",
+                  "Normal EC2 pricing",
+                  "Usually the biggest line; use Spot or Savings Plans to cut"
+                ],
+                [
+                  "NAT gateway",
+                  "About $0.045/hour + $0.045/GB processed",
+                  "Often the surprise bill; see the VPC lesson"
+                ],
+                [
+                  "Load balancers",
+                  "ALB/NLB hourly + LCU/NLCU",
+                  "One per Ingress group or Service"
+                ],
+                [
+                  "EBS volumes, data transfer",
+                  "Per GB-month, cross-AZ per GB",
+                  "Cross-AZ traffic between pods is billed"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: listing versions and the support policy",
+              "body": "The command below asks the EKS API which Kubernetes versions exist and when each one leaves support. We use `describe-cluster-versions` because the support dates change, so you should read them from AWS rather than memorise them. The rules: standard support lasts 14 months, then 12 months of extended support at $0.60/hour; upgrades go one minor version at a time, control plane first, nodes after; nodes may lag the control plane by up to three minors; downgrades are impossible. In the output, compare `status` (STANDARD_SUPPORT, EXTENDED_SUPPORT) with `endOfStandardSupportDate` and `endOfExtendedSupportDate` to schedule upgrades."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Check supported EKS versions",
+              "code": "aws eks describe-cluster-versions --region us-east-1 \\\n  --query 'clusterVersions[].[clusterVersion,status,endOfStandardSupportDate,endOfExtendedSupportDate]' \\\n  --output table",
+              "output": "----------------------------------------------------------------\n|                    DescribeClusterVersions                   |\n+--------+------------------+---------------+------------------+\n|  1.33  |  STANDARD_SUPPORT|  2026-07-29   |  2027-07-29      |\n|  1.32  |  STANDARD_SUPPORT|  2026-03-23   |  2027-03-23      |\n|  1.31  |  EXTENDED_SUPPORT|  2025-11-26   |  2026-11-26      |\n|  1.30  |  EXTENDED_SUPPORT|  2025-07-23   |  2026-07-23      |\n+--------+------------------+---------------+------------------+",
+              "note": "Dates shown are illustrative; always query your account for the real ones."
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**Thinking EKS patches your nodes automatically.** With managed node groups you must start the AMI update; with self-managed nodes you do everything. **Ignoring the version clock.** Staying on an old minor version silently moves you to extended support and 6x control-plane cost. **Forgetting NAT and load balancers** when estimating cost: a tiny dev cluster can cost more in NAT gateways than in EC2."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "EKS gives you a managed, highly available Kubernetes control plane for a flat hourly fee; you own the VPC, nodes, add-ons, access and workloads. Versions get 14 months of standard support, then 12 months of paid extended support, and upgrades move one minor version at a time. In the next lesson you prepare the AWS tooling, design a VPC with correctly tagged subnets and create your first cluster with `eksctl`."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "List the supported versions",
+              "prompt": "Query the EKS API for the Kubernetes versions available in your region and note which one is the newest.",
+              "command": "aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[0].clusterVersion'",
+              "expected": "Prints the newest version string, for example \"1.33\".",
+              "hint": "The first array element is the newest in the default sort.",
+              "solution": "aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].clusterVersion' --output text"
+            },
+            {
+              "title": "Estimate a monthly bill",
+              "prompt": "Write down the monthly cost of one cluster with 3 m6i.large nodes at $0.096/hour and a single NAT gateway, 730 hours per month.",
+              "command": "echo '73 + 3*0.096*730 + 0.045*730' | bc -l",
+              "expected": "About 316 dollars before data processing and load balancers.",
+              "hint": "Control plane 0.10*730 = 73.",
+              "solution": "echo '0.10*730 + 3*0.096*730 + 0.045*730' | bc -l"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Who patches and replaces the etcd and API server instances in EKS?",
+                "options": [
+                  "You, through managed node groups",
+                  "AWS",
+                  "Karpenter",
+                  "The VPC CNI"
+                ],
+                "answer": 1,
+                "explain": "The control plane is operated by AWS across three AZs; you never access those instances."
+              },
+              {
+                "question": "How long is standard support for an EKS Kubernetes version?",
+                "options": [
+                  "6 months",
+                  "14 months",
+                  "24 months",
+                  "Until the next version"
+                ],
+                "answer": 1,
+                "explain": "Standard support lasts 14 months, followed by 12 months of extended support at a higher price."
+              },
+              {
+                "question": "Which cost is often forgotten when budgeting a small EKS dev cluster?",
+                "options": [
+                  "The kubectl binary",
+                  "NAT gateway hourly and data charges",
+                  "Namespaces",
+                  "ConfigMaps"
+                ],
+                "answer": 1,
+                "explain": "NAT gateways bill per hour and per GB and can exceed node cost in small clusters."
+              },
+              {
+                "question": "How many minor versions can you upgrade the control plane in one step?",
+                "options": [
+                  "One",
+                  "Two",
+                  "Three",
+                  "Any"
+                ],
+                "answer": 0,
+                "explain": "EKS upgrades are one minor version at a time."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-deployments",
+            "k8s-services"
+          ],
+          "tags": [
+            "eks",
+            "aws",
+            "architecture",
+            "pricing"
+          ],
+          "commands": [
+            "aws eks describe-cluster-versions"
+          ],
+          "sources": [
+            {
+              "title": "What is Amazon EKS?",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html"
+            },
+            {
+              "title": "EKS Kubernetes version lifecycle",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html"
+            },
+            {
+              "title": "Kubernetes components",
+              "url": "https://kubernetes.io/docs/concepts/overview/components/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-vpc-create",
+          "title": "A VPC for EKS and creating the cluster with eksctl",
+          "duration": "16 min",
+          "summary": "Prepare the tools, plan a VPC with correctly tagged subnets, NAT and endpoints, then create a cluster from a ClusterConfig file.",
+          "objectives": [
+            "Install and verify aws, eksctl and kubectl and the IAM permissions they need",
+            "Plan a VPC with public and private subnets, CIDR sizes, NAT and VPC endpoints",
+            "Apply the subnet tags that load balancers rely on",
+            "Write an eksctl ClusterConfig and create, inspect and verify a cluster"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Prerequisites and how to plan the network",
+              "body": "You need three command-line tools: the **AWS CLI v2** (talks to AWS APIs), **eksctl** (a CLI from Weaveworks and AWS that generates CloudFormation stacks for EKS) and **kubectl** (within one minor version of your cluster). Authenticate with `aws configure sso` or environment credentials, and verify with `aws sts get-caller-identity`. The IAM identity creating the cluster needs permissions for EKS, EC2, IAM roles and CloudFormation; for a lab, `AdministratorAccess` in a sandbox account is simplest, and the creator becomes the first cluster admin.\n\nEKS needs a **VPC** (your private network) with subnets in **at least two AZs**; production uses three. Use **private subnets** for nodes and pods, **public subnets** only for load balancers and NAT gateways. A **NAT gateway** lets private nodes reach the internet (image pulls, AWS APIs) without being reachable; place one per AZ for resilience or one total for cost in dev. **VPC endpoints** (PrivateLink) reach AWS services without NAT: add `ecr.api`, `ecr.dkr`, `sts`, `logs` and `ec2` interface endpoints plus the `s3` gateway endpoint to save NAT charges and keep traffic private. Because every pod consumes a VPC IP, **size subnets generously**: a /19 (8,190 IPs) per private AZ is a common choice, in a /16 VPC."
+            },
+            {
+              "type": "table",
+              "title": "Subnets, tags and CIDR plan (VPC 10.0.0.0/16, 3 AZs)",
+              "head": [
+                "Subnet",
+                "CIDR",
+                "Tag",
+                "Purpose"
+              ],
+              "rows": [
+                [
+                  "public-1a/1b/1c",
+                  "10.0.0.0/24, 10.0.1.0/24, 10.0.2.0/24",
+                  "`kubernetes.io/role/elb = 1`",
+                  "Internet-facing ALB/NLB, NAT gateway"
+                ],
+                [
+                  "private-1a",
+                  "10.0.32.0/19",
+                  "`kubernetes.io/role/internal-elb = 1`",
+                  "Nodes, pods, internal load balancers"
+                ],
+                [
+                  "private-1b",
+                  "10.0.64.0/19",
+                  "`kubernetes.io/role/internal-elb = 1`",
+                  "Same, second AZ"
+                ],
+                [
+                  "private-1c",
+                  "10.0.96.0/19",
+                  "`kubernetes.io/role/internal-elb = 1`",
+                  "Same, third AZ"
+                ],
+                [
+                  "All subnets (optional)",
+                  "-",
+                  "`kubernetes.io/cluster/opsdeck-eks = shared`",
+                  "Needed only if several clusters share subnets or on very old controllers"
+                ],
+                [
+                  "Karpenter discovery (later)",
+                  "private subnets",
+                  "`karpenter.sh/discovery = opsdeck-eks`",
+                  "Lets Karpenter find subnets"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: the eksctl ClusterConfig",
+              "body": "This is an `eksctl` config file, not a Kubernetes manifest, so it is applied with `eksctl create cluster -f`, never `kubectl apply`. It describes the cluster name, region and version, lets eksctl create a new VPC with one NAT gateway, enables the IAM OIDC provider for service-account roles, turns on control-plane logging and defines one managed node group. Look at `vpc.nat.gateway` (cost versus resilience), `privateNetworking` (nodes in private subnets) and `accessConfig` (the modern access-entry authentication mode)."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "cluster.yaml (eksctl ClusterConfig)",
+              "code": "apiVersion: eksctl.io/v1alpha5\nkind: ClusterConfig\nmetadata:\n  name: opsdeck-eks\n  region: us-east-1\n  version: \"1.33\"\n  tags:\n    env: lab\n    owner: platform-team\nvpc:\n  cidr: 10.0.0.0/16\n  nat:\n    gateway: Single        # HighlyAvailable = one per AZ (production)\n  clusterEndpoints:\n    publicAccess: true\n    privateAccess: true\naccessConfig:\n  authenticationMode: API_AND_CONFIG_MAP\niam:\n  withOIDC: true\ncloudWatch:\n  clusterLogging:\n    enableTypes: [\"api\", \"audit\", \"authenticator\"]\n    logRetentionInDays: 14\nmanagedNodeGroups:\n  - name: general\n    instanceType: m6i.large\n    minSize: 2\n    desiredCapacity: 3\n    maxSize: 5\n    volumeSize: 50\n    privateNetworking: true\n    amiFamily: AmazonLinux2023\n    labels: { role: general }",
+              "note": "eksctl creates the VPC, the subnets with the tags from the table above, the cluster IAM role and the node role for you."
+            },
+            {
+              "type": "text",
+              "title": "About this example: creating the cluster",
+              "body": "`eksctl create cluster -f cluster.yaml` turns the file into CloudFormation stacks: first the cluster stack (VPC, control plane, roles), then a node group stack. It takes roughly 15 to 20 minutes and prints each step. The final lines tell you that eksctl wrote credentials into `~/.kube/config` and that nodes are `Ready`; the `--dry-run` flag prints the full expanded config without creating anything, which is useful for review."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Create the cluster",
+              "code": "eksctl create cluster -f cluster.yaml",
+              "output": "2026-11-13 09:02:11 [i]  eksctl version 0.205.0\n2026-11-13 09:02:11 [i]  using region us-east-1\n2026-11-13 09:02:12 [i]  setting availability zones to [us-east-1a us-east-1b us-east-1c]\n2026-11-13 09:02:12 [i]  subnets for us-east-1a - public:10.0.0.0/19 private:10.0.96.0/19\n2026-11-13 09:02:12 [i]  nat gateway: Single\n2026-11-13 09:02:12 [i]  creating EKS cluster \"opsdeck-eks\" in \"us-east-1\" region with managed nodes\n2026-11-13 09:02:12 [i]  will create 2 separate CloudFormation stacks for cluster itself and the initial managed nodegroup\n2026-11-13 09:02:13 [i]  building cluster stack \"eksctl-opsdeck-eks-cluster\"\n2026-11-13 09:16:48 [i]  building managed nodegroup stack \"eksctl-opsdeck-eks-nodegroup-general\"\n2026-11-13 09:20:31 [i]  waiting for the control plane to become ready\n2026-11-13 09:20:55 [✔]  saved kubeconfig as \"/home/ali/.kube/config\"\n2026-11-13 09:20:55 [i]  nodegroup \"general\" has 3 node(s)\n2026-11-13 09:20:55 [i]  node \"ip-10-0-101-14.ec2.internal\" is ready\n2026-11-13 09:20:55 [✔]  EKS cluster \"opsdeck-eks\" in \"us-east-1\" region is ready"
+            },
+            {
+              "type": "text",
+              "title": "About this example: verifying the new cluster",
+              "body": "After creation, check the cluster from both sides: `aws eks describe-cluster` shows what AWS knows (status, version, endpoint, VPC) and `kubectl` shows what Kubernetes sees (nodes, system pods). Look for `ACTIVE`, the endpoint URL, `v1.33.x-eks-...` on the nodes and for CoreDNS, `aws-node` and `kube-proxy` pods in `kube-system`; these are the default add-ons covered in a later lesson."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Inspect the cluster",
+              "code": "aws eks describe-cluster --name opsdeck-eks --query 'cluster.[status,version,endpoint,resourcesVpcConfig.vpcId]' --output text\nkubectl get nodes -o wide\nkubectl get pods -n kube-system",
+              "output": "ACTIVE  1.33  https://A1B2C3D4E5F6.gr7.us-east-1.eks.amazonaws.com  vpc-0a1b2c3d4e5f67890\n\nNAME                          STATUS   ROLES    AGE   VERSION               INTERNAL-IP    OS-IMAGE\nip-10-0-101-14.ec2.internal   Ready    <none>   4m    v1.33.1-eks-b9364f6   10.0.101.14    Amazon Linux 2023.7.20250609\nip-10-0-134-77.ec2.internal   Ready    <none>   4m    v1.33.1-eks-b9364f6   10.0.134.77    Amazon Linux 2023.7.20250609\nip-10-0-168-203.ec2.internal  Ready    <none>   4m    v1.33.1-eks-b9364f6   10.0.168.203   Amazon Linux 2023.7.20250609\n\nNAME                       READY   STATUS    RESTARTS   AGE\naws-node-4k2xz             2/2     Running   0          4m\naws-node-m8p7q             2/2     Running   0          4m\naws-node-t9w5r             2/2     Running   0          4m\ncoredns-6b9575c64c-7hq2d   1/1     Running   0          10m\ncoredns-6b9575c64c-xv8lp   1/1     Running   0          10m\nkube-proxy-5d8cj           1/1     Running   0          4m\nkube-proxy-kz2v6           1/1     Running   0          4m\nkube-proxy-wl4nt           1/1     Running   0          4m"
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**Subnets too small.** A /24 private subnet holds about 250 IPs and a few dozen pods per node exhaust it; scaling then fails with IP shortage. **Untagged public subnets**, so the load balancer controller cannot pick subnets. **Nodes in public subnets** with public IPs by accident. **Forgetting the single NAT gateway is a single point of failure** for one AZ's outbound traffic. **Using an old kubectl**: stay within one minor version of the cluster."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "You planned a /16 VPC with tagged public and private subnets, understood why NAT and VPC endpoints matter, wrote a `ClusterConfig`, created the cluster in about 15 to 20 minutes and verified it from AWS and from Kubernetes. The cluster costs money from now on, so remember the cleanup lesson. Next you will see how `kubectl` authenticated against it, and how to give teammates and CI systems access safely."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Verify your identity and tools",
+              "prompt": "Confirm which AWS identity you are using and the eksctl version before creating anything.",
+              "command": "aws sts get-caller-identity && eksctl version",
+              "expected": "Prints Account, UserId and Arn, then the eksctl version.",
+              "hint": "The Arn shows whether you use a role or user.",
+              "solution": "aws sts get-caller-identity --output json"
+            },
+            {
+              "title": "Dry run the config",
+              "prompt": "Render the fully expanded configuration without creating resources.",
+              "command": "eksctl create cluster -f cluster.yaml --dry-run",
+              "expected": "Prints a YAML document with the chosen availability zones, subnets and defaults.",
+              "hint": "The flag is --dry-run.",
+              "solution": "eksctl create cluster -f cluster.yaml --dry-run | head -40"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Where should worker nodes normally run?",
+                "options": [
+                  "Public subnets with public IPs",
+                  "Private subnets",
+                  "Only in one AZ",
+                  "In the AWS-managed VPC"
+                ],
+                "answer": 1,
+                "explain": "Nodes and pods belong in private subnets; load balancers and NAT live in public ones."
+              },
+              {
+                "question": "Which tag marks a subnet for internet-facing load balancers?",
+                "options": [
+                  "kubernetes.io/role/elb = 1",
+                  "kubernetes.io/role/internal-elb = 1",
+                  "karpenter.sh/discovery",
+                  "eks/public"
+                ],
+                "answer": 0,
+                "explain": "kubernetes.io/role/elb selects public subnets; internal-elb selects private ones."
+              },
+              {
+                "question": "What does eksctl turn a ClusterConfig into?",
+                "options": [
+                  "Helm releases",
+                  "CloudFormation stacks",
+                  "Terraform state",
+                  "Docker images"
+                ],
+                "answer": 1,
+                "explain": "eksctl generates and runs CloudFormation stacks for the cluster and node groups."
+              },
+              {
+                "question": "Why size private subnets large (for example /19)?",
+                "options": [
+                  "Pods consume VPC IP addresses",
+                  "Load balancers need it",
+                  "It is required by AWS",
+                  "kubectl needs it"
+                ],
+                "answer": 0,
+                "explain": "With the VPC CNI every pod gets a VPC IP, so small subnets run out quickly."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-pods-in-depth",
+            "k8s-namespaces-labels"
+          ],
+          "tags": [
+            "eks",
+            "eksctl",
+            "vpc",
+            "subnets"
+          ],
+          "commands": [
+            "eksctl create cluster",
+            "aws eks describe-cluster",
+            "kubectl get nodes"
+          ],
+          "sources": [
+            {
+              "title": "EKS VPC requirements",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html"
+            },
+            {
+              "title": "eksctl config file schema",
+              "url": "https://eksctl.io/usage/schema/"
+            },
+            {
+              "title": "Subnet discovery for load balancers",
+              "url": "https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/subnet_discovery/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-eks-mod-access-compute",
+      "title": "Access and compute",
+      "summary": "Grant access and choose where pods run.",
+      "lessons": [
+        {
+          "id": "k8s-eks-access-auth",
+          "title": "Access and authentication: kubeconfig, access entries and RBAC",
+          "duration": "16 min",
+          "summary": "How kubectl authenticates with IAM, how to grant access with access entries (and the legacy aws-auth ConfigMap), and how endpoint access modes work.",
+          "objectives": [
+            "Explain the token flow from aws eks get-token to the API server",
+            "Generate a kubeconfig with aws eks update-kubeconfig",
+            "Grant IAM principals cluster access with access entries and access policies, and know when aws-auth still appears",
+            "Bind IAM-mapped groups to Kubernetes RBAC and choose a cluster endpoint access mode"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "How authentication and authorization work on EKS",
+              "body": "EKS splits identity into two steps. **Authentication** answers \"who are you?\" using **IAM**: `kubectl` runs `aws eks get-token`, which produces a short-lived bearer token (a pre-signed STS `GetCallerIdentity` request). The API server hands it to the AWS authenticator, which resolves it to an IAM role or user ARN. **Authorization** answers \"what may you do?\" using Kubernetes **RBAC** (or EKS access policies, which are managed RBAC). So an IAM identity with no mapping to Kubernetes can authenticate but is denied everything.\n\nThe API server's network exposure is the **endpoint access mode**: **public only** (reachable from the internet, restricted by `publicAccessCidrs`), **public and private** (nodes use a private endpoint through the VPC, humans use the public one), or **private only** (reachable only from inside the VPC, a VPN or Direct Connect; best for production). The default is public. For a lab, public with your IP in `publicAccessCidrs` is a good balance."
+            },
+            {
+              "type": "text",
+              "title": "About this example: generating a kubeconfig",
+              "body": "A **kubeconfig** is the file `kubectl` reads to learn the server URL, the certificate authority and how to get credentials. `aws eks update-kubeconfig` writes a cluster, user and context entry into `~/.kube/config` with an `exec` credential plugin that calls `aws eks get-token`. In the output of `kubectl config get-contexts` the `*` marks the current context; `kubectl auth whoami` (Kubernetes 1.28+) shows the username Kubernetes derived from your IAM ARN."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Create the kubeconfig and check your identity",
+              "code": "aws eks update-kubeconfig --name opsdeck-eks --region us-east-1 --alias opsdeck\nkubectl config get-contexts\nkubectl auth whoami\nkubectl auth can-i '*' '*'",
+              "output": "Added new context opsdeck to /home/ali/.kube/config\n\nCURRENT   NAME      CLUSTER                                          AUTHINFO\n*         opsdeck   arn:aws:eks:us-east-1:123456789012:cluster/opsdeck-eks   arn:aws:eks:us-east-1:123456789012:cluster/opsdeck-eks\n\nATTRIBUTE   VALUE\nUsername    arn:aws:iam::123456789012:user/ali\nGroups      [system:authenticated]\nExtra: accessKeyId  [AKIAIOSFODNN7EXAMPLE]\n\nyes"
+            },
+            {
+              "type": "table",
+              "title": "Access entries versus the aws-auth ConfigMap",
+              "head": [
+                "Aspect",
+                "Access entries (current)",
+                "aws-auth ConfigMap (legacy)"
+              ],
+              "rows": [
+                [
+                  "Where defined",
+                  "EKS API (`aws eks create-access-entry`)",
+                  "ConfigMap `aws-auth` in `kube-system`"
+                ],
+                [
+                  "Managed by",
+                  "IAM and AWS APIs, CloudTrail audited",
+                  "Anyone who can edit the ConfigMap"
+                ],
+                [
+                  "Failure mode",
+                  "Invalid entries are rejected",
+                  "A typo can lock everyone out"
+                ],
+                [
+                  "Admin recovery",
+                  "Cluster-creator permission can be removed or restored via API",
+                  "Need existing admin credentials"
+                ],
+                [
+                  "Permissions",
+                  "Managed access policies such as `AmazonEKSClusterAdminPolicy`, or Kubernetes groups",
+                  "Only groups, bound with RBAC"
+                ],
+                [
+                  "Cluster mode",
+                  "`API` or `API_AND_CONFIG_MAP`",
+                  "`CONFIG_MAP`, or the second mode above"
+                ],
+                [
+                  "Migration",
+                  "Move to `API_AND_CONFIG_MAP`, recreate each mapping, then `API`",
+                  "One-way: you cannot return to CONFIG_MAP"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: granting a platform role access",
+              "body": "These commands create an access entry for the IAM role `PlatformAdmins` and attach the AWS-managed admin policy scoped to the whole cluster, then give a read-only role view access in a single namespace. Look at `--type STANDARD`, the `--policy-arn` values (the `AmazonEKS*Policy` family) and `--access-scope`, which is either `cluster` or `namespace`. The final `list-associated-access-policies` call confirms what each principal can do."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Create access entries and attach policies",
+              "code": "aws eks create-access-entry --cluster-name opsdeck-eks \\\n  --principal-arn arn:aws:iam::123456789012:role/PlatformAdmins --type STANDARD\n\naws eks associate-access-policy --cluster-name opsdeck-eks \\\n  --principal-arn arn:aws:iam::123456789012:role/PlatformAdmins \\\n  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \\\n  --access-scope type=cluster\n\naws eks create-access-entry --cluster-name opsdeck-eks \\\n  --principal-arn arn:aws:iam::123456789012:role/Developers --type STANDARD\naws eks associate-access-policy --cluster-name opsdeck-eks \\\n  --principal-arn arn:aws:iam::123456789012:role/Developers \\\n  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy \\\n  --access-scope type=namespace,namespaces=shop\n\naws eks list-access-entries --cluster-name opsdeck-eks",
+              "output": "{\n  \"accessEntry\": {\n    \"clusterName\": \"opsdeck-eks\",\n    \"principalArn\": \"arn:aws:iam::123456789012:role/PlatformAdmins\",\n    \"kubernetesGroups\": [],\n    \"type\": \"STANDARD\",\n    \"username\": \"arn:aws:sts::123456789012:assumed-role/PlatformAdmins/{{SessionName}}\"\n  }\n}\n{\n  \"associatedAccessPolicy\": {\n    \"policyArn\": \"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy\",\n    \"accessScope\": { \"type\": \"cluster\", \"namespaces\": [] }\n  }\n}\n{\n  \"accessEntries\": [\n    \"arn:aws:iam::123456789012:role/PlatformAdmins\",\n    \"arn:aws:iam::123456789012:role/Developers\",\n    \"arn:aws:iam::123456789012:user/ali\"\n  ]\n}"
+            },
+            {
+              "type": "text",
+              "title": "About this example: mapping a group to your own RBAC",
+              "body": "Managed policies cover common cases. For finer control, create the access entry with `--kubernetes-groups deployers` and write a normal `ClusterRole` and `ClusterRoleBinding` for the group `deployers`. The manifest below lets that group manage Deployments and read Pods in the cluster; see `subjects` (kind Group, name matching the access entry) and `rules` (verbs on resources). Apply with `kubectl apply -f`, then test with `kubectl auth can-i --as-group deployers --as ci`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "ClusterRole and binding for the deployers group",
+              "code": "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: deployer\nrules:\n  - apiGroups: [\"apps\"]\n    resources: [\"deployments\", \"replicasets\"]\n    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\"]\n  - apiGroups: [\"\"]\n    resources: [\"pods\", \"pods/log\"]\n    verbs: [\"get\", \"list\", \"watch\"]\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: deployers-bind\nsubjects:\n  - kind: Group\n    name: deployers\n    apiGroup: rbac.authorization.k8s.io\nroleRef:\n  kind: ClusterRole\n  name: deployer\n  apiGroup: rbac.authorization.k8s.io",
+              "output": "clusterrole.rbac.authorization.k8s.io/deployer created\nclusterrolebinding.rbac.authorization.k8s.io/deployers-bind created\n\n$ kubectl auth can-i create deployments --as ci --as-group deployers\nyes\n$ kubectl auth can-i delete nodes --as ci --as-group deployers\nno"
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**Editing `aws-auth` by hand** and breaking the YAML, which can lock out every user; prefer access entries. **Granting `system:masters`** as a group, which bypasses RBAC and cannot be restricted. **Binding groups with names starting `system:`**, which EKS rejects. **Sharing the cluster-creator credentials.** The creator IAM identity has hidden admin rights unless you disable `bootstrapClusterCreatorAdminPermissions`. **Opening `0.0.0.0/0`** on the public endpoint of a production cluster."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "`kubectl` authenticates with IAM tokens from `aws eks get-token`, and Kubernetes authorises with RBAC. Access entries are the modern, auditable way to map IAM roles to cluster permissions, using managed policies or groups bound to your own roles; `aws-auth` is legacy. The endpoint access mode controls who can even reach the API server. With access sorted, the next lesson adds capacity: managed node groups, Fargate and Karpenter."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Check who you are",
+              "prompt": "Ask Kubernetes which identity it sees for your current kubeconfig context.",
+              "command": "kubectl auth whoami",
+              "expected": "Prints the Username (your IAM ARN) and Groups.",
+              "hint": "Requires Kubernetes 1.28+.",
+              "solution": "kubectl auth whoami -o yaml"
+            },
+            {
+              "title": "List access entries",
+              "prompt": "List which IAM principals have access entries on the cluster.",
+              "command": "aws eks list-access-entries --cluster-name opsdeck-eks",
+              "expected": "A JSON list of principal ARNs, including your creator identity.",
+              "hint": "Use the cluster name from lesson 2.",
+              "solution": "aws eks list-access-entries --cluster-name opsdeck-eks --output table"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does 'aws eks get-token' produce?",
+                "options": [
+                  "A kubeconfig file",
+                  "A short-lived bearer token based on your IAM identity",
+                  "A TLS certificate",
+                  "A Kubernetes ServiceAccount"
+                ],
+                "answer": 1,
+                "explain": "It returns a pre-signed STS token that the API server validates through the AWS authenticator."
+              },
+              {
+                "question": "Which is the recommended way to grant IAM roles cluster access today?",
+                "options": [
+                  "Editing aws-auth",
+                  "Access entries",
+                  "Sharing admin keys",
+                  "Editing etcd"
+                ],
+                "answer": 1,
+                "explain": "Access entries are managed through the EKS API, audited, and validated."
+              },
+              {
+                "question": "Which endpoint mode is most restrictive?",
+                "options": [
+                  "Public",
+                  "Public and private",
+                  "Private only",
+                  "Anonymous"
+                ],
+                "answer": 2,
+                "explain": "Private-only exposes the API server solely inside the VPC and connected networks."
+              },
+              {
+                "question": "An IAM role has an access entry with no policy and no groups. What can it do?",
+                "options": [
+                  "Everything",
+                  "Authenticate but nothing else",
+                  "Admin in all namespaces",
+                  "Read secrets"
+                ],
+                "answer": 1,
+                "explain": "Without a policy or an RBAC binding for its groups, authorisation fails."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-rbac",
+            "k8s-namespaces-labels"
+          ],
+          "tags": [
+            "eks",
+            "iam",
+            "rbac",
+            "kubeconfig",
+            "access-entries"
+          ],
+          "commands": [
+            "aws eks update-kubeconfig",
+            "aws eks create-access-entry",
+            "kubectl auth can-i"
+          ],
+          "sources": [
+            {
+              "title": "Grant IAM users access with access entries",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/access-entries.html"
+            },
+            {
+              "title": "Cluster endpoint access",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html"
+            },
+            {
+              "title": "Using RBAC authorization",
+              "url": "https://kubernetes.io/docs/reference/access-authn-authz/rbac/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-compute",
+          "title": "Compute: managed node groups, Fargate and Karpenter",
+          "duration": "17 min",
+          "summary": "Choose between managed node groups, Fargate and Karpenter, size instances sensibly and pick the right AMI.",
+          "objectives": [
+            "Compare managed node groups, self-managed nodes, Fargate, Karpenter and EKS Auto Mode",
+            "Define managed node groups (on-demand and Spot) and a Fargate profile in eksctl",
+            "Write a Karpenter NodePool and EC2NodeClass and explain how it provisions nodes",
+            "Select instance sizes and AMI families, and understand node update strategies"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Where do pods actually run?",
+              "body": "A pod needs a machine. On EKS that machine is an EC2 instance (a **node**), or, with Fargate, an isolated micro-VM that AWS runs for exactly one pod. You have five options. **Managed node groups** are Auto Scaling groups that EKS creates and upgrades for you; they are the default starting point. **Self-managed nodes** are your own ASGs and AMIs, needed only for special requirements. **Fargate** runs each pod in its own VM with no nodes to manage, billed per vCPU and memory of the pod. **Karpenter** is an open-source autoscaler that launches the right-sized EC2 instance when pods are unschedulable and removes it when it is empty. **EKS Auto Mode** is a fully managed variant of compute, networking and storage components, built around Karpenter concepts."
+            },
+            {
+              "type": "table",
+              "title": "Compute options compared",
+              "head": [
+                "Option",
+                "You manage",
+                "Scales by",
+                "Best for",
+                "Limits"
+              ],
+              "rows": [
+                [
+                  "Managed node group",
+                  "Instance types, scaling bounds, AMI updates",
+                  "Cluster Autoscaler or ASG",
+                  "Predictable baseline workloads",
+                  "One instance family mix per group"
+                ],
+                [
+                  "Self-managed nodes",
+                  "Everything including AMI and bootstrap",
+                  "Your ASG",
+                  "Custom kernels, GPUs, unusual setups",
+                  "Highest operational burden"
+                ],
+                [
+                  "Fargate",
+                  "Pod requests only",
+                  "One VM per pod",
+                  "Isolated or bursty jobs, no node ops",
+                  "No DaemonSets, no GPUs, no privileged pods, EBS volumes not supported"
+                ],
+                [
+                  "Karpenter",
+                  "NodePool and EC2NodeClass rules",
+                  "Pending pods trigger instance launches",
+                  "Mixed workloads, Spot, cost optimisation",
+                  "Needs a small managed node group or Fargate to run itself"
+                ],
+                [
+                  "EKS Auto Mode",
+                  "Node pool intents",
+                  "AWS-run Karpenter-style",
+                  "Teams wanting minimal ops",
+                  "Less control over AMIs and add-ons"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: node groups and a Fargate profile",
+              "body": "This extends the `ClusterConfig` from lesson 2 (apply new groups with `eksctl create nodegroup -f` and `eksctl create fargateprofile -f`). It defines an on-demand group for steady services, a Spot group with several interchangeable instance types for fault-tolerant work and a tainted group so only tolerating pods land there. The Fargate profile selects pods in the namespace `batch` that carry the label `compute: fargate`. Look at `instanceTypes` (more types means better Spot availability), `taints` and `selectors`."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "nodegroups.yaml (eksctl)",
+              "code": "apiVersion: eksctl.io/v1alpha5\nkind: ClusterConfig\nmetadata:\n  name: opsdeck-eks\n  region: us-east-1\nmanagedNodeGroups:\n  - name: general-od\n    instanceType: m6i.large\n    minSize: 2\n    maxSize: 6\n    desiredCapacity: 3\n    privateNetworking: true\n    amiFamily: AmazonLinux2023\n    labels: { workload: general }\n  - name: spot-workers\n    instanceTypes: [\"m6i.large\", \"m5.large\", \"m6a.large\", \"m5a.large\"]\n    spot: true\n    minSize: 0\n    maxSize: 10\n    desiredCapacity: 2\n    privateNetworking: true\n    labels: { workload: batch, lifecycle: spot }\n    taints:\n      - key: lifecycle\n        value: spot\n        effect: NoSchedule\nfargateProfiles:\n  - name: batch-fargate\n    selectors:\n      - namespace: batch\n        labels: { compute: fargate }",
+              "note": "Pods for the spot group need a toleration for lifecycle=spot:NoSchedule and may use nodeSelector workload=batch."
+            },
+            {
+              "type": "text",
+              "title": "About this example: Karpenter resources",
+              "body": "Karpenter v1 is configured with two custom resources. The **EC2NodeClass** says how nodes are built: the AMI family (`alias: al2023@latest`), the node IAM role, and which subnets and security groups to use (found via the `karpenter.sh/discovery` tag). The **NodePool** says which nodes are allowed: instance categories, architecture, Spot or on-demand, a CPU limit for the whole pool and when to consolidate. These are CRDs created by the Karpenter Helm chart, so they are shown as plain files; apply them with `kubectl apply -f` once Karpenter runs."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "title": "karpenter-nodepool.yaml",
+              "code": "apiVersion: karpenter.k8s.aws/v1\nkind: EC2NodeClass\nmetadata:\n  name: default\nspec:\n  amiSelectorTerms:\n    - alias: al2023@latest\n  role: KarpenterNodeRole-opsdeck-eks\n  subnetSelectorTerms:\n    - tags: { karpenter.sh/discovery: opsdeck-eks }\n  securityGroupSelectorTerms:\n    - tags: { karpenter.sh/discovery: opsdeck-eks }\n  blockDeviceMappings:\n    - deviceName: /dev/xvda\n      ebs: { volumeSize: 50Gi, volumeType: gp3, encrypted: true }\n---\napiVersion: karpenter.sh/v1\nkind: NodePool\nmetadata:\n  name: default\nspec:\n  template:\n    spec:\n      nodeClassRef:\n        group: karpenter.k8s.aws\n        kind: EC2NodeClass\n        name: default\n      requirements:\n        - { key: karpenter.sh/capacity-type, operator: In, values: [\"spot\", \"on-demand\"] }\n        - { key: karpenter.k8s.aws/instance-category, operator: In, values: [\"c\", \"m\", \"r\"] }\n        - { key: karpenter.k8s.aws/instance-generation, operator: Gt, values: [\"5\"] }\n        - { key: kubernetes.io/arch, operator: In, values: [\"amd64\", \"arm64\"] }\n      expireAfter: 720h\n  limits:\n    cpu: \"100\"\n  disruption:\n    consolidationPolicy: WhenEmptyOrUnderutilized\n    consolidateAfter: 1m",
+              "output": "$ kubectl apply -f karpenter-nodepool.yaml\nec2nodeclass.karpenter.k8s.aws/default created\nnodepool.karpenter.sh/default created\n\n$ kubectl get nodepools,nodeclaims\nNAME                         NODECLASS   NODES   READY   AGE\nnodepool.karpenter.sh/default   default     0       True    6s\n\n$ kubectl scale deployment inflate --replicas=10\n$ kubectl get nodeclaims\nNAME            TYPE         CAPACITY   ZONE         NODE                          READY   AGE\ndefault-7x2kq   c6a.2xlarge  spot       us-east-1b   ip-10-0-77-31.ec2.internal    True    52s"
+            },
+            {
+              "type": "table",
+              "title": "Instance sizing and AMI families",
+              "head": [
+                "Choice",
+                "Guidance",
+                "Example"
+              ],
+              "rows": [
+                [
+                  "General purpose (m)",
+                  "Balanced CPU and memory; start here",
+                  "m6i.large, m7g.large (Graviton)"
+                ],
+                [
+                  "Compute optimised (c)",
+                  "CPU-bound services, build agents",
+                  "c6i.xlarge"
+                ],
+                [
+                  "Memory optimised (r)",
+                  "Caches, JVM-heavy services",
+                  "r6i.large"
+                ],
+                [
+                  "Size",
+                  "Fewer large nodes waste less per-node overhead; too large increases blast radius. 4 to 16 vCPU is common",
+                  "m6i.2xlarge"
+                ],
+                [
+                  "Pod limit per node",
+                  "Set by ENIs and IPs (see add-ons lesson)",
+                  "m5.large = 29 pods by default"
+                ],
+                [
+                  "AMI: Amazon Linux 2023",
+                  "Default for new clusters; AL2 AMIs are not published for 1.33+",
+                  "`amiFamily: AmazonLinux2023`"
+                ],
+                [
+                  "AMI: Bottlerocket",
+                  "Minimal, immutable, container-focused OS",
+                  "`amiFamily: Bottlerocket`"
+                ],
+                [
+                  "Graviton (arm64)",
+                  "Up to 20% cheaper per performance; images must be multi-arch",
+                  "m7g, c7g"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**Running a Spot node group with a single instance type**, so one capacity shortage stops scaling. **Forgetting tolerations** for tainted nodes; pods stay Pending with `untolerated taint`. **Putting Karpenter on nodes it manages**; run it on a small managed node group or Fargate. **Setting no NodePool `limits`**, allowing a runaway workload to launch hundreds of instances. **Requests too low**: autoscalers decide using pod resource requests, not actual usage."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "You can now choose compute deliberately: managed node groups for a stable baseline, Spot groups for tolerant work, Fargate for isolated pods and Karpenter to launch right-sized instances on demand. AL2023 or Bottlerocket are the AMIs to choose. Nodes are only useful if pods can get network addresses and cluster components run, which is the subject of the next lesson on add-ons and pod IPs."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "List node groups",
+              "prompt": "List the managed node groups in your cluster.",
+              "command": "eksctl get nodegroup --cluster opsdeck-eks",
+              "expected": "A table with the group name, min, max and desired size, instance type and image id.",
+              "hint": "Use the cluster name.",
+              "solution": "aws eks list-nodegroups --cluster-name opsdeck-eks"
+            },
+            {
+              "title": "Show nodes by capacity type",
+              "prompt": "Print nodes with their instance type and zone labels as columns.",
+              "command": "kubectl get nodes -L node.kubernetes.io/instance-type,topology.kubernetes.io/zone",
+              "expected": "Each node with its instance type and AZ.",
+              "hint": "-L adds label columns.",
+              "solution": "kubectl get nodes -L eks.amazonaws.com/capacityType,node.kubernetes.io/instance-type"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What triggers Karpenter to launch a node?",
+                "options": [
+                  "A CPU alarm",
+                  "Unschedulable pending pods",
+                  "A cron schedule",
+                  "A manual eksctl command"
+                ],
+                "answer": 1,
+                "explain": "Karpenter watches for pods the scheduler cannot place and provisions fitting capacity."
+              },
+              {
+                "question": "Which workload type cannot run on Fargate?",
+                "options": [
+                  "Stateless web pod",
+                  "DaemonSet pod",
+                  "Job",
+                  "Pod with CPU requests"
+                ],
+                "answer": 1,
+                "explain": "Fargate has no nodes, so DaemonSets are not supported."
+              },
+              {
+                "question": "Why list several instance types in a Spot group?",
+                "options": [
+                  "Cheaper licenses",
+                  "Better chance of finding capacity",
+                  "Faster boot",
+                  "Required by IAM"
+                ],
+                "answer": 1,
+                "explain": "Multiple pools reduce the risk of capacity shortages and interruptions."
+              },
+              {
+                "question": "Which AMI family is the default choice for new EKS 1.33 nodes?",
+                "options": [
+                  "Amazon Linux 2",
+                  "Amazon Linux 2023",
+                  "Windows only",
+                  "Ubuntu 14.04"
+                ],
+                "answer": 1,
+                "explain": "AL2023 (or Bottlerocket) are the supported choices; AL2 AMIs stop at 1.32."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-autoscaling-maintenance",
+            "k8s-probes-resources"
+          ],
+          "tags": [
+            "eks",
+            "nodes",
+            "karpenter",
+            "fargate",
+            "spot"
+          ],
+          "commands": [
+            "eksctl create nodegroup",
+            "kubectl get nodes",
+            "kubectl get nodepools"
+          ],
+          "sources": [
+            {
+              "title": "EKS managed node groups",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html"
+            },
+            {
+              "title": "Karpenter documentation",
+              "url": "https://karpenter.sh/docs/"
+            },
+            {
+              "title": "AWS Fargate on EKS",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/fargate.html"
+            }
+          ],
+          "level": null
+        }
+      ]
+    },
+    {
+      "id": "k8s-eks-mod-network-delivery",
+      "title": "Add-ons, traffic and delivery",
+      "summary": "Add-ons, pod IPs, load balancing and a full deployment with cleanup.",
+      "lessons": [
+        {
+          "id": "k8s-eks-addons-ips",
+          "title": "EKS add-ons and how pods get VPC IP addresses",
+          "duration": "16 min",
+          "summary": "Manage VPC CNI, CoreDNS, kube-proxy and the EBS CSI driver as EKS add-ons, and understand pod IP allocation, max pods and prefix delegation.",
+          "objectives": [
+            "Explain what each core add-on does and how EKS manages its versions",
+            "Install the EBS CSI driver add-on with EKS Pod Identity and provision a gp3 volume",
+            "Calculate the default maximum pods per node from ENIs and IPs",
+            "Enable prefix delegation to raise the pod density per node"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Add-ons and the VPC CNI idea",
+              "body": "An **EKS add-on** is a piece of operational software (networking, DNS, storage, observability) that AWS packages, tests against your Kubernetes version and installs or upgrades through the EKS API. Three are present on every cluster: **vpc-cni** (the `aws-node` DaemonSet), **coredns** and **kube-proxy**. You add **aws-ebs-csi-driver** for persistent volumes and **eks-pod-identity-agent** for pod IAM roles.\n\nThe key difference from many clusters is networking: the **Amazon VPC CNI** plugin gives each pod a **real IP address from your VPC subnet**. It does this by attaching secondary **ENIs** (elastic network interfaces) to the node and handing their secondary IP addresses to pods. Pods are therefore directly routable inside the VPC and visible to security groups, but they consume subnet IPs and each instance type has a hard limit on ENIs and IPs per ENI."
+            },
+            {
+              "type": "table",
+              "title": "The core add-ons",
+              "head": [
+                "Add-on",
+                "What it runs",
+                "Why you need it",
+                "IAM role needed?"
+              ],
+              "rows": [
+                [
+                  "`vpc-cni`",
+                  "DaemonSet `aws-node` in kube-system",
+                  "Pod networking, VPC IPs, network policy agent",
+                  "Node role is enough; Pod Identity recommended for IPv6"
+                ],
+                [
+                  "`coredns`",
+                  "Deployment, 2 replicas",
+                  "Cluster DNS: `svc.namespace.svc.cluster.local`",
+                  "No"
+                ],
+                [
+                  "`kube-proxy`",
+                  "DaemonSet",
+                  "Implements Service virtual IPs on each node",
+                  "No"
+                ],
+                [
+                  "`aws-ebs-csi-driver`",
+                  "Controller Deployment + node DaemonSet",
+                  "Dynamic EBS volumes for PersistentVolumeClaims",
+                  "Yes: EC2 volume permissions"
+                ],
+                [
+                  "`eks-pod-identity-agent`",
+                  "DaemonSet",
+                  "Delivers IAM credentials to pods",
+                  "No"
+                ],
+                [
+                  "`amazon-cloudwatch-observability`",
+                  "CloudWatch agent, Fluent Bit",
+                  "Container Insights metrics and logs",
+                  "Yes"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: managing add-ons with the AWS CLI",
+              "body": "These commands show the add-on lifecycle. First `describe-addon-versions` lists which versions are compatible with Kubernetes 1.33. Then we install the Pod Identity agent, create an IAM role trusted by `pods.eks.amazonaws.com` and associate it with the EBS CSI service account, and install the driver. Finally `update-addon` turns on **prefix delegation** for the VPC CNI. Watch the `status` field (`CREATING`, `ACTIVE`, `UPDATING`) and the `--resolve-conflicts OVERWRITE` flag, which replaces fields you edited by hand."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Install the EBS CSI driver and enable prefix delegation",
+              "code": "aws eks describe-addon-versions --addon-name aws-ebs-csi-driver --kubernetes-version 1.33 \\\n  --query 'addons[0].addonVersions[0].addonVersion' --output text\n\naws eks create-addon --cluster-name opsdeck-eks --addon-name eks-pod-identity-agent\naws eks create-pod-identity-association --cluster-name opsdeck-eks \\\n  --namespace kube-system --service-account ebs-csi-controller-sa \\\n  --role-arn arn:aws:iam::123456789012:role/EbsCsiDriverRole\naws eks create-addon --cluster-name opsdeck-eks --addon-name aws-ebs-csi-driver\n\naws eks update-addon --cluster-name opsdeck-eks --addon-name vpc-cni \\\n  --configuration-values '{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\",\"WARM_PREFIX_TARGET\":\"1\"}}' \\\n  --resolve-conflicts OVERWRITE\naws eks list-addons --cluster-name opsdeck-eks",
+              "output": "v1.41.0-eksbuild.1\n\n{\n  \"addon\": { \"addonName\": \"eks-pod-identity-agent\", \"status\": \"CREATING\" }\n}\n{\n  \"association\": {\n    \"clusterName\": \"opsdeck-eks\",\n    \"namespace\": \"kube-system\",\n    \"serviceAccount\": \"ebs-csi-controller-sa\",\n    \"roleArn\": \"arn:aws:iam::123456789012:role/EbsCsiDriverRole\"\n  }\n}\n{\n  \"addon\": { \"addonName\": \"aws-ebs-csi-driver\", \"status\": \"CREATING\" }\n}\n{\n  \"update\": { \"id\": \"b3f1...\", \"status\": \"InProgress\", \"type\": \"AddonUpdate\" }\n}\n{\n  \"addons\": [ \"aws-ebs-csi-driver\", \"coredns\", \"eks-pod-identity-agent\", \"kube-proxy\", \"vpc-cni\" ]\n}",
+              "note": "The role EbsCsiDriverRole needs the AWS-managed policy AmazonEBSCSIDriverPolicy and a trust policy for pods.eks.amazonaws.com."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a gp3 StorageClass and a claim",
+              "body": "With the CSI driver installed, a **StorageClass** tells Kubernetes how to create volumes: provisioner `ebs.csi.aws.com`, type `gp3`, encrypted, and `WaitForFirstConsumer` so the volume is created in the same AZ as the pod. The PersistentVolumeClaim asks for 10Gi from that class, and the Pod mounts it. Apply the file, then watch the PVC change from `Pending` (waiting for a consumer) to `Bound`. Remember an EBS volume lives in one AZ and attaches to one node at a time."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "gp3 StorageClass, claim and pod",
+              "code": "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: gp3\nprovisioner: ebs.csi.aws.com\nparameters:\n  type: gp3\n  encrypted: \"true\"\nvolumeBindingMode: WaitForFirstConsumer\nallowVolumeExpansion: true\nreclaimPolicy: Delete\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data\nspec:\n  accessModes: [\"ReadWriteOnce\"]\n  storageClassName: gp3\n  resources:\n    requests:\n      storage: 10Gi\n---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: writer\nspec:\n  containers:\n    - name: app\n      image: busybox:1.36\n      command: [\"sh\", \"-c\", \"echo hello > /data/hello.txt && sleep 3600\"]\n      volumeMounts:\n        - name: data\n          mountPath: /data\n  volumes:\n    - name: data\n      persistentVolumeClaim:\n        claimName: data",
+              "output": "storageclass.storage.k8s.io/gp3 created\npersistentvolumeclaim/data created\npod/writer created\n\n$ kubectl get pvc,pv\nNAME                         STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE\npersistentvolumeclaim/data   Bound    pvc-5c1f0a62-9a1b-4d6e-8d0b-3a7c2f1e9b11   10Gi       RWO            gp3            24s"
+            },
+            {
+              "type": "table",
+              "title": "Maximum pods per node",
+              "head": [
+                "Instance",
+                "ENIs",
+                "IPs per ENI",
+                "Default max pods = ENIs x (IPs - 1) + 2",
+                "With prefix delegation (recommended cap)"
+              ],
+              "rows": [
+                [
+                  "t3.medium",
+                  "3",
+                  "6",
+                  "17",
+                  "110"
+                ],
+                [
+                  "m5.large",
+                  "3",
+                  "10",
+                  "29",
+                  "110"
+                ],
+                [
+                  "m5.xlarge",
+                  "4",
+                  "15",
+                  "58",
+                  "110"
+                ],
+                [
+                  "m5.4xlarge",
+                  "8",
+                  "30",
+                  "234",
+                  "250"
+                ],
+                [
+                  "c6i.8xlarge",
+                  "8",
+                  "30",
+                  "234",
+                  "250"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**Running out of subnet IPs** because pods and nodes share the subnet: use larger subnets or a secondary CIDR with custom networking. **Expecting prefix delegation to work on old nodes**: it needs Nitro instances and only affects newly launched nodes, so roll your node groups after enabling it. **Fragmented subnets**: prefix delegation needs free contiguous /28 blocks. **Missing `WaitForFirstConsumer`**, which can create the volume in a different AZ from the pod and leave it unschedulable. **Forgetting the IAM role for the EBS CSI driver**; PVCs stay Pending with `AccessDenied` in the controller logs."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "Add-ons are AWS-tested cluster software managed through `aws eks create-addon` and `update-addon`. The VPC CNI assigns real VPC IPs to pods, so the number of pods per node is limited by ENIs and IPs unless you enable prefix delegation, and subnets must be large enough. The EBS CSI driver turns PersistentVolumeClaims into gp3 volumes. Next you will let traffic in with the AWS Load Balancer Controller."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "List add-ons and versions",
+              "prompt": "Show the add-ons installed and their versions with eksctl.",
+              "command": "eksctl get addon --cluster opsdeck-eks",
+              "expected": "A table with NAME, VERSION, STATUS and IAM role columns.",
+              "hint": "The command is `get addon`.",
+              "solution": "aws eks describe-addon --cluster-name opsdeck-eks --addon-name vpc-cni --query addon.addonVersion"
+            },
+            {
+              "title": "Count pod IPs on a node",
+              "prompt": "Show the pod IPs allocated and the node's pod capacity.",
+              "command": "kubectl get nodes -o custom-columns=NAME:.metadata.name,MAXPODS:.status.allocatable.pods",
+              "expected": "Each node with its allocatable pods value, for example 29.",
+              "hint": "allocatable.pods is the limit.",
+              "solution": "kubectl get pods -A -o wide"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "What does the VPC CNI give each pod?",
+                "options": [
+                  "An overlay IP",
+                  "A VPC subnet IP address",
+                  "A NodePort",
+                  "A public IP"
+                ],
+                "answer": 1,
+                "explain": "Pods get secondary IPs of node ENIs, directly routable in the VPC."
+              },
+              {
+                "question": "Max pods for m5.large with default settings?",
+                "options": [
+                  "17",
+                  "29",
+                  "58",
+                  "110"
+                ],
+                "answer": 1,
+                "explain": "3 x (10 - 1) + 2 = 29."
+              },
+              {
+                "question": "Why use volumeBindingMode WaitForFirstConsumer for EBS?",
+                "options": [
+                  "Faster boot",
+                  "Volume is created in the pod's AZ",
+                  "Cheaper",
+                  "Required by CoreDNS"
+                ],
+                "answer": 1,
+                "explain": "EBS volumes are AZ-bound, so creation waits until the pod is scheduled."
+              },
+              {
+                "question": "Which add-on runs the cluster DNS?",
+                "options": [
+                  "vpc-cni",
+                  "coredns",
+                  "kube-proxy",
+                  "aws-ebs-csi-driver"
+                ],
+                "answer": 1,
+                "explain": "CoreDNS resolves service names inside the cluster."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-persistent-storage",
+            "k8s-network-model"
+          ],
+          "tags": [
+            "eks",
+            "addons",
+            "vpc-cni",
+            "ebs",
+            "storage"
+          ],
+          "commands": [
+            "aws eks create-addon",
+            "aws eks update-addon",
+            "kubectl get pvc"
+          ],
+          "sources": [
+            {
+              "title": "Amazon EKS add-ons",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html"
+            },
+            {
+              "title": "Assign more IPs with prefix delegation",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/cni-increase-ip-addresses.html"
+            },
+            {
+              "title": "Storage Classes",
+              "url": "https://kubernetes.io/docs/concepts/storage/storage-classes/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-load-balancing",
+          "title": "Load balancing: AWS Load Balancer Controller, ALB, NLB, ExternalDNS and cert-manager",
+          "duration": "17 min",
+          "summary": "Install the AWS Load Balancer Controller, expose apps through an ALB Ingress or NLB Service with annotations, and automate DNS and certificates.",
+          "objectives": [
+            "Explain which AWS load balancer the controller creates for an Ingress versus a Service",
+            "Install the AWS Load Balancer Controller with Helm and an IAM role",
+            "Write ALB Ingress and NLB Service manifests with the right annotations and target type",
+            "Describe where ExternalDNS, ACM and cert-manager fit"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Getting traffic into the cluster",
+              "body": "Pods have VPC IPs but are not reachable from the internet on their own. A Kubernetes **Service** of type `LoadBalancer` or an **Ingress** must be turned into a real AWS load balancer by a controller. EKS does not include that controller by default (the in-tree cloud provider would only create old Classic Load Balancers). Install the **AWS Load Balancer Controller**, which watches Ingress and Service objects and creates: an **Application Load Balancer (ALB)**, layer 7 HTTP/HTTPS with host and path routing, for each Ingress (or Ingress group); and a **Network Load Balancer (NLB)**, layer 4 TCP/UDP/TLS with static IPs, for each Service of type `LoadBalancer` that sets `loadBalancerClass: service.k8s.aws/nlb`.\n\nBoth support two **target types**. `ip` registers the pod IP directly, which is faster, avoids an extra hop and works with Fargate; `instance` registers node ports. Use `ip` with the VPC CNI. The controller finds subnets by the `kubernetes.io/role/elb` tags from lesson 2 and needs an IAM role to call the ELB and EC2 APIs."
+            },
+            {
+              "type": "text",
+              "title": "About this example: installing the controller",
+              "body": "These commands download the official IAM policy, create it, associate a Pod Identity role with the controller's service account and install the Helm chart from the `eks` repository. Replace the cluster name, VPC ID and region with yours. In the result, check that the `aws-load-balancer-controller` deployment shows `2/2` ready replicas; webhook errors during later Ingress creation usually mean it is not ready yet."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Install the AWS Load Balancer Controller",
+              "code": "curl -sLo iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.13.0/docs/install/iam_policy.json\naws iam create-policy --policy-name AWSLoadBalancerControllerIAMPolicy --policy-document file://iam_policy.json\n\naws eks create-pod-identity-association --cluster-name opsdeck-eks \\\n  --namespace kube-system --service-account aws-load-balancer-controller \\\n  --role-arn arn:aws:iam::123456789012:role/AWSLoadBalancerControllerRole\n\nhelm repo add eks https://aws.github.io/eks-charts && helm repo update\nhelm install aws-load-balancer-controller eks/aws-load-balancer-controller \\\n  -n kube-system \\\n  --set clusterName=opsdeck-eks --set region=us-east-1 --set vpcId=vpc-0a1b2c3d4e5f67890 \\\n  --set serviceAccount.name=aws-load-balancer-controller\nkubectl get deployment -n kube-system aws-load-balancer-controller",
+              "output": "{ \"Policy\": { \"PolicyName\": \"AWSLoadBalancerControllerIAMPolicy\", \"Arn\": \"arn:aws:iam::123456789012:policy/AWSLoadBalancerControllerIAMPolicy\" } }\n{ \"association\": { \"serviceAccount\": \"aws-load-balancer-controller\", \"namespace\": \"kube-system\" } }\n\nNAME: aws-load-balancer-controller\nLAST DEPLOYED: Fri Nov 13 10:12:44 2026\nNAMESPACE: kube-system\nSTATUS: deployed\nREVISION: 1\n\nNAME                           READY   UP-TO-DATE   AVAILABLE   AGE\naws-load-balancer-controller   2/2     2            2           41s",
+              "note": "Attach the downloaded policy to AWSLoadBalancerControllerRole, which must trust pods.eks.amazonaws.com."
+            },
+            {
+              "type": "table",
+              "title": "Most used annotations",
+              "head": [
+                "Annotation",
+                "Applies to",
+                "Example value",
+                "Effect"
+              ],
+              "rows": [
+                [
+                  "`alb.ingress.kubernetes.io/scheme`",
+                  "Ingress",
+                  "`internet-facing` or `internal`",
+                  "Public or private ALB"
+                ],
+                [
+                  "`alb.ingress.kubernetes.io/target-type`",
+                  "Ingress",
+                  "`ip`",
+                  "Register pod IPs"
+                ],
+                [
+                  "`alb.ingress.kubernetes.io/listen-ports`",
+                  "Ingress",
+                  "`[{\"HTTP\":80},{\"HTTPS\":443}]`",
+                  "Listeners"
+                ],
+                [
+                  "`alb.ingress.kubernetes.io/certificate-arn`",
+                  "Ingress",
+                  "`arn:aws:acm:us-east-1:123456789012:certificate/abc...`",
+                  "ACM certificate for HTTPS"
+                ],
+                [
+                  "`alb.ingress.kubernetes.io/ssl-redirect`",
+                  "Ingress",
+                  "`'443'`",
+                  "Redirect HTTP to HTTPS"
+                ],
+                [
+                  "`alb.ingress.kubernetes.io/healthcheck-path`",
+                  "Ingress or Service",
+                  "`/healthz`",
+                  "Target group health check"
+                ],
+                [
+                  "`alb.ingress.kubernetes.io/group.name`",
+                  "Ingress",
+                  "`shop`",
+                  "Share one ALB across Ingresses"
+                ],
+                [
+                  "`service.beta.kubernetes.io/aws-load-balancer-nlb-target-type`",
+                  "Service",
+                  "`ip`",
+                  "NLB targets"
+                ],
+                [
+                  "`service.beta.kubernetes.io/aws-load-balancer-scheme`",
+                  "Service",
+                  "`internet-facing`",
+                  "Public or internal NLB"
+                ],
+                [
+                  "`external-dns.alpha.kubernetes.io/hostname`",
+                  "Service or Ingress",
+                  "`shop.example.com`",
+                  "DNS record to create"
+                ]
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: an ALB Ingress and an NLB Service",
+              "body": "This file contains a Deployment, a ClusterIP Service, an **Ingress** served by an internet-facing ALB, and a second Service of type `LoadBalancer` served by an NLB. In the Ingress, `ingressClassName: alb` selects the controller, and the annotations choose IP targets, HTTPS with an ACM certificate and an HTTP to HTTPS redirect; the NLB Service uses `loadBalancerClass` and annotations for IP targets. Apply it with `kubectl apply -f`, then `kubectl get ingress,svc` shows the load balancer DNS names after a few minutes in the `ADDRESS` and `EXTERNAL-IP` columns."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "ALB Ingress and NLB Service for the web app",
+              "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels: { app: web }\n  template:\n    metadata:\n      labels: { app: web }\n    spec:\n      containers:\n        - name: nginx\n          image: public.ecr.aws/docker/library/nginx:1.27\n          ports:\n            - containerPort: 80\n          readinessProbe:\n            httpGet: { path: /, port: 80 }\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  type: ClusterIP\n  selector: { app: web }\n  ports:\n    - port: 80\n      targetPort: 80\n---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: web\n  annotations:\n    alb.ingress.kubernetes.io/scheme: internet-facing\n    alb.ingress.kubernetes.io/target-type: ip\n    alb.ingress.kubernetes.io/listen-ports: '[{\"HTTP\":80},{\"HTTPS\":443}]'\n    alb.ingress.kubernetes.io/ssl-redirect: \"443\"\n    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555\n    alb.ingress.kubernetes.io/healthcheck-path: /\n    external-dns.alpha.kubernetes.io/hostname: shop.example.com\nspec:\n  ingressClassName: alb\n  rules:\n    - host: shop.example.com\n      http:\n        paths:\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: web\n                port:\n                  number: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: web-nlb\n  annotations:\n    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip\n    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing\nspec:\n  type: LoadBalancer\n  loadBalancerClass: service.k8s.aws/nlb\n  selector: { app: web }\n  ports:\n    - port: 80\n      targetPort: 80",
+              "output": "deployment.apps/web created\nservice/web created\ningress.networking.k8s.io/web created\nservice/web-nlb created\n\n$ kubectl get ingress,svc web web-nlb\nNAME                        CLASS   HOSTS              ADDRESS                                                          PORTS     AGE\ningress.networking.k8s.io/web   alb     shop.example.com   k8s-default-web-3f2a1b9c4d-1234567890.us-east-1.elb.amazonaws.com   80, 443   3m\n\nNAME              TYPE           CLUSTER-IP      EXTERNAL-IP                                                              PORT(S)        AGE\nservice/web       ClusterIP      172.20.41.12    <none>                                                                   80/TCP         3m\nservice/web-nlb   LoadBalancer   172.20.168.90   k8s-default-webnlb-8a7b6c5d4e-0f1e2d3c4b5a6978.elb.us-east-1.amazonaws.com   80:31877/TCP   3m"
+            },
+            {
+              "type": "text",
+              "title": "ExternalDNS and cert-manager: who does what",
+              "body": "A load balancer DNS name like `k8s-default-web-...elb.amazonaws.com` is not something users type. **ExternalDNS** is a controller you install that watches Services and Ingresses and creates matching records in **Route 53** (an alias record from `shop.example.com` to the ALB), using the `external-dns.alpha.kubernetes.io/hostname` annotation or the Ingress host. For certificates there are two models. With an ALB you usually use **AWS Certificate Manager (ACM)**: you request a public certificate, reference its ARN in the Ingress, and TLS terminates on the load balancer, with AWS renewing it. **cert-manager** is a Kubernetes add-on that issues certificates (Let's Encrypt or a private CA) as Secrets inside the cluster, which you need when TLS must terminate in the pod, for service mesh certificates or for an NGINX ingress."
+            },
+            {
+              "type": "table",
+              "title": "Choosing the right piece",
+              "head": [
+                "Need",
+                "Use",
+                "Installed as",
+                "Notes"
+              ],
+              "rows": [
+                [
+                  "HTTP/HTTPS routing, host/path rules",
+                  "ALB via Ingress",
+                  "AWS Load Balancer Controller",
+                  "L7, WAF and Cognito integration"
+                ],
+                [
+                  "TCP/UDP, static IPs, very high throughput",
+                  "NLB via Service",
+                  "AWS Load Balancer Controller",
+                  "L4, preserves client IP with ip targets"
+                ],
+                [
+                  "Friendly DNS names",
+                  "ExternalDNS",
+                  "Helm chart + Route 53 permissions",
+                  "Set `--domain-filter` to limit scope"
+                ],
+                [
+                  "Public TLS on the load balancer",
+                  "ACM certificate",
+                  "AWS Certificate Manager",
+                  "Free, auto-renewed; region-specific"
+                ],
+                [
+                  "TLS inside the cluster / private CA",
+                  "cert-manager",
+                  "Helm chart `jetstack/cert-manager`",
+                  "`ClusterIssuer` + `Certificate` resources"
+                ]
+              ]
+            },
+            {
+              "type": "callout",
+              "tone": "warning",
+              "title": "Common mistakes",
+              "body": "**Missing subnet tags**, so the controller logs `couldn't auto-discover subnets` and the Ingress has no address. **Wrong certificate region**: the ACM certificate must be in the same region as the ALB. **Forgetting `target-type: ip`** with Fargate, which cannot use instance targets. **One ALB per Ingress** is costly: use `alb.ingress.kubernetes.io/group.name` to share. **Readiness probes missing**, so new pods receive traffic before they are ready. **Leaving load balancers behind**: they are not deleted if you remove the cluster without deleting Services first."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "The AWS Load Balancer Controller turns Ingress objects into ALBs and `LoadBalancer` Services into NLBs; annotations choose scheme, targets, listeners and certificates. ExternalDNS publishes Route 53 records and ACM or cert-manager provide TLS. You now have every building block. The last lesson combines them into a complete deployment and, importantly, deletes everything in the right order."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Check the controller",
+              "prompt": "Verify the controller pods are running and read their last log lines.",
+              "command": "kubectl logs -n kube-system deployment/aws-load-balancer-controller --tail=5",
+              "expected": "Log lines such as 'Successfully reconciled' or startup messages.",
+              "hint": "Use deployment/NAME with logs.",
+              "solution": "kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller"
+            },
+            {
+              "title": "Find the load balancer address",
+              "prompt": "Print the ALB DNS name of an Ingress.",
+              "command": "kubectl get ingress web -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+              "expected": "The ALB hostname ending in elb.amazonaws.com.",
+              "hint": "The address is under status.loadBalancer.",
+              "solution": "kubectl describe ingress web"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Which load balancer does an Ingress with ingressClassName alb create?",
+                "options": [
+                  "Classic",
+                  "Application Load Balancer",
+                  "Network Load Balancer",
+                  "Gateway Load Balancer"
+                ],
+                "answer": 1,
+                "explain": "The controller provisions an ALB for each Ingress or Ingress group."
+              },
+              {
+                "question": "What does target-type ip do?",
+                "options": [
+                  "Registers node ports",
+                  "Registers pod IPs as targets",
+                  "Disables health checks",
+                  "Creates a public IP"
+                ],
+                "answer": 1,
+                "explain": "Traffic goes directly to the pod IPs, skipping kube-proxy."
+              },
+              {
+                "question": "Where should an ACM certificate for the ALB exist?",
+                "options": [
+                  "Any region",
+                  "The same region as the load balancer",
+                  "Only us-west-2",
+                  "In a Secret"
+                ],
+                "answer": 1,
+                "explain": "ACM certificates are regional resources."
+              },
+              {
+                "question": "Which tool writes Route 53 records from Ingress hosts?",
+                "options": [
+                  "cert-manager",
+                  "ExternalDNS",
+                  "CoreDNS",
+                  "Karpenter"
+                ],
+                "answer": 1,
+                "explain": "ExternalDNS watches Kubernetes objects and syncs DNS records."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-ingress",
+            "k8s-services"
+          ],
+          "tags": [
+            "eks",
+            "alb",
+            "nlb",
+            "ingress",
+            "externaldns",
+            "cert-manager"
+          ],
+          "commands": [
+            "helm install",
+            "kubectl get ingress",
+            "kubectl logs"
+          ],
+          "sources": [
+            {
+              "title": "AWS Load Balancer Controller",
+              "url": "https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/"
+            },
+            {
+              "title": "Ingress",
+              "url": "https://kubernetes.io/docs/concepts/services-networking/ingress/"
+            },
+            {
+              "title": "ExternalDNS",
+              "url": "https://kubernetes-sigs.github.io/external-dns/"
+            },
+            {
+              "title": "cert-manager",
+              "url": "https://cert-manager.io/docs/"
+            }
+          ],
+          "level": null
+        },
+        {
+          "id": "k8s-eks-deploy-cleanup",
+          "title": "Deploying a sample app end to end and cleaning up to avoid costs",
+          "duration": "15 min",
+          "summary": "Deploy a production-shaped app behind an ALB on your cluster, verify it, then delete everything in the correct order.",
+          "objectives": [
+            "Deploy a namespaced app with resources, probes, a PodDisruptionBudget and an ALB Ingress",
+            "Verify the rollout, load balancer and HTTP response from outside the cluster",
+            "Delete Ingresses and Services before the cluster so AWS load balancers are removed",
+            "Check for leftover billable resources after eksctl delete cluster"
+          ],
+          "sections": [
+            {
+              "type": "text",
+              "title": "Putting it all together",
+              "body": "You now have each piece: a cluster (lesson 2), access (3), nodes (4), IPs and storage add-ons (5) and the load balancer controller (6). In this lesson you deploy a small but production-shaped application, `shop`, and then remove everything. The app uses a dedicated **namespace**, a Deployment with three replicas spread over nodes, resource requests and limits (so the autoscaler can make good decisions), readiness and liveness probes, a **PodDisruptionBudget** so node upgrades never take all pods down at once, and an internet-facing ALB Ingress.\n\nThe order of operations matters in both directions. Deploy: namespace, workload, service, ingress. Clean up: Ingresses and LoadBalancer Services first (so the controller deletes the AWS load balancers it created), then workloads and volumes, then add-on infrastructure, and only then the cluster."
+            },
+            {
+              "type": "steps",
+              "title": "The end-to-end checklist",
+              "items": [
+                {
+                  "title": "1. Confirm context and capacity",
+                  "body": "`kubectl config current-context` and `kubectl get nodes` show the right cluster with Ready nodes."
+                },
+                {
+                  "title": "2. Apply the manifests",
+                  "body": "One `kubectl apply -f shop.yaml` creates namespace, Deployment, Service, PDB and Ingress."
+                },
+                {
+                  "title": "3. Wait for the rollout",
+                  "body": "`kubectl rollout status` returns when all replicas are Ready."
+                },
+                {
+                  "title": "4. Wait for the ALB",
+                  "body": "The Ingress ADDRESS appears after 2 to 3 minutes; targets must be healthy."
+                },
+                {
+                  "title": "5. Test over HTTP",
+                  "body": "`curl` the ALB hostname with the Host header, or via Route 53 if ExternalDNS runs."
+                },
+                {
+                  "title": "6. Clean up in order",
+                  "body": "Ingress and Services, then namespace, then add-ons, then `eksctl delete cluster`."
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "title": "About this example: the shop application manifest",
+              "body": "This single file contains everything the app needs. Look at the Deployment's `topologySpreadConstraints` (one pod per node when possible), `resources` (requests drive scheduling and Karpenter, limits cap usage), the two probes, the PodDisruptionBudget with `minAvailable: 2` and the Ingress annotations from the previous lesson, here without a certificate so plain HTTP works in your lab. Apply it with `kubectl apply -f shop.yaml`."
+            },
+            {
+              "type": "code",
+              "language": "yaml",
+              "title": "shop.yaml",
+              "code": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: shop\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: shop\nspec:\n  replicas: 3\n  selector:\n    matchLabels: { app: web }\n  template:\n    metadata:\n      labels: { app: web }\n    spec:\n      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: kubernetes.io/hostname\n          whenUnsatisfiable: ScheduleAnyway\n          labelSelector:\n            matchLabels: { app: web }\n      containers:\n        - name: nginx\n          image: public.ecr.aws/docker/library/nginx:1.27\n          ports:\n            - containerPort: 80\n          resources:\n            requests: { cpu: 100m, memory: 128Mi }\n            limits: { memory: 256Mi }\n          readinessProbe:\n            httpGet: { path: /, port: 80 }\n            periodSeconds: 5\n          livenessProbe:\n            httpGet: { path: /, port: 80 }\n            initialDelaySeconds: 10\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: web\n  namespace: shop\nspec:\n  selector: { app: web }\n  ports:\n    - port: 80\n      targetPort: 80\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: web\n  namespace: shop\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels: { app: web }\n---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: web\n  namespace: shop\n  annotations:\n    alb.ingress.kubernetes.io/scheme: internet-facing\n    alb.ingress.kubernetes.io/target-type: ip\nspec:\n  ingressClassName: alb\n  rules:\n    - http:\n        paths:\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: web\n                port:\n                  number: 80",
+              "output": "namespace/shop created\ndeployment.apps/web created\nservice/web created\npoddisruptionbudget.policy/web created\ningress.networking.k8s.io/web created"
+            },
+            {
+              "type": "text",
+              "title": "About this example: verifying the deployment",
+              "body": "These commands confirm each layer, from inside to outside: the rollout finished, pods are spread over different nodes (see the NODE column), the Ingress received an ALB hostname and an HTTP request returns the nginx page. If the Ingress stays without an address, `kubectl describe ingress` shows the controller events; a `502` or `503` right after creation usually means targets are still registering."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Verify rollout, load balancer and HTTP",
+              "code": "kubectl -n shop rollout status deployment/web\nkubectl -n shop get pods -o wide\nkubectl -n shop get ingress web\nALB=$(kubectl -n shop get ingress web -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')\ncurl -s -o /dev/null -w '%{http_code}\\n' http://$ALB/",
+              "output": "deployment \"web\" successfully rolled out\n\nNAME                  READY   STATUS    RESTARTS   AGE   IP            NODE\nweb-6f7c9b8d54-5hxkq  1/1     Running   0          2m    10.0.101.57   ip-10-0-101-14.ec2.internal\nweb-6f7c9b8d54-m2z9d  1/1     Running   0          2m    10.0.134.91   ip-10-0-134-77.ec2.internal\nweb-6f7c9b8d54-vq6tn  1/1     Running   0          2m    10.0.168.12   ip-10-0-168-203.ec2.internal\n\nNAME   CLASS   HOSTS   ADDRESS                                                            PORTS   AGE\nweb    alb     *       k8s-shop-web-1a2b3c4d5e-987654321.us-east-1.elb.amazonaws.com   80      3m\n\n200"
+            },
+            {
+              "type": "text",
+              "title": "About this example: cleaning up in the right order",
+              "body": "Deleting the cluster directly can leave ALBs, NLBs, security groups and ENIs behind, because Kubernetes controllers never get the chance to remove them; the leftover ENIs then block the VPC deletion. So delete the namespace (which removes the Ingress and Service and makes the controller delete the ALB), uninstall the controller, remove any PVCs so EBS volumes go away, and only then run `eksctl delete cluster`. The final two commands check that no cluster, load balancer or unattached volume remains."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "title": "Delete the app, the cluster and verify nothing is left",
+              "code": "kubectl delete namespace shop\nkubectl delete pvc --all -A\nhelm uninstall aws-load-balancer-controller -n kube-system\neksctl delete cluster --name opsdeck-eks --region us-east-1 --wait\naws eks list-clusters --region us-east-1\naws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'\naws ec2 describe-volumes --filters Name=status,Values=available --query 'Volumes[].VolumeId'",
+              "output": "namespace \"shop\" deleted\npersistentvolumeclaim \"data\" deleted\nrelease \"aws-load-balancer-controller\" uninstalled\n2026-11-13 11:02:10 [i]  deleting EKS cluster \"opsdeck-eks\"\n2026-11-13 11:02:12 [i]  will drain 0 unmanaged nodegroup(s) in cluster \"opsdeck-eks\"\n2026-11-13 11:04:51 [i]  deleted 0 Fargate profile(s)\n2026-11-13 11:12:33 [✔]  all cluster resources were deleted\n{\n    \"clusters\": []\n}\n[]\n[]"
+            },
+            {
+              "type": "callout",
+              "tone": "danger",
+              "title": "Cost traps after deleting the cluster",
+              "body": "Check these in the console or CLI: **load balancers** (`aws elbv2 describe-load-balancers`), **unattached EBS volumes** and snapshots, **NAT gateways and Elastic IPs** (created by eksctl, removed with the VPC stack), **CloudWatch log groups** `/aws/eks/opsdeck-eks/cluster` (retention keeps billing), **ECR images**, **Route 53 records** created by ExternalDNS, and **IAM roles** you created manually such as `EbsCsiDriverRole`. **Common mistakes:** deleting the CloudFormation stack by hand while resources are attached, leaving an Ingress behind so the VPC cannot be deleted, and forgetting a second cluster in another region."
+            },
+            {
+              "type": "text",
+              "title": "Recap and what comes next",
+              "body": "You built a cluster from a config file, secured access with IAM access entries, added managed, Spot and Karpenter capacity, installed the core add-ons and the AWS Load Balancer Controller, deployed a probe-protected, PDB-protected app behind an ALB and removed it all without leaving billable leftovers. From here, take the same design into code with Terraform, package the app with Helm, add observability and GitOps, and rehearse a version upgrade (control plane, add-ons, then nodes) in a throwaway cluster before you do it in production."
+            }
+          ],
+          "exercises": [
+            {
+              "title": "Check PDB and spread",
+              "prompt": "Confirm the PodDisruptionBudget exists and that pods run on different nodes.",
+              "command": "kubectl -n shop get pdb,pods -o wide",
+              "expected": "The PDB shows MIN AVAILABLE 2 and pods sit on different nodes.",
+              "hint": "Add -o wide for NODE.",
+              "solution": "kubectl -n shop describe pdb web"
+            },
+            {
+              "title": "Find leftover load balancers",
+              "prompt": "After cleanup, list any remaining ELB v2 load balancers in the region.",
+              "command": "aws elbv2 describe-load-balancers --region us-east-1 --query 'LoadBalancers[].LoadBalancerName'",
+              "expected": "An empty list [] when everything is deleted.",
+              "hint": "Use --query to keep it short.",
+              "solution": "aws elbv2 describe-load-balancers --region us-east-1 --output table"
+            }
+          ],
+          "quiz": {
+            "passScore": 70,
+            "questions": [
+              {
+                "question": "Why delete Ingresses and LoadBalancer Services before the cluster?",
+                "options": [
+                  "kubectl requires it",
+                  "So controllers remove the AWS load balancers they created",
+                  "To save etcd space",
+                  "To reset IAM"
+                ],
+                "answer": 1,
+                "explain": "Without that, ALBs/NLBs and ENIs stay behind and block VPC deletion and keep billing."
+              },
+              {
+                "question": "What does minAvailable: 2 in a PodDisruptionBudget protect against?",
+                "options": [
+                  "Pod crashes",
+                  "Too many voluntary evictions at once, e.g. node drains",
+                  "Image pull failures",
+                  "Network partitions"
+                ],
+                "answer": 1,
+                "explain": "PDBs limit voluntary disruptions such as node drains and upgrades."
+              },
+              {
+                "question": "Which command removes the cluster created from the ClusterConfig?",
+                "options": [
+                  "kubectl delete cluster",
+                  "eksctl delete cluster",
+                  "helm uninstall",
+                  "aws s3 rm"
+                ],
+                "answer": 1,
+                "explain": "eksctl deletes the CloudFormation stacks it created."
+              },
+              {
+                "question": "Which leftover commonly keeps billing after deletion?",
+                "options": [
+                  "kubeconfig",
+                  "Unattached EBS volumes and CloudWatch log groups",
+                  "Namespaces",
+                  "Labels"
+                ],
+                "answer": 1,
+                "explain": "Volumes and log groups are separate AWS resources with their own charges."
+              }
+            ]
+          },
+          "lab": null,
+          "related": [
+            "k8s-deployments",
+            "k8s-ingress",
+            "k8s-probes-resources"
+          ],
+          "tags": [
+            "eks",
+            "deployment",
+            "cleanup",
+            "cost",
+            "alb"
+          ],
+          "commands": [
+            "eksctl delete cluster",
+            "kubectl rollout status",
+            "kubectl delete namespace"
+          ],
+          "sources": [
+            {
+              "title": "Delete a cluster",
+              "url": "https://docs.aws.amazon.com/eks/latest/userguide/delete-cluster.html"
+            },
+            {
+              "title": "PodDisruptionBudgets",
+              "url": "https://kubernetes.io/docs/tasks/run-application/configure-pdb/"
+            },
+            {
+              "title": "Best Practices for EKS",
+              "url": "https://aws.github.io/aws-eks-best-practices/"
+            }
+          ],
+          "level": null
+        }
+      ]
+    }
+  ],
+  "prerequisites": [
+    "k8s-workloads"
+  ],
+  "track": "kubernetes"
+}
