@@ -809,8 +809,119 @@ class IntelligenceService {
     };
   }
 
-  /** Docker security, image hygiene, resource usage, compose, optimizer and env diff. */
-  async dockerInsights() {
+  // ------------------------------------------------------ query collaboration
+
+  /** The local saved-query library, filterable by text, engine, connection or tag. */
+  queryLibrary(payload = {}) {
+    return this.store.queries(payload);
+  }
+
+  querySave(input = {}) {
+    const item = this.store.saveQuery(input);
+    this.store.audit({
+      action: 'query-save', module: 'databases', resource: item.item.name, outcome: 'success',
+      detail: 'Saved a query to the local library', meta: { id: item.item.id, engine: item.item.engine },
+    });
+    return item;
+  }
+
+  queryDelete(id) {
+    const result = this.store.deleteQuery(id);
+    if (result.removed) {
+      this.store.audit({ action: 'query-delete', module: 'databases', resource: clean(id, 80), detail: 'Removed a query from the local library' });
+    }
+    return result;
+  }
+
+  notes(payload = {}) {
+    return this.store.notes(payload);
+  }
+
+  noteSave(input = {}) {
+    const item = this.store.saveNote(input);
+    this.store.audit({
+      action: 'note-save', module: clean(input.module, 40) || 'databases',
+      resource: [item.item.database, item.item.table].filter(Boolean).join('.') || item.item.resourceId,
+      detail: 'Saved a local investigation note', meta: { id: item.item.id },
+    });
+    return item;
+  }
+
+  noteDelete(id) {
+    const result = this.store.deleteNote(id);
+    if (result.removed) {
+      this.store.audit({ action: 'note-delete', module: 'databases', resource: clean(id, 80), detail: 'Removed a local investigation note' });
+    }
+    return result;
+  }
+
+  /**
+   * Export the library for sharing. The payload only contains what the user
+   * saved; connection profiles, credentials and secret values are not read.
+   */
+  libraryExport() {
+    const queries = this.store.queries({ limit: LIMITS.savedQueries }).items.map((entry) => ({
+      name: entry.name, sql: entry.sql, engine: entry.engine, connectionName: entry.connectionName,
+      database: entry.database, description: entry.description, tags: entry.tags, author: entry.author,
+      createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+    }));
+    const notes = this.store.notes({ limit: LIMITS.notes }).items.map((entry) => ({
+      module: entry.module, resourceId: entry.resourceId, database: entry.database, schema: entry.schema,
+      table: entry.table, body: entry.body, author: entry.author, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+    }));
+    return {
+      ok: true,
+      version: 1,
+      kind: 'opsdeck-database-library',
+      exportedAt: new Date().toISOString(),
+      queries,
+      notes,
+    };
+  }
+
+  /**
+   * Merge an exported library into the local one. Every entry is validated and
+   * clamped by the store; invalid entries are counted, never partially stored.
+   */
+  libraryImport(payload = {}) {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'The import payload is not an object.' };
+    if (payload.kind && payload.kind !== 'opsdeck-database-library') {
+      return { ok: false, error: 'This file was not exported from the OpsDeck database library.' };
+    }
+    const queries = Array.isArray(payload.queries) ? payload.queries.slice(0, LIMITS.savedQueries) : [];
+    const notes = Array.isArray(payload.notes) ? payload.notes.slice(0, LIMITS.notes) : [];
+    if (!queries.length && !notes.length) return { ok: false, error: 'The file contains no saved queries or notes.' };
+    let importedQueries = 0;
+    let importedNotes = 0;
+    const skipped = [];
+    for (const entry of queries) {
+      try {
+        if (!entry || typeof entry !== 'object' || !String(entry.sql || '').trim()) throw new Error('missing SQL');
+        this.store.saveQuery({ ...entry, id: '' });
+        importedQueries += 1;
+      } catch (error) {
+        skipped.push(`query: ${safeError(error, 'invalid entry')}`);
+      }
+    }
+    for (const entry of notes) {
+      try {
+        if (!entry || typeof entry !== 'object' || !String(entry.body || '').trim()) throw new Error('missing body');
+        this.store.saveNote({ ...entry, id: '' });
+        importedNotes += 1;
+      } catch (error) {
+        skipped.push(`note: ${safeError(error, 'invalid entry')}`);
+      }
+    }
+    if (importedQueries || importedNotes) {
+      this.store.audit({
+        action: 'library-import', module: 'databases', outcome: 'success',
+        detail: `Imported ${importedQueries} query(ies) and ${importedNotes} note(s)`,
+      });
+    }
+    return { ok: true, queries: importedQueries, notes: importedNotes, skipped: skipped.slice(0, 20) };
+  }
+
+  /** Docker security, image hygiene, resource usage, compose, optimizer and env diff. */  async dockerInsights() {
     if (!this.docker) return { ok: false, error: 'Docker is not available.' };
     const started = Date.now();
     const [overview, containers, images, volumes, networks, compose, stats] = await Promise.all([

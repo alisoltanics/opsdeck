@@ -290,6 +290,39 @@ function registerIpc({ getWindow, dialog, app }) {
     try { parsed = JSON.parse(fs.readFileSync(chosen.filePaths[0], 'utf8')); } catch { return { ok: false, error: 'The import file is not valid JSON.' }; }
     return databases.importConnections(parsed);
   });
+
+  // Saved query library and object notes (local, exportable for sharing).
+  handle('db:query-library', (p) => intelligence.queryLibrary(p || {}));
+  handle('db:query-save', (p) => intelligence.querySave(p || {}));
+  handle('db:query-delete', (p) => intelligence.queryDelete(p?.id));
+  handle('db:notes', (p) => intelligence.notes(p || {}));
+  handle('db:note-save', (p) => intelligence.noteSave(p || {}));
+  handle('db:note-delete', (p) => intelligence.noteDelete(p?.id));
+  handle('db:library-export-file', async () => {
+    const payload = intelligence.libraryExport();
+    if (!payload.queries.length && !payload.notes.length) return { ok: false, error: 'The library is empty.' };
+    const chosen = await dialog.showSaveDialog(getWindow(), {
+      title: 'Export the database library',
+      defaultPath: 'opsdeck-database-library.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(chosen.filePath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    return { ok: true, file: chosen.filePath, queries: payload.queries.length, notes: payload.notes.length };
+  });
+  handle('db:library-import-file', async () => {
+    const chosen = await dialog.showOpenDialog(getWindow(), {
+      title: 'Import a database library',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (chosen.canceled || !chosen.filePaths?.[0]) return { ok: false, canceled: true };
+    const stat = fs.statSync(chosen.filePaths[0]);
+    if (stat.size > 4 * 1024 * 1024) return { ok: false, error: 'The import file is larger than 4 MB.' };
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(chosen.filePaths[0], 'utf8')); } catch { return { ok: false, error: 'The import file is not valid JSON.' }; }
+    return intelligence.libraryImport(parsed);
+  });
   handle('db:connection-diagnostics', (p) => databases.diagnostics(p?.id));
   handle('db:connection-info', (p) => databases.serverInfo(p?.id));
   handle('db:databases', (p) => databases.listDatabases(p?.id));

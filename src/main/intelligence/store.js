@@ -169,8 +169,39 @@ class IntelligenceStore {
     trimList(data.favorites, LIMITS.favorites);
     trimList(data.savedSearches, LIMITS.savedSearches);
     trimList(data.savedQueries, LIMITS.savedQueries);
+    data.savedQueries = data.savedQueries
+      .filter((entry) => entry && typeof entry === 'object' && String(entry.sql || '').trim())
+      .map((entry) => ({
+        id: clean(entry.id, 80) || `query-${Math.random().toString(36).slice(2, 10)}`,
+        name: clean(entry.name, 120) || 'Saved query',
+        sql: String(entry.sql || '').slice(0, 20000),
+        engine: clean(entry.engine, 40),
+        connectionId: clean(entry.connectionId, 80),
+        connectionName: clean(entry.connectionName, 160),
+        database: clean(entry.database, 120),
+        description: clean(entry.description, 400),
+        tags: array(entry.tags).slice(0, 8).map((tag) => clean(tag, 30)).filter(Boolean),
+        author: clean(entry.author, 80) || 'local-user',
+        createdAt: clean(entry.createdAt, 40) || new Date().toISOString(),
+        updatedAt: clean(entry.updatedAt, 40) || new Date().toISOString(),
+      }));
     trimList(data.workspaces, LIMITS.workspaces);
     trimList(data.notes, LIMITS.notes);
+    data.notes = data.notes
+      .filter((entry) => entry && typeof entry === 'object' && String(entry.body || '').trim())
+      .map((entry) => ({
+        id: clean(entry.id, 80) || `note-${Math.random().toString(36).slice(2, 10)}`,
+        module: clean(entry.module, 40) || 'databases',
+        resourceId: clean(entry.resourceId, 400),
+        connectionId: clean(entry.connectionId, 80),
+        database: clean(entry.database, 120),
+        schema: clean(entry.schema, 120),
+        table: clean(entry.table, 240),
+        body: String(entry.body || '').slice(0, 8000),
+        author: clean(entry.author, 80) || 'local-user',
+        createdAt: clean(entry.createdAt, 40) || new Date().toISOString(),
+        updatedAt: clean(entry.updatedAt, 40) || new Date().toISOString(),
+      }));
     trimList(data.changes, LIMITS.changes);
     data.schemaSnapshots = array(data.schemaSnapshots)
       .filter((entry) => entry && typeof entry === 'object' && clean(entry.connectionId, 80) && clean(entry.hash, 80))
@@ -338,6 +369,128 @@ class IntelligenceStore {
     this.data.savedSearches = this.data.savedSearches.filter((entry) => entry.id !== id);
     this.schedule();
     return { ok: true };
+  }
+
+  // ------------------------------------------------------------ query library
+
+  saveQuery(input = {}) {
+    const sql = String(input.sql || '').slice(0, 20000);
+    if (!sql.trim()) throw new Error('A query is required.');
+    const tags = Array.isArray(input.tags)
+      ? [...new Set(input.tags.map((tag) => clean(tag, 30)).filter(Boolean))].slice(0, 8)
+      : [];
+    const now = new Date().toISOString();
+    const item = {
+      id: clean(input.id, 80) || `query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      name: clean(input.name, 120) || 'Saved query',
+      sql,
+      engine: clean(input.engine, 40),
+      connectionId: clean(input.connectionId, 80),
+      connectionName: clean(input.connectionName, 160),
+      database: clean(input.database, 120),
+      description: clean(input.description, 400),
+      tags,
+      author: clean(input.author, 80) || 'local-user',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const index = this.data.savedQueries.findIndex((entry) => entry.id === item.id);
+    if (index >= 0) {
+      item.createdAt = this.data.savedQueries[index].createdAt || now;
+      this.data.savedQueries[index] = item;
+    } else {
+      this.data.savedQueries.push(item);
+    }
+    trimList(this.data.savedQueries, LIMITS.savedQueries);
+    this.schedule();
+    return { ok: true, item };
+  }
+
+  queries(filters = {}) {
+    const text = clean(filters.query, 200).toLowerCase();
+    const engine = clean(filters.engine, 40);
+    const connectionId = clean(filters.connectionId, 80);
+    const tag = clean(filters.tag, 30);
+    const limit = clamp(filters.limit || 200, 1, LIMITS.savedQueries);
+    const items = this.data.savedQueries
+      .filter((entry) => {
+        if (engine && entry.engine !== engine) return false;
+        if (connectionId && entry.connectionId !== connectionId) return false;
+        if (tag && !(entry.tags || []).includes(tag)) return false;
+        if (!text) return true;
+        return [entry.name, entry.description, entry.sql, entry.author, ...(entry.tags || [])]
+          .join('\n').toLowerCase().includes(text);
+      })
+      .slice()
+      .reverse()
+      .slice(0, limit);
+    const tags = [...new Set(this.data.savedQueries.flatMap((entry) => entry.tags || []))].sort();
+    return { ok: true, items, total: this.data.savedQueries.length, tags };
+  }
+
+  deleteQuery(id) {
+    const key = clean(id, 80);
+    const before = this.data.savedQueries.length;
+    this.data.savedQueries = this.data.savedQueries.filter((entry) => entry.id !== key);
+    this.schedule();
+    return { ok: true, removed: before !== this.data.savedQueries.length };
+  }
+
+  // ----------------------------------------------------------- object notes
+
+  saveNote(input = {}) {
+    const body = String(input.body || '').slice(0, 8000);
+    if (!body.trim()) throw new Error('A note body is required.');
+    const now = new Date().toISOString();
+    const item = {
+      id: clean(input.id, 80) || `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      module: clean(input.module, 40) || 'databases',
+      resourceId: clean(input.resourceId, 400),
+      connectionId: clean(input.connectionId, 80),
+      database: clean(input.database, 120),
+      schema: clean(input.schema, 120),
+      table: clean(input.table, 240),
+      body,
+      author: clean(input.author, 80) || 'local-user',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const index = this.data.notes.findIndex((entry) => entry.id === item.id);
+    if (index >= 0) {
+      item.createdAt = this.data.notes[index].createdAt || now;
+      this.data.notes[index] = item;
+    } else {
+      this.data.notes.push(item);
+    }
+    trimList(this.data.notes, LIMITS.notes);
+    this.schedule();
+    return { ok: true, item };
+  }
+
+  notes(filters = {}) {
+    const connectionId = clean(filters.connectionId, 80);
+    const database = clean(filters.database, 120);
+    const table = clean(filters.table, 240);
+    const resourceId = clean(filters.resourceId, 400);
+    const module = clean(filters.module, 40);
+    const limit = clamp(filters.limit || 200, 1, LIMITS.notes);
+    const items = this.data.notes.filter((entry) => {
+      if (module && entry.module !== module) return false;
+      if (connectionId && entry.connectionId !== connectionId) return false;
+      if (database && entry.database !== database) return false;
+      if (table && entry.table !== table) return false;
+      if (resourceId && entry.resourceId !== resourceId) return false;
+      return true;
+    }).slice().reverse().slice(0, limit);
+    return { ok: true, items, total: this.data.notes.length };
+  }
+
+  deleteNote(id) {
+    const key = clean(id, 80);
+    const before = this.data.notes.length;
+    this.data.notes = this.data.notes.filter((entry) => entry.id !== key);
+    this.schedule();
+    return { ok: true, removed: before !== this.data.notes.length };
   }
 
   // -------------------------------------------------------------- saved views

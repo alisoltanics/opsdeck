@@ -335,3 +335,89 @@ test('service: observability insights evaluate stored objectives against retaine
     instance.dispose();
   }
 });
+
+test('service: query library saves, filters, exports and imports real entries', () => {
+  const { instance, dir } = service({});
+  try {
+    instance.querySave({
+      name: 'Slow orders', sql: 'select * from orders where total > 100 order by created_at',
+      engine: 'postgres', connectionId: 'prod', connectionName: 'Prod', database: 'shop',
+      description: 'Large orders to review', tags: ['orders', 'performance'], author: 'ada',
+    });
+    instance.querySave({
+      name: 'Recent users', sql: 'select * from users order by id desc limit 50',
+      engine: 'mysql', connectionId: 'dev', connectionName: 'Dev', tags: ['users'], author: 'grace',
+    });
+
+    const all = instance.queryLibrary({});
+    assert.equal(all.ok, true);
+    assert.equal(all.total, 2);
+    assert.equal(all.items[0].name, 'Recent users', 'newest query is listed first');
+    assert.deepEqual(all.tags.slice().sort(), ['orders', 'performance', 'users']);
+
+    assert.deepEqual(instance.queryLibrary({ query: 'slow orders' }).items.map((entry) => entry.name), ['Slow orders']);
+    assert.deepEqual(instance.queryLibrary({ query: 'grace' }).items.map((entry) => entry.name), ['Recent users']);
+    assert.equal(instance.queryLibrary({ engine: 'mysql' }).items.length, 1);
+    assert.equal(instance.queryLibrary({ connectionId: 'prod' }).items.length, 1);
+    assert.equal(instance.queryLibrary({ tag: 'performance' }).items.length, 1);
+
+    const exported = instance.libraryExport();
+    assert.equal(exported.kind, 'opsdeck-database-library');
+    assert.equal(exported.queries.length, 2);
+    assert.equal(exported.notes.length, 0);
+    assert.ok(!JSON.stringify(exported).includes('"password"'), 'the export never reads connection secrets');
+
+    // A teammate can merge the file into a different install.
+    const other = service({});
+    try {
+      const merged = other.instance.libraryImport(exported);
+      assert.equal(merged.ok, true);
+      assert.equal(merged.queries, 2);
+      assert.equal(merged.notes, 0);
+      assert.equal(other.instance.queryLibrary({}).total, 2);
+      assert.equal(other.instance.libraryImport({ kind: 'unrelated' }).ok, false);
+      const partial = other.instance.libraryImport({ queries: [{ name: 'Broken' }, { name: 'Works', sql: 'select 1' }] });
+      assert.equal(partial.ok, true);
+      assert.equal(partial.queries, 1);
+      assert.equal(partial.skipped.length, 1);
+    } finally {
+      other.instance.dispose();
+      fs.rmSync(other.dir, { recursive: true, force: true });
+    }
+
+    assert.equal(instance.queryDelete(all.items[0].id).removed, true);
+    assert.equal(instance.queryLibrary({}).total, 1);
+  } finally {
+    instance.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('service: notes are scoped to one database object', () => {
+  const { instance, dir } = service({});
+  try {
+    instance.noteSave({
+      connectionId: 'prod', database: 'shop', schema: 'public', table: 'orders',
+      body: 'The customer index was added by migration 41.', author: 'ada',
+    });
+    instance.noteSave({
+      connectionId: 'prod', database: 'shop', schema: 'public', table: 'customers',
+      body: 'Contains personal data; mask before export.', author: 'grace',
+    });
+    const orders = instance.notes({ connectionId: 'prod', database: 'shop', table: 'orders' });
+    assert.equal(orders.items.length, 1);
+    assert.match(orders.items[0].body, /migration 41/);
+    assert.equal(instance.notes({ table: 'customers' }).items[0].author, 'grace');
+    assert.equal(instance.notes({ database: 'other' }).items.length, 0);
+
+    const exported = instance.libraryExport();
+    assert.equal(exported.notes.length, 2);
+
+    assert.equal(instance.noteDelete(orders.items[0].id).removed, true);
+    assert.equal(instance.notes({ table: 'orders' }).items.length, 0);
+    assert.equal(instance.notes({}).total, 1);
+  } finally {
+    instance.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

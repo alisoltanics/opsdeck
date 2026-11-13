@@ -55,6 +55,8 @@
     diag: { data: null, loading: false, error: '' },
     history: [],
     activity: [],
+    library: { open: false, items: [], tags: [], total: 0, loading: false, error: '', filter: '', tag: '' },
+    notes: { loading: false, error: '', items: [], key: '' },
   };
 
   let perfTimer = null;
@@ -330,6 +332,9 @@
       const res = await api.databases.history({ limit: 300 });
       S.history = res?.items || [];
     }
+    if (section === 'editor') {
+      await loadLibrary().catch(() => {});
+    }
     if (section === 'activity' || section === 'dashboard') {
       const res = await api.databases.activity({ limit: 300 });
       S.activity = res?.items || [];
@@ -447,6 +452,7 @@
       }
       if (res?.ok === false) throw new Error(res.error || 'Could not read the object.');
       S.explorer.detail = { ...payload, data: res, loading: false };
+      await loadNotes(payload);
     } catch (error) {
       S.explorer.detail = { ...payload, error: error.message, loading: false };
     }
@@ -823,6 +829,7 @@
       ${columns.length ? `<div class="table-wrap db-result"><table class="data-table"><thead><tr>${columns.map((name) => `<th>${esc(name)}</th>`).join('')}</tr></thead>
         <tbody>${(data.rows || []).slice(0, 200).map((row) => `<tr>${columns.map((name) => `<td>${cellValue(row[name])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
         : `<pre class="db-json">${esc(JSON.stringify(data.rows || data.items || data, null, 2).slice(0, 20000))}</pre>`}
+      ${notesCard(detail)}
     `;
   }
 
@@ -943,6 +950,288 @@
     U.toast('Query placed in the editor', 'success', { description: 'Review it, then press Run.' });
   }
 
+  // ------------------------------------------------------------- collaboration
+
+  const AUTHOR_KEY = 'opsdeck:databases:author';
+
+  function libraryAuthor() {
+    try { return localStorage.getItem(AUTHOR_KEY) || 'local-user'; } catch { return 'local-user'; }
+  }
+
+  function rememberAuthor(author) {
+    try { localStorage.setItem(AUTHOR_KEY, String(author || '').slice(0, 80)); } catch { /* private mode */ }
+  }
+
+  async function loadLibrary() {
+    S.library.loading = true;
+    S.library.error = '';
+    try {
+      const res = await api.databases.queryLibrary({ limit: 500 });
+      if (res?.ok === false) throw new Error(res.error || 'The query library could not be read.');
+      S.library.items = res?.items || [];
+      S.library.tags = res?.tags || [];
+      S.library.total = res?.total ?? S.library.items.length;
+    } catch (error) {
+      S.library.error = error.message || String(error);
+    } finally {
+      S.library.loading = false;
+    }
+  }
+
+  function visibleLibraryItems() {
+    const term = S.library.filter.trim().toLowerCase();
+    return S.library.items.filter((item) => {
+      if (S.library.tag && !(item.tags || []).includes(S.library.tag)) return false;
+      if (!term) return true;
+      return [item.name, item.description, item.sql, item.author, item.engine, item.database, ...(item.tags || [])]
+        .join('\n').toLowerCase().includes(term);
+    });
+  }
+
+  function libraryCard() {
+    if (!S.library.open) return '';
+    const items = visibleLibraryItems();
+    const rows = items.map((item) => `<tr>
+      <td><strong>${esc(item.name)}</strong>${item.description ? `<div class="intel-muted">${esc(item.description)}</div>` : ''}<div class="db-library-tags">${(item.tags || []).map((tag) => U.badge(tag, 'slate')).join('')}${item.author ? `<span class="intel-muted">by ${esc(item.author)}</span>` : ''}</div></td>
+      <td class="intel-nowrap">${item.engine ? U.badge(item.engine, 'cyan') : '—'}${item.database ? `<div class="intel-muted">${esc(item.database)}</div>` : ''}</td>
+      <td class="intel-nowrap">${esc(item.connectionName || '—')}<div class="intel-muted">${item.updatedAt ? esc(timeAgo(item.updatedAt)) : ''}</div></td>
+      <td class="db-library-actions">
+        ${U.button({ label: 'Load', icon: 'corner-down-left', size: 'xs', attrs: `data-db-library-load="${esc(item.id)}"` })}
+        ${U.button({ label: '', icon: 'trash', size: 'xs', variant: 'ghost', attrs: `data-db-library-delete="${esc(item.id)}" title="Delete saved query" aria-label="Delete saved query"` })}
+      </td>
+    </tr>`).join('');
+    return `<div class="db-library">
+      ${U.card({
+        title: 'Query library',
+        icon: 'bookmark',
+        sub: `${fmtNumber(S.library.total)} saved quer${S.library.total === 1 ? 'y' : 'ies'} · stored locally and exportable for sharing`,
+        actions: `${U.button({ label: 'Export', icon: 'download', size: 'sm', attrs: 'data-db-library-export' })}${U.button({ label: 'Import', icon: 'upload', size: 'sm', attrs: 'data-db-library-import' })}${U.button({ label: 'Close', icon: 'x', size: 'sm', variant: 'ghost', attrs: 'data-db-library-close' })}`,
+        body: `${S.library.error ? U.errorBanner('The library could not be read', S.library.error) : ''}
+          <div class="db-library-filter">
+            <input class="input input-sm" data-db-library-filter placeholder="Search name, SQL, tag or author…" value="${esc(S.library.filter)}">
+            <select class="input input-sm" data-db-library-tag aria-label="Filter by tag"><option value="">All tags</option>${S.library.tags.map((tag) => `<option value="${esc(tag)}" ${tag === S.library.tag ? 'selected' : ''}>${esc(tag)}</option>`).join('')}</select>
+            ${S.library.loading ? U.loader('Reading the library…') : ''}
+          </div>
+          ${table(['Query', 'Engine', 'Connection', ''], rows, {
+            emptyTitle: 'No saved query',
+            emptyBody: 'Save the statement in the editor to reuse it and share it with the team through an export.',
+            icon: 'bookmark',
+          })}`,
+      })}`;
+  }
+
+  function openSaveQueryDialog() {
+    const sql = String(S.editor.sql || '').trim();
+    if (!sql) {
+      U.toast('Nothing to save', 'warning', { description: 'Write a query in the editor first.' });
+      return;
+    }
+    const connection = connById(S.selected.editor);
+    U.modal({
+      title: 'Save query',
+      subtitle: connection ? `${connection.name} · ${S.editor.database || connection.database || 'default database'}` : 'Local query library',
+      icon: 'bookmark',
+      width: '560px',
+      body: `<div class="db-library-form">
+        <label class="field"><span>Name</span><input class="input" data-query-name placeholder="Slow orders by customer" value=""></label>
+        <label class="field"><span>Description</span><input class="input" data-query-description placeholder="What this query answers and when to use it"></label>
+        <label class="field"><span>Tags</span><input class="input" data-query-tags placeholder="orders, performance"><small>Comma separated, up to 8 tags.</small></label>
+        <label class="field"><span>Author</span><input class="input" data-query-author value="${esc(libraryAuthor())}"><small>Shown in the export so a teammate knows who wrote it.</small></label>
+        <div class="db-library-preview mono">${esc(sql.slice(0, 600))}${sql.length > 600 ? '…' : ''}</div>
+      </div>`,
+      actions: [{
+        id: 'save', label: 'Save query', icon: 'save', variant: 'primary', close: false,
+        onClick: async ({ root, close }) => {
+          const name = root.querySelector('[data-query-name]')?.value.trim() || 'Saved query';
+          const description = root.querySelector('[data-query-description]')?.value.trim() || '';
+          const tags = (root.querySelector('[data-query-tags]')?.value || '').split(',').map((tag) => tag.trim()).filter(Boolean);
+          const author = root.querySelector('[data-query-author]')?.value.trim() || 'local-user';
+          const button = root.querySelector('[data-action="save"]');
+          if (button) button.disabled = true;
+          try {
+            const res = await api.databases.saveQuery({
+              name, sql, description, tags, author,
+              engine: connection?.engine || '',
+              connectionId: connection?.id || '',
+              connectionName: connection?.name || '',
+              database: S.editor.database || connection?.database || '',
+            });
+            if (res?.ok === false) throw new Error(res.error || 'The query was not saved.');
+            rememberAuthor(author);
+            await loadLibrary();
+            U.toast('Query saved to the library', 'success', { description: name });
+            close('saved');
+            OD.app?.rerender?.();
+          } catch (error) {
+            if (button) button.disabled = false;
+            U.toast('Could not save the query', 'error', { description: error.message || String(error) });
+          }
+        },
+      }],
+    });
+  }
+
+  function loadSavedQuery(id) {
+    const item = S.library.items.find((entry) => entry.id === id);
+    if (!item) return;
+    S.editor.sql = item.sql;
+    if (item.connectionId && S.connections.some((entry) => entry.id === item.connectionId)) {
+      S.selected.editor = item.connectionId;
+      if (item.database && (S.dbs[item.connectionId] || []).some((entry) => entry.name === item.database)) {
+        S.editor.database = item.database;
+      }
+    }
+    S.library.open = false;
+    persistDbState();
+    U.toast('Query loaded into the editor', 'success', { description: 'Review it, then press Run.' });
+    OD.app?.rerender?.();
+  }
+
+  async function deleteSavedQuery(id) {
+    const item = S.library.items.find((entry) => entry.id === id);
+    const ok = await U.confirm({
+      title: 'Delete saved query',
+      message: `Remove “${item?.name || 'this query'}” from the local library? The export file is not changed.`,
+      confirmLabel: 'Delete query',
+      tone: 'red',
+    });
+    if (!ok) return;
+    const res = await api.databases.deleteQuery(id);
+    if (res?.ok === false) {
+      U.toast('Could not delete the query', 'error', { description: res.error });
+      return;
+    }
+    await loadLibrary();
+    U.toast('Saved query deleted', 'success');
+    OD.app?.rerender?.();
+  }
+
+  async function exportLibrary() {
+    const res = await api.databases.exportLibraryToFile();
+    if (res?.canceled) return;
+    if (res?.ok === false) {
+      U.toast('Export failed', 'error', { description: res.error });
+      return;
+    }
+    U.toast('Library exported', 'success', { description: `${res.queries} query(ies) and ${res.notes} note(s) written to ${res.file}.` });
+  }
+
+  async function importLibrary() {
+    const res = await api.databases.importLibraryFromFile();
+    if (res?.canceled) return;
+    if (res?.ok === false) {
+      U.toast('Import failed', 'error', { description: res.error });
+      return;
+    }
+    await loadLibrary();
+    U.toast('Library imported', 'success', {
+      description: `${res.queries} query(ies) and ${res.notes} note(s) merged${(res.skipped || []).length ? ` · ${res.skipped.length} entry(ies) skipped` : ''}.`,
+    });
+    OD.app?.rerender?.();
+  }
+
+  // ------------------------------------------------------------------- notes
+
+  function noteTarget(detail) {
+    return {
+      module: 'databases',
+      resourceId: `${S.selected.explorer}:${S.explorer.database}:${detail.schema ? `${detail.schema}.` : ''}${detail.name}`,
+      connectionId: S.selected.explorer,
+      database: S.explorer.database,
+      schema: detail.schema || '',
+      table: detail.name,
+    };
+  }
+
+  async function loadNotes(detail) {
+    const target = noteTarget(detail);
+    S.notes.key = target.resourceId;
+    S.notes.loading = true;
+    S.notes.error = '';
+    try {
+      const res = await api.databases.notes({ connectionId: target.connectionId, database: target.database, table: target.table, limit: 100 });
+      if (res?.ok === false) throw new Error(res.error || 'Notes could not be read.');
+      if (S.notes.key === target.resourceId) S.notes.items = res?.items || [];
+    } catch (error) {
+      if (S.notes.key === target.resourceId) S.notes.error = error.message || String(error);
+    } finally {
+      if (S.notes.key === target.resourceId) S.notes.loading = false;
+    }
+  }
+
+  function notesCard(detail) {
+    const target = noteTarget(detail);
+    const current = S.notes.key === target.resourceId;
+    const items = current ? S.notes.items : [];
+    const rows = items.map((note) => `<div class="db-note">
+      <div class="db-note-head"><strong>${esc(note.author || 'local-user')}</strong><span>${esc(timeAgo(note.updatedAt || note.createdAt))}</span>${U.button({ label: '', icon: 'trash', size: 'xs', variant: 'ghost', attrs: `data-db-note-delete="${esc(note.id)}" title="Delete note" aria-label="Delete note"` })}</div>
+      <p class="db-note-body">${esc(note.body)}</p>
+    </div>`).join('');
+    return `<div class="db-notes">
+      <div class="db-notes-head">
+        <span>${icon('message', 13)} Investigation notes</span>
+        ${U.button({ label: 'Add note', icon: 'plus', size: 'xs', attrs: `data-db-note-add="1"` })}
+      </div>
+      ${!current ? U.loader('Reading notes…') : S.notes.error ? U.errorBanner('Notes could not be read', S.notes.error) : items.length ? rows : `<p class="db-footnote">No note for this object yet. Notes are stored locally and included in the library export.</p>`}
+    </div>`;
+  }
+
+  function openNoteDialog(detail) {
+    const target = noteTarget(detail);
+    U.modal({
+      title: 'Add investigation note',
+      subtitle: `${S.explorer.database || 'database'}${detail.schema ? `.${detail.schema}` : ''}.${detail.name}`,
+      icon: 'message',
+      width: '560px',
+      body: `<div class="db-library-form">
+        <label class="field"><span>Note</span><textarea class="input" data-note-body rows="5" placeholder="What did you learn about this object? Include evidence, caveats and the next check."></textarea></label>
+        <label class="field"><span>Author</span><input class="input" data-note-author value="${esc(libraryAuthor())}"><small>Stored with the note and exported with the library.</small></label>
+      </div>`,
+      actions: [{
+        id: 'save', label: 'Add note', icon: 'save', variant: 'primary', close: false,
+        onClick: async ({ root, close }) => {
+          const body = root.querySelector('[data-note-body]')?.value.trim() || '';
+          if (!body) {
+            U.toast('Write a note first', 'warning');
+            return;
+          }
+          const author = root.querySelector('[data-note-author]')?.value.trim() || 'local-user';
+          const button = root.querySelector('[data-action="save"]');
+          if (button) button.disabled = true;
+          try {
+            const res = await api.databases.saveNote({ ...target, body, author });
+            if (res?.ok === false) throw new Error(res.error || 'The note was not saved.');
+            rememberAuthor(author);
+            await loadNotes(detail);
+            U.toast('Note saved', 'success', { description: 'Stored locally with this object.' });
+            close('saved');
+            OD.app?.rerender?.();
+          } catch (error) {
+            if (button) button.disabled = false;
+            U.toast('Could not save the note', 'error', { description: error.message || String(error) });
+          }
+        },
+      }],
+    });
+  }
+
+  async function deleteNote(id) {
+    const ok = await U.confirm({
+      title: 'Delete note',
+      message: 'Delete this local investigation note? The export file is not changed.',
+      confirmLabel: 'Delete note',
+      tone: 'red',
+    });
+    if (!ok) return;
+    const res = await api.databases.deleteNote(id);
+    if (res?.ok === false) {
+      U.toast('Could not delete the note', 'error', { description: res.error });
+      return;
+    }
+    if (S.explorer.detail?.data) await loadNotes(S.explorer.detail);
+    OD.app?.rerender?.();
+  }
+
   function editorPage() {
     const connectionId = S.selected.editor;
     const connection = connById(connectionId);
@@ -961,6 +1250,7 @@
           ? U.infoBanner(`${engine.label} console`, connection.engine === 'redis' ? 'Enter Redis commands such as SCAN 0 MATCH user:* COUNT 100. KEYS with broad patterns and FLUSH commands are blocked.' : connection.engine === 'mongodb' ? 'Enter a MongoDB command object, for example {"count":"users"} or {"find":"users","filter":{},"limit":10}.' : 'Enter an Elasticsearch search body, for example {"query":{"match_all":{}},"size":10}.', 'info')
           : ''}
         ${aiPanel(connection)}
+        ${libraryCard()}
         <div class="db-editor">
           <div class="db-editor-bar">
             <span class="db-editor-dialect">${U.badge(dialect, 'cyan', { mono: true })}</span>
@@ -969,6 +1259,8 @@
               ${U.button({ label: S.editor.running ? 'Running…' : 'Run', icon: 'play', size: 'sm', variant: 'primary', attrs: `data-db-run ${S.editor.running ? 'disabled' : ''}` })}
               ${U.button({ label: 'Run selection', icon: 'text-select', size: 'sm', attrs: 'data-db-run-selection' })}
               ${U.button({ label: 'Explain', icon: 'git-branch', size: 'sm', attrs: 'data-db-explain' })}
+              ${U.button({ label: 'Save query', icon: 'save', size: 'sm', attrs: 'data-db-library-save' })}
+              ${U.button({ label: `Library${S.library.total ? ` (${S.library.total})` : ''}`, icon: 'bookmark', size: 'sm', attrs: 'data-db-library-toggle' })}
               ${U.button({ label: 'Cancel', icon: 'square', size: 'sm', variant: 'ghost', attrs: 'data-db-cancel' })}
             </div>
           </div>
@@ -2006,6 +2298,10 @@
         S.editor.page = 0;
         OD.app?.rerender?.();
       }
+      if (event.target.matches('[data-db-library-filter]')) {
+        S.library.filter = event.target.value;
+        OD.app?.rerender?.();
+      }
       if (event.target.matches('[data-db-sql]')) {
         S.editor.sql = event.target.value;
         updateAutocomplete(event.target);
@@ -2066,6 +2362,11 @@
 
   async function handleChange(event, root) {
     const target = event.target;
+    if (target.matches('[data-db-library-tag]')) {
+      S.library.tag = target.value;
+      OD.app?.rerender?.();
+      return;
+    }
     if (target.matches('[data-db-role="explorer-connection"]')) {
       S.selected.explorer = target.value;
       S.explorer.data = null;
@@ -2140,6 +2441,54 @@
     if (target.matches('[data-db-copy]')) {
       event.preventDefault();
       copyText(target.dataset.dbCopy || '', 'Copied');
+      return;
+    }
+    if (target.matches('[data-db-library-toggle]')) {
+      event.preventDefault();
+      S.library.open = !S.library.open;
+      if (S.library.open && !S.library.items.length) await loadLibrary();
+      OD.app?.rerender?.();
+      return;
+    }
+    if (target.matches('[data-db-library-save]')) {
+      event.preventDefault();
+      openSaveQueryDialog();
+      return;
+    }
+    if (target.matches('[data-db-library-close]')) {
+      event.preventDefault();
+      S.library.open = false;
+      OD.app?.rerender?.();
+      return;
+    }
+    if (target.matches('[data-db-library-load]')) {
+      event.preventDefault();
+      loadSavedQuery(target.dataset.dbLibraryLoad);
+      return;
+    }
+    if (target.matches('[data-db-library-delete]')) {
+      event.preventDefault();
+      await deleteSavedQuery(target.dataset.dbLibraryDelete);
+      return;
+    }
+    if (target.matches('[data-db-library-export]')) {
+      event.preventDefault();
+      await exportLibrary();
+      return;
+    }
+    if (target.matches('[data-db-library-import]')) {
+      event.preventDefault();
+      await importLibrary();
+      return;
+    }
+    if (target.matches('[data-db-note-add]')) {
+      event.preventDefault();
+      if (S.explorer.detail?.data) openNoteDialog(S.explorer.detail);
+      return;
+    }
+    if (target.matches('[data-db-note-delete]')) {
+      event.preventDefault();
+      await deleteNote(target.dataset.dbNoteDelete);
       return;
     }
     if (target.matches('[data-db-refresh]')) {
