@@ -2363,3 +2363,8 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 .k8s-con-modal .overlay-body { padding: 0; }
 .k8s-con-modal .k8s-con { border-radius: 0 0 var(--r-md) var(--r-md); border-width: 1px 0 0; box-shadow: none; }
 .k8s-con-modal .k8s-con-feed { min-height: 320px; max-height: 62vh; }
+
+/* Long resource lists: only lay out and paint the rows near the viewport. */
+.data-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 41px; }
+.content { overscroll-behavior: contain; }
+.card { contain: layout style; }

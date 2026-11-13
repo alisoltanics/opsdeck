@@ -1773,7 +1773,51 @@
     if (result?.ok) rerender();
   }
 
+  // Resource lists repaint in place when the cluster changes, so a Pod that
+  // went from Pending to Running updates without a reload or losing scroll.
+  let liveTimer = null;
+  let liveSignature = '';
+  function stopLive() {
+    if (liveTimer) clearInterval(liveTimer);
+    liveTimer = null;
+  }
+
+  function startLive(root, section) {
+    stopLive();
+    liveSignature = '';
+    let busyNow = false;
+    const tick = async () => {
+      if (busyNow || document.hidden || U.isOverlayOpen()) return;
+      const card = root.querySelector('[data-k8s-table]')?.closest('.card') || root.querySelector('.page .card');
+      if (!card || !root.isConnected) return;
+      busyNow = true;
+      try {
+        const allNamespaces = allNamespacesFromHash();
+        const data = await api.kubernetes.resources({ section, allNamespaces });
+        if (!data?.ok || data.error || !root.isConnected || !liveTimer) return;
+        const signature = JSON.stringify([data.columns, (data.rows || []).map((r) => [r.name, r.namespace, r.cells])]);
+        if (signature === liveSignature) return;
+        liveSignature = signature;
+        const count = data.rows?.length || 0;
+        const body = card.querySelector('.card-body');
+        const sub = card.querySelector('.card-sub');
+        if (sub) sub.textContent = `${count} object${count === 1 ? '' : 's'}${data.truncated ? ` · showing first 500 of ${data.total}` : ''}`;
+        if (body) {
+          body.innerHTML = count
+            ? dataTable(data.columns, data.rows, { section })
+            : U.empty({ compact: true, icon: SECTION_ICONS[section] || 'box', title: `No ${(PAGES[section] || section).toLowerCase()}`, body: 'The selected context returned none in this scope.' });
+        }
+      } catch { /* keep the last good view */ } finally {
+        busyNow = false;
+      }
+    };
+    liveTimer = setInterval(tick, 4000);
+  }
+
   function mount(root, route) {
+    stopLive();
+    const liveSection = route?.parts?.[0];
+    if (RESOURCE_SECTIONS.includes(liveSection)) startLive(root, liveSection);
     OD.views?.insights?.dispose?.();
     if (route?.parts?.[0] === 'insights' && OD.views?.insights) {
       OD.views.insights.mount(root, 'kubernetes');
@@ -1939,6 +1983,7 @@
 
   OD.views = OD.views || {};
   function dispose() {
+    stopLive();
     OD.views?.insights?.dispose?.();
   }
 

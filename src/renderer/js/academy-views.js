@@ -724,9 +724,38 @@
     </div>`;
   }
 
+  // Every line of a Kubernetes example gets a hover "?" that explains that line.
+  function attachLineHelp(root, lesson) {
+    root.querySelectorAll('.code-block').forEach((block) => {
+      const lang = block.dataset.lang || 'bash';
+      if (!['bash', 'sh', 'shell', 'yaml', 'yml', 'text'].includes(lang)) return;
+      const code = block.querySelector('.code-pre code');
+      if (!code || code.dataset.lined) return;
+      const lines = code.textContent.replace(/\n$/, '').split('\n');
+      code.dataset.lined = '1';
+      code.innerHTML = lines.map((l, i) => `<span class="cl" data-line="${i}"><button type="button" class="cl-help" data-line-help="${i}" tabindex="-1" aria-label="Explain this line" title="Explain this line"></button><span class="cl-text">${esc(l)}\n</span></span>`).join('');
+      code._lines = lines;
+      code._lang = lang;
+    });
+  }
+
+  function openLineHelp(code, index) {
+    const lines = code._lines || [];
+    const line = lines[index] || '';
+    const info = OD.lineHelp?.explain(line, code._lang, lines, index);
+    const body = info
+      ? `<pre class="lh-line"><code>${esc(line)}</code></pre>
+        <p class="lh-summary">${esc(info.summary)}</p>
+        ${info.where ? `<p class="lh-where">${icon('map', 12)} ${esc(info.where)}</p>` : ''}
+        ${info.parts?.length ? `<table class="lh-table"><thead><tr><th>Part</th><th>What it means</th></tr></thead><tbody>${info.parts.map((p) => `<tr><td><code>${esc(p.token)}</code></td><td>${esc(p.meaning)}</td></tr>`).join('')}</tbody></table>` : ''}`
+      : `<p class="lh-summary">${line.trim() ? 'No built-in explanation for this line.' : 'This is an empty line. It only separates blocks to make the example easier to read.'}</p>`;
+    U.modal({ title: 'What this line does', eyebrow: `Line ${index + 1}`, icon: 'help-circle', width: 'min(640px, 94vw)', body });
+  }
+
   function mountLesson(root, route) {
     const lesson = OD.store.lessonById(route.parts[0]);
     if (!lesson) return;
+    attachLineHelp(root, lesson);
     OD.store.recordView(lesson);
     if (!OD.store.isComplete(lesson.id)) {
       const existing = OD.store.progressFor(lesson.id);
@@ -737,6 +766,13 @@
     mountDiagrams(root);
 
     root.addEventListener('click', async (event) => {
+      const lineBtn = event.target.closest('[data-line-help]');
+      if (lineBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        openLineHelp(lineBtn.closest('code'), Number(lineBtn.dataset.lineHelp));
+        return;
+      }
       const fullBtn = event.target.closest('[data-run-full]');
       if (fullBtn) {
         const box = fullBtn.closest('[data-run-out]');

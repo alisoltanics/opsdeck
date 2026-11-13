@@ -116,6 +116,10 @@
        ]
       },
       {
+       "type": "text",
+       "body": "These are three read-only kubectl commands that ask the API server about the cluster you are connected to. `kubectl get nodes -o wide` lists the machines, `get pods -n kube-system` lists the system Pods (the control plane parts from the table above), and `cluster-info` prints the API server address. We run them first because they confirm kubectl works and let you see the architecture for real. In the output, look at the ROLES column (control-plane versus worker) and the kube-apiserver, etcd and kube-scheduler Pods."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl get nodes -o wide\nkubectl get pods -n kube-system\nkubectl cluster-info",
@@ -124,12 +128,20 @@
        "note": "On most clusters the control plane components appear as Pods in `kube-system`; on managed services (EKS, GKE, AKS) the control plane is hidden from you."
       },
       {
+       "type": "text",
+       "body": "These commands ask the API server what it can do, instead of changing anything. `api-resources` lists every kind of object the cluster knows (Pod, Service, Deployment...), `api-versions` lists the group/version strings, and `/readyz?verbose` is a health check of the API server itself. You will need these names later when you write the `kind` and `apiVersion` lines of a manifest. In the output, look at the SHORTNAMES column (`po`, `svc`, `deploy`) and the NAMESPACED column."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl api-resources | head -12\nkubectl api-versions | head -8\nkubectl get --raw='/readyz?verbose' | tail -4",
        "title": "Discover what the API server offers",
        "output": "$ kubectl api-resources | head -12\nNAME                SHORTNAMES   APIVERSION   NAMESPACED   KIND\nbindings                         v1           true         Binding\nconfigmaps          cm           v1           true         ConfigMap\nendpoints           ep           v1           true         Endpoints\nevents              ev           v1           true         Event\nnamespaces          ns           v1           false        Namespace\nnodes               no           v1           false        Node\npersistentvolumes   pv           v1           false        PersistentVolume\npods                po           v1           true         Pod\nsecrets                          v1           true         Secret\nservices            svc          v1           true         Service\ndeployments         deploy       apps/v1      true         Deployment\n\n$ kubectl api-versions | head -8\nadmissionregistration.k8s.io/v1\napiextensions.k8s.io/v1\napiregistration.k8s.io/v1\napps/v1\nauthentication.k8s.io/v1\nauthorization.k8s.io/v1\nautoscaling/v2\nbatch/v1\n\n$ kubectl get --raw='/readyz?verbose' | tail -4\n[+]shutdown ok\n[+]poststarthook/start-kube-apiserver-admission-initializer ok\n[+]etcd ok\nreadyz check passed",
        "note": "`api-resources` lists every object kind (and its short name) the cluster understands; `api-versions` lists the group/version strings you put in `apiVersion`."
+      },
+      {
+       "type": "text",
+       "body": "This is sample text printed by `kubectl describe node worker-1`: the node's own report card, shortened here. It shows what kind of machine the node is and whether the kubelet considers it healthy. We show it so you know where to look when a node misbehaves. Check the Labels, the Conditions (is it Ready, is memory or disk under pressure) and the Capacity versus Allocatable numbers."
       },
       {
        "type": "code",
@@ -253,12 +265,20 @@
        "caption": "Click a box to see what it does."
       },
       {
+       "type": "text",
+       "body": "These commands manage kubectl contexts, which are saved shortcuts to a cluster, a user and a namespace. `get-contexts` lists them, `current-context` shows the active one, `use-context` switches, and `set-context --current --namespace=...` changes the default namespace. We show them because working against the wrong cluster is a common mistake. In the output, the `*` marks the active context."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl config get-contexts\nkubectl config current-context\nkubectl config use-context dev-cluster\nkubectl config set-context --current --namespace=shop",
        "title": "Working with contexts",
        "output": "$ kubectl config get-contexts\nCURRENT   NAME           CLUSTER        AUTHINFO      NAMESPACE\n*         dev-cluster    dev-cluster    dev-admin     shop\n          prod-cluster   prod-cluster   prod-reader\n\n$ kubectl config current-context\ndev-cluster\n\n$ kubectl config use-context prod-cluster\nSwitched to context \"prod-cluster\".\n\n$ kubectl config set-context --current --namespace=shop\nContext \"dev-cluster\" modified.",
        "note": "`use-context` rewrites `current-context` in the kubeconfig file. It is blocked in the app console, so run it in your own terminal; here, just read what it prints. The `*` marks the active context."
+      },
+      {
+       "type": "text",
+       "body": "This is an example `~/.kube/config`, the kubeconfig file kubectl reads on every command to learn which cluster to call and with which credentials. You do not apply it; you edit it indirectly with `kubectl config` commands or by pointing `KUBECONFIG` at it. The data here is fake. Look at the three lists `clusters`, `users` and `contexts`, and at `current-context`, which picks the active pair."
       },
       {
        "type": "code",
@@ -274,12 +294,20 @@
        "body": "Imperative commands (`kubectl run`, `kubectl create`) tell the cluster what to do now. The declarative approach stores a manifest in Git and runs `kubectl apply -f`, which compares it with the live object and patches the difference. Re-running it is safe, which makes it the standard for real work."
       },
       {
+       "type": "text",
+       "body": "`web-pod.yaml` is a manifest: a file that describes a Pod you want to exist. You pass it to `kubectl apply -f web-pod.yaml`, and kubectl sends it to the API server, which creates the object. It is the smallest useful example of the declarative style. Look at the four top-level keys `apiVersion`, `kind`, `metadata` and `spec`, and in the spec the container name, image (`nginx:1.27`) and port."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\nspec:\n  containers:\n    - name: nginx\n      image: nginx:1.27\n      ports:\n        - containerPort: 80",
        "title": "web-pod.yaml",
        "output": null,
        "note": "Every object has apiVersion, kind, metadata and (usually) spec. The cluster fills in status."
+      },
+      {
+       "type": "text",
+       "body": "This is the everyday command sequence for the `web-pod.yaml` you just saw: create the Pod, check it, inspect it, read its logs, open a shell inside it and delete it. Each command is shown with realistic output so you know what success looks like. Look at STATUS `Running` in `get pod`, the Events at the bottom of `describe` (Scheduled, Pulled, Started) and the nginx startup lines in `logs`."
       },
       {
        "type": "code",
@@ -290,12 +318,20 @@
        "note": null
       },
       {
+       "type": "text",
+       "body": "`web-deployment.yaml` is a manifest for a Deployment, the object you normally use instead of a bare Pod. You create it with `kubectl apply -f web-deployment.yaml`. Instead of one Pod, you declare the desired state (3 replicas) and a controller keeps it true. Look at `replicas: 3`, the `selector.matchLabels` that must match the labels in `template`, and the Pod template under `template.spec`."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  labels:\n    app: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: nginx\n          image: nginx:1.27\n          ports:\n            - containerPort: 80",
        "title": "web-deployment.yaml (declarative desired state)",
        "output": null,
        "note": "You declare 3 replicas; the Deployment controller keeps 3 Pods alive and replaces any that disappear. Re-running `kubectl apply` after editing the file changes the cluster to match."
+      },
+      {
+       "type": "text",
+       "body": "These commands use `web-deployment.yaml` from above: `apply` creates or updates the Deployment, `get deployment` checks it, `diff` previews what an apply would change, and `get pod -o yaml` prints the full stored object. We show them to demonstrate the declarative loop and to reveal that the cluster adds fields you never wrote. In the output, look at READY `3/3`, the empty diff, and the `status` section at the end of the YAML."
       },
       {
        "type": "code",
@@ -481,12 +517,20 @@
        "body": "`restartPolicy` (`Always` default, `OnFailure`, `Never`) controls whether the kubelet restarts containers that exit. Repeated crashes are delayed with exponential back-off, shown as `CrashLoopBackOff`.\n\n**Init containers** run to completion one at a time before app containers start, useful for waiting on a dependency or preparing files."
       },
       {
+       "type": "text",
+       "body": "This is `api-pod.yaml`, a manifest for a Pod that waits for its database before starting. You would create it with `kubectl apply -f api-pod.yaml`. It shows init containers and probes in a real shape. Look at `initContainers` (the `wait-db` loop that runs first), and under the main container the `readinessProbe` and `livenessProbe`."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: api\nspec:\n  restartPolicy: Always\n  initContainers:\n    - name: wait-db\n      image: busybox:1.36\n      command: ['sh', '-c', 'until nc -z db 5432; do sleep 2; done']\n  containers:\n    - name: api\n      image: ghcr.io/example/api:1.4\n      ports:\n        - containerPort: 8080\n      readinessProbe:\n        httpGet:\n          path: /ready\n          port: 8080\n        periodSeconds: 5\n      livenessProbe:\n        httpGet:\n          path: /healthz\n          port: 8080\n        initialDelaySeconds: 10\n        periodSeconds: 10",
        "title": "Init container and probes",
        "output": null,
        "note": "`initContainers` run to completion one by one before the app starts. `readinessProbe` gates traffic; `livenessProbe` restarts a stuck container. `restartPolicy: Always` is the default for Pods that should keep running."
+      },
+      {
+       "type": "text",
+       "body": "This is `web-sidecar.yaml`, a manifest for a Pod with two containers that cooperate, applied with `kubectl apply -f web-sidecar.yaml`. It shows the sidecar pattern, shared storage, and resource settings in one file. Look at the `emptyDir` volume `logs` mounted by both containers, and the `resources.requests` and `limits` on the nginx container."
       },
       {
        "type": "code",
@@ -525,12 +569,20 @@
        "body": "A liveness probe that checks the database will restart healthy app containers whenever the database blips. Keep liveness local to the process."
       },
       {
+       "type": "text",
+       "body": "These are the commands you reach for when a Pod misbehaves, run here against the `api` Pod from the earlier manifest. `get pod -w` watches status changes live, `describe` shows state and Events, `logs --previous` shows the output of the last crashed container, and `jsonpath` extracts one field. In the output, look at the Init status moving to Running, the Restart Count, and the Warning events about the failed liveness probe."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl get pod api -w\nkubectl describe pod api\nkubectl logs api -c api --previous\nkubectl get pod api -o jsonpath='{.status.phase}'",
        "title": "Debugging a Pod",
        "output": "$ kubectl get pod api -w\nNAME   READY   STATUS     RESTARTS   AGE\napi    0/1     Init:0/1   0          4s\napi    0/1     PodInitializing   0   12s\napi    0/1     Running    0          14s\napi    1/1     Running    0          21s\n\n$ kubectl describe pod api\nName:         api\nNamespace:    default\nNode:         worker-2/192.168.1.12\nStatus:       Running\nInit Containers:\n  wait-db:\n    State:          Terminated\n      Reason:       Completed\n      Exit Code:    0\nContainers:\n  api:\n    Image:          ghcr.io/example/api:1.4\n    State:          Running\n    Ready:          True\n    Restart Count:  2\n    Liveness:       http-get http://:8080/healthz delay=10s timeout=1s period=10s #success=1 #failure=3\n    Readiness:      http-get http://:8080/ready delay=0s timeout=1s period=5s #success=1 #failure=3\nConditions:\n  Type              Status\n  Initialized       True\n  Ready             True\n  ContainersReady   True\n  PodScheduled      True\nEvents:\n  Type     Reason     Age                From     Message\n  ----     ------     ----               ----     -------\n  Warning  Unhealthy  3m (x3 over 3m)    kubelet  Liveness probe failed: HTTP probe failed with statuscode: 500\n  Normal   Killing    3m                 kubelet  Container api failed liveness probe, will be restarted\n\n$ kubectl logs api -c api --previous\n2026-11-13T09:20:11Z INFO  listening on :8080\n2026-11-13T09:20:45Z ERROR db connection lost: dial tcp 10.96.40.7:5432: i/o timeout\n2026-11-13T09:20:45Z FATAL health check failing, exiting\n\n$ kubectl get pod api -o jsonpath='{.status.phase}'\nRunning",
        "note": "`--previous` shows logs of the last crashed container instance."
+      },
+      {
+       "type": "text",
+       "body": "This is sample output of `kubectl get pods` showing the STATUS values you will meet most often when something is wrong. It is not a file you create, just a reference to recognize problems. Compare the READY column (ready containers / total) and the STATUS names such as `ImagePullBackOff`, `CrashLoopBackOff`, `OOMKilled` and `Pending`, then read the note below for what each means."
       },
       {
        "type": "code",
@@ -700,12 +752,20 @@
        "body": "A **namespace** is a scope for names and for policy. Two teams can each have a Pod called `web` in different namespaces. Quotas, RBAC and network policies attach to namespaces. Default ones are `default`, `kube-system`, `kube-public` and `kube-node-lease`. Namespaces are not a hard security boundary on their own, and some objects (Nodes, PersistentVolumes) are cluster-scoped."
       },
       {
+       "type": "text",
+       "body": "These commands create and use namespaces from the command line. `create namespace` makes a new scope, `-n staging` targets one namespace, `-A` lists across all of them, and `set-context --namespace` changes your default. We show them because most kubectl mistakes come from looking in the wrong namespace. In the output, look at the NAMESPACE column of `get pods -A`."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl create namespace staging\nkubectl get pods -n staging\nkubectl get pods -A\nkubectl config set-context --current --namespace=staging",
        "title": "Namespace commands",
        "output": "$ kubectl create namespace staging\nnamespace/staging created\n\n$ kubectl get pods -n staging\nNo resources found in staging namespace.\n\n$ kubectl get pods -A\nNAMESPACE     NAME                        READY   STATUS    RESTARTS   AGE\ndefault       web                         1/1     Running   0          6m\nkube-system   coredns-7c65d6cfc9-4x2kq    1/1     Running   0          42d\nkube-system   etcd-cp-1                   1/1     Running   0          42d\nstaging       web-1                       1/1     Running   0          2m\n\n$ kubectl config set-context --current --namespace=staging\nContext \"dev-cluster\" modified.",
        "note": null
+      },
+      {
+       "type": "text",
+       "body": "`namespace.yaml` is the declarative way to create the same `staging` namespace: a manifest you apply with `kubectl apply -f namespace.yaml`. It is a good example of a minimal object with no `spec`. Look at `kind: Namespace`, the `name`, and the `env: staging` label under `metadata`."
       },
       {
        "type": "code",
@@ -721,12 +781,20 @@
        "body": "**Labels** are key/value pairs on objects, used for identification and grouping. **Selectors** query them, and this is how Services find Pods and Deployments find their ReplicaSets. Labels are the glue of Kubernetes."
       },
       {
+       "type": "text",
+       "body": "This is a Pod manifest, applied with `kubectl apply -f`, whose point is its `metadata`. It carries both labels and annotations, plus a namespace. Labels are used to select and group objects; annotations store extra information for humans and tools. Look at `labels` (app, tier, env) and `annotations` (owner, build-url)."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-1\n  namespace: staging\n  labels:\n    app: web\n    tier: frontend\n    env: staging\n  annotations:\n    owner: team-shop@example.com\n    build-url: https://ci.example.com/job/412\nspec:\n  containers:\n    - name: nginx\n      image: nginx:1.27",
        "title": "Labels and annotations",
        "output": null,
        "note": null
+      },
+      {
+       "type": "text",
+       "body": "These commands use labels to find and change objects. `-l` filters by a label selector (equality or `in (...)` sets), `--show-labels` prints every label, and `label` / `annotate` add metadata to an existing Pod. They show how you query a cluster by meaning, not by name. In the output, see which Pods each selector returns and the LABELS column."
       },
       {
        "type": "code",
@@ -737,12 +805,20 @@
        "note": "Annotations hold non-identifying metadata (owners, URLs); labels are for selecting. Pods in `staging` can reach Services by short name inside the namespace and as `svc.staging` across namespaces."
       },
       {
+       "type": "text",
+       "body": "This is `web-service.yaml`, a manifest for a Service, applied with `kubectl apply -f web-service.yaml`. A Service gives a stable address to a changing set of Pods, and it finds them using labels. This shows selectors doing real work. Look at `spec.selector` (app and tier) and at `ports`, where `port` is what clients call and `targetPort` is the container's port."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\n  namespace: staging\nspec:\n  selector:\n    app: web\n    tier: frontend\n  ports:\n    - port: 80\n      targetPort: 80",
        "title": "Selector in action: a Service",
        "output": null,
        "note": "The `selector` is the same label query as `-l app=web,tier=frontend`: any Pod in the namespace carrying both labels becomes an endpoint of this Service."
+      },
+      {
+       "type": "text",
+       "body": "These read-only commands check the result of the earlier steps: which namespaces exist, the details of `staging`, and which Pods the `web` Service actually selected. `get endpoints` is the quickest way to verify that a selector matches anything. In the output, look at the ENDPOINTS column, which lists the Pod IPs behind the Service."
       },
       {
        "type": "code",

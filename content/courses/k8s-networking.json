@@ -36,6 +36,11 @@
               "body": "Kubernetes imposes a simple model: every **Pod gets its own IP address**, every Pod can reach every other Pod **without NAT**, and agents on a node (such as the kubelet) can reach all Pods on that node. Containers in the same Pod share one network namespace, so they talk over `localhost` and must not bind the same port.\n\nKubernetes does not implement this itself. A **CNI plugin** (Calico, Cilium, Flannel and others) wires up each Pod's network interface and routes between nodes. Without a working CNI, Pods stay in `ContainerCreating`."
             },
             {
+              "type": "text",
+              "title": "About these commands",
+              "body": "The next block is three commands you run against a live cluster to see the Pod network for yourself. `kubectl get pods -o wide` lists each Pod with its IP and node, the second command prints each node's Pod CIDR (the address range its Pods draw from), and `kubectl exec web -- ip addr show eth0` shows the network interface inside the Pod named `web`. Compare the Pod IP with the node's PODCIDR to see that every Pod gets its own address from its node's range."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl get pods -o wide\nkubectl get nodes -o custom-columns=NAME:.metadata.name,PODCIDR:.spec.podCIDR\nkubectl exec web -- ip addr show eth0",
@@ -121,12 +126,22 @@
               ]
             },
             {
+              "type": "text",
+              "title": "About the DNS test commands",
+              "body": "This block starts a temporary busybox Pod (`dns-test`, deleted when you exit) and runs DNS checks from inside it, because name resolution only behaves like a real workload from within the cluster. The lines after `# inside the Pod:` are typed in that shell: `cat /etc/resolv.conf` shows the resolver settings, and the two `nslookup` commands resolve a short Service name and a full name. Watch that both answers return a Service IP."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl run dns-test --rm -it --image=busybox:1.36 --restart=Never -- sh\n# inside the Pod:\ncat /etc/resolv.conf\nnslookup kubernetes.default\nnslookup api.shop.svc.cluster.local",
               "title": "Look at resolv.conf and query DNS",
               "output": "# cat /etc/resolv.conf\nsearch default.svc.cluster.local svc.cluster.local cluster.local\nnameserver 10.96.0.10\noptions ndots:5\n\n# nslookup kubernetes.default\nServer:         10.96.0.10\nAddress:        10.96.0.10:53\n\nName:   kubernetes.default.svc.cluster.local\nAddress: 10.96.0.1\n\n# nslookup api.shop.svc.cluster.local\nServer:         10.96.0.10\nAddress:        10.96.0.10:53\n\nName:   api.shop.svc.cluster.local\nAddress: 10.96.45.12",
               "note": "`ndots:5` means names with fewer than five dots are tried against the search path first."
+            },
+            {
+              "type": "text",
+              "title": "About this resolv.conf example",
+              "body": "This is what `/etc/resolv.conf` typically contains inside a Pod, the file printed by the `cat` command above. It is shown so you can read the three settings that make cluster DNS work: the `search` line (suffixes tried for short names), the `nameserver` line (the kube-dns Service IP, here 10.96.0.10) and `options ndots:5`. The table after it explains each field."
             },
             {
               "type": "code",
@@ -308,6 +323,11 @@
               "caption": "Click a box to see what it does."
             },
             {
+              "type": "text",
+              "title": "Example: a ClusterIP Service manifest",
+              "body": "This YAML file, which you would save as something like `web-service.yaml` and apply with `kubectl apply -f`, defines the simplest Service named `web`. It is the default type, ClusterIP, reachable only inside the cluster. Look at `selector: app: web` (which Pods receive traffic) and `port: 80` versus `targetPort: 8080` (the Service port versus the container port)."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  type: ClusterIP\n  selector:\n    app: web\n  ports:\n    - name: http\n      port: 80\n      targetPort: 8080",
@@ -399,12 +419,22 @@
               ]
             },
             {
+              "type": "text",
+              "title": "Example: a NodePort Service manifest",
+              "body": "This manifest, applied with `kubectl apply -f`, exposes the same `web` Pods on a port of every node so clients outside the cluster can reach them. The line to look at is `nodePort: 30080`, which opens that port on each node, in addition to the cluster-internal `port: 80`. NodePort is mostly useful for testing or as a building block for load balancers."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web-nodeport\nspec:\n  type: NodePort\n  selector:\n    app: web\n  ports:\n    - name: http\n      port: 80\n      targetPort: 8080\n      nodePort: 30080",
               "title": "NodePort Service",
               "output": "$ kubectl get svc web-nodeport\nNAME           TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE\nweb-nodeport   NodePort   10.96.203.77    <none>        80:30080/TCP   9s",
               "note": "Reachable at `<any-node-IP>:30080`. Omit `nodePort` to let Kubernetes pick one in 30000-32767."
+            },
+            {
+              "type": "text",
+              "title": "Example: a LoadBalancer Service manifest",
+              "body": "This manifest, applied with `kubectl apply -f`, asks your cloud provider to create an external load balancer in front of the `web` Pods. Only `type: LoadBalancer` differs from the first example; the cloud fills in an external IP or hostname, which you can see in `kubectl get svc web-lb`. It works out of the box on cloud clusters, but needs an add-on on bare metal."
             },
             {
               "type": "code",
@@ -415,6 +445,11 @@
               "note": "A LoadBalancer also gets a ClusterIP and NodePort. EXTERNAL-IP shows `<pending>` until the cloud provider assigns an address."
             },
             {
+              "type": "text",
+              "title": "Example: a headless Service manifest",
+              "body": "This manifest, applied with `kubectl apply -f`, creates a Service named `web-headless` with no virtual IP, because of `clusterIP: None`. Instead of one Service address, DNS returns the individual Pod IPs, which is what stateful apps need when clients must reach specific Pods. Compare it with the ClusterIP example: only that one line changes."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web-headless\nspec:\n  clusterIP: None\n  selector:\n    app: web\n  ports:\n    - name: http\n      port: 80\n      targetPort: 8080",
@@ -423,12 +458,22 @@
               "note": "No virtual IP is allocated; DNS returns the Pod IPs directly."
             },
             {
+              "type": "text",
+              "title": "Example: an ExternalName Service manifest",
+              "body": "This manifest, applied with `kubectl apply -f`, creates a Service named `legacy-db` that has no selector and no Pods behind it. Its `externalName: db.example.com` makes cluster DNS answer lookups of `legacy-db` with a CNAME to that outside hostname. It lets Pods use a stable in-cluster name for an external system."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: legacy-db\nspec:\n  type: ExternalName\n  externalName: db.example.com",
               "title": "ExternalName Service",
               "output": null,
               "note": "Resolving `legacy-db` returns a CNAME to `db.example.com`; no proxying or selector is involved."
+            },
+            {
+              "type": "text",
+              "title": "Commands to create and inspect a Service",
+              "body": "These commands create a Service from an existing Deployment and then inspect it. `kubectl expose deployment web` builds a Service named `web` mapping port 80 to container port 8080, `kubectl get svc web` shows its ClusterIP, the EndpointSlice query lists the Pod IPs behind it, and `describe` summarises everything. Check that the Endpoints list is not empty."
             },
             {
               "type": "code",
@@ -480,6 +525,11 @@
               ]
             },
             {
+              "type": "text",
+              "title": "Example: a Service with no endpoints",
+              "body": "This is sample terminal output from a common failure. The first command shows the `web` Service has `<none>` as its ENDPOINTS, meaning no Pod matches its selector; the second lists Pods with their labels. Look at the Pod's label `app=webb` (a typo) against the Service selector `app: web`, which is why nothing matches."
+            },
+            {
               "type": "code",
               "language": "text",
               "code": "$ kubectl get endpoints web\nNAME   ENDPOINTS   AGE\nweb    <none>      3m\n\n$ kubectl get pods --show-labels\nNAME        READY   STATUS    LABELS\nweb-6d8f-a  1/1     Running   app=webb",
@@ -492,6 +542,11 @@
               "tone": "warning",
               "title": "Selector mismatches and readiness",
               "body": "A Service with no endpoints is almost always a label typo or Pods failing their readiness probe. Pods that are not Ready are removed from the Service by design."
+            },
+            {
+              "type": "text",
+              "title": "Commands for NodePort and headless variants",
+              "body": "These commands show how to switch an existing Service between types and test the result. `kubectl patch` changes the `web` Service to NodePort in place, `kubectl get svc web` shows the assigned node port, and the final `nslookup` from a temporary busybox Pod checks what DNS returns for a headless Service. The comment explains that headless needs `clusterIP: None` in the manifest because that field cannot be patched."
             },
             {
               "type": "code",
@@ -624,6 +679,11 @@
               "caption": "Click a box to see what it does."
             },
             {
+              "type": "text",
+              "title": "Example: an Ingress manifest",
+              "body": "This YAML file, applied with `kubectl apply -f`, defines an Ingress named `shop` that the ingress-nginx controller turns into routing rules. Look at `tls` (HTTPS for shop.example.com using the Secret `shop-tls`) and the two `paths`: `/api` goes to Service `api` and everything else (`/`) goes to Service `web`. The table after it lists each routing decision."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: shop\nspec:\n  ingressClassName: nginx\n  tls:\n    - hosts: [shop.example.com]\n      secretName: shop-tls\n  rules:\n    - host: shop.example.com\n      http:\n        paths:\n          - path: /api\n            pathType: Prefix\n            backend:\n              service:\n                name: api\n                port:\n                  number: 80\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: web\n                port:\n                  number: 80",
@@ -704,12 +764,22 @@
               ]
             },
             {
+              "type": "text",
+              "title": "Example: a host-only Ingress with an Exact path",
+              "body": "This second Ingress manifest, applied with `kubectl apply -f`, is named `health` and serves only `status.example.com`. The key line is `pathType: Exact` on `/healthz`, which matches that URL only, not `/healthz/live` or other sub-paths as `Prefix` would. It shows how `pathType` changes matching."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: health\nspec:\n  ingressClassName: nginx\n  rules:\n    - host: status.example.com\n      http:\n        paths:\n          - path: /healthz\n            pathType: Exact\n            backend:\n              service:\n                name: web\n                port:\n                  number: 80",
               "title": "Host-only Ingress with Exact path",
               "output": null,
               "note": "Only `/healthz` matches; `/healthz/live` does not."
+            },
+            {
+              "type": "text",
+              "title": "Commands to create the TLS Secret and verify",
+              "body": "These commands set up and check HTTPS routing for the `shop` Ingress. `kubectl create secret tls shop-tls` stores your certificate and key under the name the Ingress references, `get ingressclass` shows which controllers exist, and `get`/`describe ingress shop` show the rules and any events. The final `curl` fakes the Host header to test routing, replacing `<controller-ip>` with your controller's address."
             },
             {
               "type": "code",
@@ -720,12 +790,22 @@
               "note": "The Secret must be in the same namespace as the Ingress."
             },
             {
+              "type": "text",
+              "title": "Example output when routing fails",
+              "body": "This is sample `curl` output showing the two most common Ingress failures. A request with an unknown Host returns `404 Not Found` because no rule matches, while a valid Host and path returns `503` because the matching Service has no ready Pods behind it. Note the status line of each response; the steps below use them to find the cause."
+            },
+            {
               "type": "code",
               "language": "text",
               "code": "$ curl -i -H 'Host: unknown.example.com' http://192.168.1.50/\nHTTP/1.1 404 Not Found\nServer: nginx\n\n$ curl -i -H 'Host: shop.example.com' http://192.168.1.50/api\nHTTP/1.1 503 Service Temporarily Unavailable\nServer: nginx",
               "title": "Example responses when routing fails",
               "output": null,
               "note": "404 means no rule matched the Host/path; 503 means the rule matched but the backend Service has no ready endpoints."
+            },
+            {
+              "type": "text",
+              "title": "Example: what a TLS Secret looks like",
+              "body": "This is the Secret named `shop-tls` that the `kubectl create secret tls` command produced, shown so you know what the Ingress reads. Look at `type: kubernetes.io/tls` and the two base64-encoded entries `tls.crt` (certificate) and `tls.key` (private key). The names must be exactly these for the controller to use it."
             },
             {
               "type": "code",
@@ -879,12 +959,22 @@
               "caption": "Click a box to see what it does."
             },
             {
+              "type": "text",
+              "title": "Example: default deny for ingress",
+              "body": "This YAML file, applied with `kubectl apply -f`, is a NetworkPolicy named `default-deny-ingress` in the `shop` namespace. The empty `podSelector: {}` selects every Pod there, and `policyTypes: [Ingress]` with no rules means all incoming traffic is blocked. It is the usual starting point before allowing specific flows."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny-ingress\n  namespace: shop\nspec:\n  podSelector: {}\n  policyTypes: [Ingress]",
               "title": "Default deny all ingress in a namespace",
               "output": "$ kubectl apply -f default-deny.yaml\nnetworkpolicy.networking.k8s.io/default-deny-ingress created\n\n$ kubectl get networkpolicy -n shop\nNAME                   POD-SELECTOR   AGE\ndefault-deny-ingress   <none>         5s\n\n$ kubectl describe networkpolicy default-deny-ingress -n shop\nName:         default-deny-ingress\nNamespace:    shop\nSpec:\n  PodSelector:     <none> (Allowing the specific traffic to all pods in this namespace)\n  Allowing ingress traffic:\n    <none> (Selected pods are isolated for ingress connectivity)\n  Not affecting egress traffic\n  Policy Types: Ingress",
               "note": "`podSelector: {}` selects every Pod in the namespace. Add `Egress` to policyTypes to also block outbound traffic, and remember to allow DNS if you do."
+            },
+            {
+              "type": "text",
+              "title": "Example: default deny for ingress and egress",
+              "body": "This variant, applied with `kubectl apply -f`, named `default-deny-all`, also lists `Egress` in `policyTypes`. With no rules, Pods in `shop` can neither receive nor send any traffic, including DNS lookups. It is stricter than the previous policy, so you must add allow rules afterwards."
             },
             {
               "type": "code",
@@ -895,12 +985,22 @@
               "note": "Pods in `shop` can neither receive nor initiate any connection, including DNS."
             },
             {
+              "type": "text",
+              "title": "Example: allow DNS egress",
+              "body": "This policy, applied with `kubectl apply -f`, named `allow-dns-egress`, fixes the problem that default-deny-egress also breaks name resolution. Under `egress` it allows traffic to Pods labelled `k8s-app: kube-dns` in the `kube-system` namespace on port 53, for both UDP and TCP. Apply it together with a deny-egress policy."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-dns-egress\n  namespace: shop\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:\n    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53",
               "title": "Allow DNS egress",
               "output": null,
               "note": "Here `namespaceSelector` and `podSelector` share one entry, so they are AND'd: only kube-dns Pods in kube-system."
+            },
+            {
+              "type": "text",
+              "title": "Example: allow web and monitoring to reach the API",
+              "body": "This policy, applied with `kubectl apply -f`, named `allow-web-to-api`, opens exactly one path through the default deny. It targets Pods with `app: api` and accepts traffic on TCP 8080 from two sources: Pods labelled `app: web`, or any Pod in the `monitoring` namespace. Note the two entries under `from` are separate list items, so they are OR-ed."
             },
             {
               "type": "code",
@@ -1009,6 +1109,11 @@
               ]
             },
             {
+              "type": "text",
+              "title": "Example: the AND version of a rule",
+              "body": "This policy, applied with `kubectl apply -f`, named `allow-monitoring-prometheus`, shows the subtle difference from the previous one. Here `namespaceSelector` and `podSelector` sit in the same list item, so a source must be in the `monitoring` namespace AND carry the label `app: prometheus`. Only a one-line indentation difference separates AND from OR, so check carefully."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-monitoring-prometheus\n  namespace: shop\nspec:\n  podSelector:\n    matchLabels:\n      app: api\n  policyTypes: [Ingress]\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: monitoring\n          podSelector:\n            matchLabels:\n              app: prometheus\n      ports:\n        - protocol: TCP\n          port: 9100",
@@ -1049,12 +1154,22 @@
               ]
             },
             {
+              "type": "text",
+              "title": "Commands for throwaway debug tools",
+              "body": "These commands start temporary debugging containers so you can test network connectivity from inside the cluster. The first runs a Pod from the `netshoot` image, full of network tools, that is deleted on exit; the second uses `kubectl debug` to attach a busybox container to the existing Pod `api-0`. Use them to run the `wget` tests shown next."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl run netshoot --rm -it --image=nicolaka/netshoot --restart=Never -- bash\nkubectl debug -it pod/api-0 --image=busybox:1.36 --target=api",
               "title": "Throwaway debug tools",
               "output": "$ kubectl run netshoot --rm -it --image=nicolaka/netshoot --restart=Never -- bash\nIf you don't see a command prompt, try pressing enter.\nnetshoot:~# curl -s -m 3 http://api.shop:8080/healthz\ncurl: (28) Connection timed out after 3001 milliseconds\nnetshoot:~# exit\npod \"netshoot\" deleted\n\n$ kubectl debug -it pod/api-0 --image=busybox:1.36 --target=api\nTargeting container \"api\". If you don't see processes from this container it may be because the container runtime doesn't support this feature.\nDefaulting debug container name to debugger-8xk2w.\n/ # netstat -tln\nProto Recv-Q Send-Q Local Address           Foreign Address         State\ntcp        0      0 0.0.0.0:8080            0.0.0.0:*               LISTEN",
               "note": "`kubectl debug` attaches an ephemeral container for images that lack shell tools."
+            },
+            {
+              "type": "text",
+              "title": "Example diagnostic output",
+              "body": "This is sample output from the debugging session, showing how each failure looks different. The first command lists the policies in the cluster; the `wget` commands show a timeout (blocked by a policy), `bad address` (the name does not exist) and `Connection refused` (reachable but nothing listening). Compare the error messages, because each points to a different cause."
             },
             {
               "type": "code",

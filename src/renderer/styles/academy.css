@@ -997,3 +997,23 @@
 .roadmap-dot.current { background: var(--accent); color: #fff; box-shadow: 0 0 0 3px var(--accent-soft); }
 .roadmap-legend i { background: var(--c); }
 .roadmap-legend i.todo { background: transparent; border: 1.5px solid var(--border-strong); }
+
+/* Per-line help in code examples */
+.code-pre code .cl { position: relative; display: block; padding-inline-start: 26px; margin-inline-start: -26px; }
+.code-pre code .cl:hover { background: rgba(99,179,255,.07); }
+.cl-help {
+  position: absolute; inset-inline-start: 2px; top: 50%; transform: translateY(-50%);
+  width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid var(--accent-border);
+  background: var(--accent-soft); color: var(--accent-text); cursor: pointer; opacity: 0; font: 700 11px/1 var(--font);
+}
+.cl-help::before { content: '?'; }
+.code-pre code .cl:hover .cl-help, .cl-help:focus-visible { opacity: 1; }
+.cl-help:hover { background: var(--accent); color: #fff; }
+.code-pre { padding-inline-start: 30px; }
+.cl-text { white-space: pre; }
+.lh-line { margin: 0 0 12px; padding: 10px 12px; background: #05080e; border-radius: var(--r-sm); overflow-x: auto; direction: ltr; text-align: left; font: 12px/1.5 var(--mono); color: #e6eef8; }
+.lh-summary { font-size: 13.5px; line-height: 1.6; margin: 0 0 10px; }
+.lh-where { font-size: 12px; color: var(--muted); margin: 0 0 12px; display: flex; gap: 6px; align-items: center; }
+.lh-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lh-table th, .lh-table td { text-align: start; vertical-align: top; padding: 7px 8px; border-top: 1px solid var(--border-soft); }
+.lh-table td:first-child { white-space: nowrap; font-family: var(--mono); color: var(--accent-text); direction: ltr; }

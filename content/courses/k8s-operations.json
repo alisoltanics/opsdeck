@@ -120,12 +120,22 @@
               ]
             },
             {
+              "type": "text",
+              "title": "About this example: the diagnostic loop",
+              "body": "This block is a sample terminal session showing the five commands you run, in order, on a cluster with three broken pods and one healthy one. We show it so you can see what real output looks like before you meet it in production. Look at the STATUS column of `kubectl get pods` first, then at the `Events:` section of `describe` (the Failed and BackOff lines name the cause) and at the ERROR line in `logs --previous`."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl get pods -o wide\nkubectl describe pod web-7d9c8b6f5-abcde\nkubectl logs web-7d9c8b6f5-abcde\nkubectl logs web-7d9c8b6f5-abcde --previous\nkubectl logs web-7d9c8b6f5-abcde -c sidecar\nkubectl get events --sort-by=.lastTimestamp\nkubectl get events --field-selector involvedObject.name=web-7d9c8b6f5-abcde",
               "title": "The core diagnostic loop",
               "output": "$ kubectl get pods -o wide\nNAME                   READY   STATUS             RESTARTS      AGE   IP           NODE\nweb-7d9c8b6f5-abcde    0/1     ImagePullBackOff   0             2m    10.244.1.14  worker-1\napi-5c7d9b8f64-x2k9p   0/1     CrashLoopBackOff   5 (40s ago)   6m    10.244.2.7   worker-2\ndb-0                   0/1     Pending            0             3m    <none>       <none>\ncache-6b8f7c9d5-q7mzt  1/1     Running            0             1d    10.244.1.9   worker-1\n\n$ kubectl describe pod web-7d9c8b6f5-abcde\nName:             web-7d9c8b6f5-abcde\nNamespace:        demo\nNode:             worker-1/192.168.56.11\nStatus:           Pending\nContainers:\n  web:\n    Image:          nginx:no-such-tag\n    State:          Waiting\n      Reason:       ImagePullBackOff\n    Ready:          False\nEvents:\n  Type     Reason     Age                From               Message\n  ----     ------     ----               ----               -------\n  Normal   Scheduled  2m                 default-scheduler  Successfully assigned demo/web-7d9c8b6f5-abcde to worker-1\n  Normal   Pulling    75s (x4 over 2m)   kubelet            Pulling image \"nginx:no-such-tag\"\n  Warning  Failed     73s (x4 over 2m)   kubelet            Failed to pull image \"nginx:no-such-tag\": rpc error: code = NotFound desc = manifest unknown\n  Warning  Failed     73s (x4 over 2m)   kubelet            Error: ErrImagePull\n  Normal   BackOff    8s (x9 over 2m)    kubelet            Back-off pulling image \"nginx:no-such-tag\"\n  Warning  Failed     8s (x9 over 2m)    kubelet            Error: ImagePullBackOff\n\n$ kubectl logs api-5c7d9b8f64-x2k9p\nError from server (BadRequest): container \"api\" in pod \"api-5c7d9b8f64-x2k9p\" is waiting to start: CrashLoopBackOff\n\n$ kubectl logs api-5c7d9b8f64-x2k9p --previous\n2026-11-13T09:14:02Z INFO  starting api v1.4.2\n2026-11-13T09:14:02Z ERROR cannot connect to postgres://db:5432: dial tcp: lookup db: no such host\n2026-11-13T09:14:02Z FATAL exiting with code 1\n\n$ kubectl get events --sort-by=.lastTimestamp\nLAST SEEN   TYPE      REASON             OBJECT                       MESSAGE\n3m          Warning   FailedScheduling   pod/db-0                     0/3 nodes are available: 3 pod has unbound immediate PersistentVolumeClaims.\n2m          Warning   Failed             pod/web-7d9c8b6f5-abcde      Error: ImagePullBackOff\n50s         Warning   BackOff            pod/api-5c7d9b8f64-x2k9p     Back-off restarting failed container api in pod api-5c7d9b8f64-x2k9p",
               "note": "`--previous` shows the log of the last terminated container, which is the one that actually crashed. The current container in CrashLoopBackOff often has no output yet."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a Pending pod",
+              "body": "This is the `Events:` part of `kubectl describe pod db-0`, trimmed with `sed` so only the events remain. It is the sample output you read when a pod stays Pending, because the scheduler writes its reason here. Look at the `FailedScheduling` row and its message: it counts the nodes and gives a reason for each group, such as a taint or `Insufficient memory`."
             },
             {
               "type": "code",
@@ -140,6 +150,11 @@
               "tone": "tip",
               "title": "Events expire",
               "body": "Events are kept for about an hour by default. If you are investigating an old incident, `describe` may show nothing; check your logging and monitoring stack instead."
+            },
+            {
+              "type": "text",
+              "title": "About this example: confirming an OOM kill",
+              "body": "These commands check whether a container was killed for using more memory than its limit. The first prints only the `Last State` block from `kubectl describe`, and the second reads the same reason with a `jsonpath` query so a script can use it. In the output look at `Reason: OOMKilled` and `Exit Code: 137`, which together prove the kernel killed the process."
             },
             {
               "type": "code",
@@ -298,12 +313,22 @@
               "caption": "Click a box to see what it does."
             },
             {
+              "type": "text",
+              "title": "About this example: the pod-reader manifest",
+              "body": "This YAML file holds the three objects needed to give one application read-only access to pods in the `demo` namespace. You apply it with `kubectl apply -f`. Look at the `rules` list in the Role, which names the allowed resources and verbs, and at the RoleBinding, whose `subjects` (who) and `roleRef` (which Role) connect the ServiceAccount to those permissions."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: pod-reader\n  namespace: demo\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: pod-reader\n  namespace: demo\nrules:\n  - apiGroups: [\"\"]\n    resources: [\"pods\", \"pods/log\"]\n    verbs: [\"get\", \"list\", \"watch\"]\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: pod-reader\n  namespace: demo\nsubjects:\n  - kind: ServiceAccount\n    name: pod-reader\n    namespace: demo\nroleRef:\n  kind: Role\n  name: pod-reader\n  apiGroup: rbac.authorization.k8s.io",
               "title": "Read-only access to pods in one namespace",
               "output": null,
               "note": "`roleRef` is immutable: to change it, delete and recreate the binding."
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking permissions",
+              "body": "Writing RBAC is only half the job; these commands test the result without logging in as the account. `kubectl auth can-i` asks the API server whether an identity may do something, and `--as` makes you impersonate the pod-reader ServiceAccount. In the output look for `yes` on list and `no` on delete, then at the `--list` table to see every verb the account really has."
             },
             {
               "type": "code",
@@ -314,6 +339,11 @@
               "note": "Impersonation with `--as` needs permission itself, so run it as an admin. The service account form is `system:serviceaccount:NAMESPACE:NAME`."
             },
             {
+              "type": "text",
+              "title": "About this example: cluster-wide access",
+              "body": "This second YAML file (applied with `kubectl apply -f`) grants read access to resources that do not belong to any namespace, such as nodes. We show it because a namespaced Role cannot do this. Look at `kind: ClusterRole` and `kind: ClusterRoleBinding`, and note that the ServiceAccount still lives in the `monitoring` namespace."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: node-viewer\n  namespace: monitoring\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: node-viewer\nrules:\n  - apiGroups: [\"\"]\n    resources: [\"nodes\", \"namespaces\"]\n    verbs: [\"get\", \"list\", \"watch\"]\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: node-viewer\nsubjects:\n  - kind: ServiceAccount\n    name: node-viewer\n    namespace: monitoring\nroleRef:\n  kind: ClusterRole\n  name: node-viewer\n  apiGroup: rbac.authorization.k8s.io",
@@ -322,12 +352,22 @@
               "note": "Nodes are cluster-scoped, so a namespaced Role cannot grant access to them; a ClusterRole bound with a ClusterRoleBinding can."
             },
             {
+              "type": "text",
+              "title": "About this example: yes and no answers",
+              "body": "These three `kubectl auth can-i` commands test the node-viewer account from the previous file: it should be able to get nodes, but not read pods in `demo`. The output is one word per command, in the same order. The last command runs as your own admin user, so its answer shows the contrast."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl auth can-i get nodes --as=system:serviceaccount:monitoring:node-viewer\nkubectl auth can-i get pods -n demo --as=system:serviceaccount:monitoring:node-viewer\nkubectl auth can-i create deployments -n demo",
               "title": "Sample: yes and no answers",
               "output": "yes\nno\nyes",
               "note": "The last command runs as your own user (an admin in this sample)."
+            },
+            {
+              "type": "text",
+              "title": "About this example: a Forbidden error",
+              "body": "This command deliberately tries something the node-viewer account is not allowed to do, so you can see what a missing permission looks like. The output is a standard `Forbidden` error from the API server. Read it closely: it names the user, the verb (`list`), the resource (`pods`) and the namespace, which is exactly what you need to write the missing rule."
             },
             {
               "type": "code",
@@ -555,12 +595,22 @@
               "body": "A **chart** is a package of templated Kubernetes manifests. **Values** (`values.yaml`) are the inputs to those templates. A **release** is one installed instance of a chart in a namespace; Helm stores each revision of it as a Secret, which is what makes rollback possible.\n\nPrefer `helm upgrade --install`, which is idempotent and works in CI whether or not the release exists."
             },
             {
+              "type": "text",
+              "title": "About this example: find and install a chart",
+              "body": "The next block shows the everyday Helm commands: add a chart repository, search it, install a chart as a named release, and list your releases. A chart is a package of Kubernetes templates, and a release is one installed copy of it. Look at how the release name (`web`) and namespace (`-n demo`) are given on the install command."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "helm repo add bitnami https://charts.bitnami.com/bitnami\nhelm repo update\nhelm search repo nginx\nhelm show values bitnami/nginx > values-default.yaml\nhelm install web bitnami/nginx -n demo --create-namespace --set replicaCount=2\nhelm list -n demo\nhelm status web -n demo",
               "title": "Find and install a chart",
               "output": "$ helm repo add bitnami https://charts.bitnami.com/bitnami\n\"bitnami\" has been added to your repositories\n\n$ helm repo update\nHang tight while we grab the latest from your chart repositories...\n...Successfully got an update from the \"bitnami\" chart repository\nUpdate Complete. Happy Helming!\n\n$ helm search repo nginx\nNAME                    CHART VERSION   APP VERSION   DESCRIPTION\nbitnami/nginx           18.2.4          1.27.2        NGINX Open Source is a web server ...\nbitnami/nginx-ingress-controller  11.5.1  1.11.3      NGINX Ingress Controller ...\n\n$ helm install web bitnami/nginx -n demo --create-namespace --set replicaCount=2\nNAME: web\nLAST DEPLOYED: Fri Nov 13 09:30:12 2026\nNAMESPACE: demo\nSTATUS: deployed\nREVISION: 1\nTEST SUITE: None\n\n$ helm list -n demo\nNAME   NAMESPACE   REVISION   UPDATED                                 STATUS     CHART          APP VERSION\nweb    demo        1          2026-11-13 09:30:12.4 +0000 UTC         deployed   nginx-18.2.4   1.27.2\n\n$ helm status web -n demo\nNAME: web\nLAST DEPLOYED: Fri Nov 13 09:30:12 2026\nNAMESPACE: demo\nSTATUS: deployed\nREVISION: 1",
               "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this file: my-values.yaml",
+              "body": "`my-values.yaml` is a small file you write yourself to override the default settings of a chart. You pass it to Helm with `-f my-values.yaml` on `helm install` or `helm upgrade`. We show it because it is the normal way to customise a release. Look at `replicaCount: 3` and the `resources` block: only the keys listed here change, everything else keeps the chart default."
             },
             {
               "type": "code",
@@ -571,12 +621,22 @@
               "note": "Keep overrides in a file under version control rather than long --set chains."
             },
             {
+              "type": "text",
+              "title": "About this example: the layout of a chart",
+              "body": "This is not a command but a directory tree of what `helm create mychart` generates. Every Helm chart has this shape, so knowing it tells you where to look. Notice `Chart.yaml` (the chart's identity), `values.yaml` (default settings) and the `templates/` folder (Kubernetes YAML with placeholders)."
+            },
+            {
               "type": "code",
               "language": "text",
               "code": "mychart/\n├── Chart.yaml          # name, version, appVersion, dependencies\n├── values.yaml         # default inputs, overridden with -f / --set\n├── charts/             # packaged dependency charts\n├── templates/\n│   ├── _helpers.tpl    # reusable named templates\n│   ├── deployment.yaml\n│   ├── service.yaml\n│   ├── ingress.yaml\n│   ├── NOTES.txt       # printed after install\n│   └── tests/\n│       └── test-connection.yaml\n└── .helmignore",
               "title": "Anatomy of a chart (directory tree)",
               "output": null,
               "note": "Create this skeleton with `helm create mychart`."
+            },
+            {
+              "type": "text",
+              "title": "About this file: Chart.yaml",
+              "body": "`Chart.yaml` is the file at the top of a chart that describes the chart itself: its name, versions and dependencies. Helm reads it on every install and package. Look at `version` (the chart's own version, bumped on every change), `appVersion` (the version of the application it deploys) and the `dependencies` list, which pulls in a PostgreSQL chart."
             },
             {
               "type": "code",
@@ -587,12 +647,22 @@
               "note": null
             },
             {
+              "type": "text",
+              "title": "About this file: values.yaml and a template",
+              "body": "This shows the chart's default `values.yaml` followed by a template line that reads from it. It explains how Helm turns settings into manifests: a placeholder such as `{{ .Values.replicaCount }}` in a file under `templates/` is replaced by the value from here. Compare each key in `values.yaml` with the placeholder that uses it, and remember that your `my-values.yaml` overrides these defaults."
+            },
+            {
               "type": "code",
               "language": "text",
               "code": "# values.yaml\nreplicaCount: 2\nimage:\n  repository: registry.example.com/api\n  tag: \"1.4.2\"\n  pullPolicy: IfNotPresent\nservice:\n  type: ClusterIP\n  port: 80\ningress:\n  enabled: false\nresources:\n  requests: {cpu: 100m, memory: 128Mi}\n  limits: {memory: 256Mi}\n\n# templates/deployment.yaml (fragment)\nspec:\n  replicas: {{ .Values.replicaCount }}\n  template:\n    spec:\n      containers:\n        - name: {{ .Chart.Name }}\n          image: \"{{ .Values.image.repository }}:{{ .Values.image.tag }}\"\n          resources:\n            {{- toYaml .Values.resources | nindent 12 }}",
               "title": "values.yaml and how a template uses it",
               "output": null,
               "note": "`.Values` comes from values.yaml plus your overrides; `.Chart` from Chart.yaml; `.Release` holds the release name and namespace."
+            },
+            {
+              "type": "text",
+              "title": "About this example: render, upgrade, roll back",
+              "body": "This session runs the whole Helm release lifecycle using the `my-values.yaml` file from above. `helm template` only prints the YAML locally, `helm upgrade --install` applies it, and `helm rollback` goes back to an earlier revision. Look at the REVISION column in `helm history`: the rollback does not delete revision 2, it creates revision 3 that copies revision 1."
             },
             {
               "type": "code",
@@ -750,12 +820,22 @@
               "caption": "Click a box to see what it does."
             },
             {
+              "type": "text",
+              "title": "About this example: the HPA manifest",
+              "body": "This YAML file defines a HorizontalPodAutoscaler, the object that adds or removes pods of a Deployment automatically. You apply it with `kubectl apply -f`. Look at `scaleTargetRef` (which Deployment to scale), `minReplicas` and `maxReplicas` (the limits) and `averageUtilization: 70` (the CPU target it tries to hold)."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: web\n  namespace: demo\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: web\n  minReplicas: 2\n  maxReplicas: 10\n  metrics:\n    - type: Resource\n      resource:\n        name: cpu\n        target:\n          type: Utilization\n          averageUtilization: 70",
               "title": "HPA targeting 70% CPU",
               "output": "horizontalpodautoscaler.autoscaling/web created",
               "note": "Imperative form: kubectl autoscale deployment web --min=2 --max=10 --cpu-percent=70"
+            },
+            {
+              "type": "text",
+              "title": "About this example: watching the autoscaler",
+              "body": "These commands let you see the HPA working under load: `top` shows real CPU and memory use, and `get hpa -w` streams the autoscaler's decisions. In the `TARGETS` column, `140%/70%` means current load against target, and the `REPLICAS` column then rises from 2 to 4. The `describe` output at the end explains why in its Events."
             },
             {
               "type": "code",
@@ -769,6 +849,11 @@
               "type": "text",
               "title": "Node maintenance",
               "body": "To patch or replace a node: **cordon** marks it unschedulable without touching running pods; **drain** cordons and then evicts pods so controllers recreate them elsewhere. Eviction respects PodDisruptionBudgets. **Taints** on a node repel pods unless they carry a matching **toleration**."
+            },
+            {
+              "type": "text",
+              "title": "About this example: cordon, drain, taint",
+              "body": "These commands are the node maintenance routine. `cordon` stops new pods landing on `worker-2`, `drain` moves its pods away so you can patch and reboot it, and `uncordon` opens it again. The last two lines add and then remove (the trailing `-`) a taint on `worker-3`; the flag `--ignore-daemonsets` is needed because DaemonSet pods cannot be moved."
             },
             {
               "type": "code",
@@ -809,6 +894,11 @@
               ]
             },
             {
+              "type": "text",
+              "title": "About this example: a pod with a toleration",
+              "body": "This pod manifest (applied with `kubectl apply -f`) is the counterpart of the taint added to `worker-3` above. Without it, the pod could not be scheduled on that node. Look at the `tolerations` block: its `key`, `value` and `effect` must match the taint exactly."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: gpu-job\nspec:\n  tolerations:\n    - key: dedicated\n      operator: Equal\n      value: gpu\n      effect: NoSchedule\n  containers:\n    - name: job\n      image: busybox:1.36\n      command: [\"sh\", \"-c\", \"sleep 3600\"]",
@@ -817,12 +907,22 @@
               "note": "A toleration only permits scheduling on the tainted node; to force it there as well, add a nodeSelector or node affinity."
             },
             {
+              "type": "text",
+              "title": "About this example: seeing the taint",
+              "body": "This command checks which taint is set on `worker-3`, using `grep -A1` to print the matching line and the one after it. We use it to confirm that the taint from the earlier command is really there. Look for `dedicated=gpu:NoSchedule`, which is the key, value and effect your toleration must match."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl describe node worker-3 | grep -A1 Taints",
               "title": "Sample: taint visible on the node",
               "output": "Taints:             dedicated=gpu:NoSchedule\nUnschedulable:      false",
               "note": null
+            },
+            {
+              "type": "text",
+              "title": "About this example: a PodDisruptionBudget",
+              "body": "This YAML file creates a PodDisruptionBudget (PDB), a rule that limits how many pods of an app can be taken down on purpose, for example by `kubectl drain`. Apply it with `kubectl apply -f` before maintenance. Look at `minAvailable: 1` and the `selector`: drain will refuse to evict the last pod labelled `app: web`."
             },
             {
               "type": "code",
@@ -957,6 +1057,11 @@
               "body": "A workload is production-ready when it fails safely, is limited in what it can do, and can be observed. The checklist: run as **non-root** with a read-only filesystem and dropped capabilities; enforce **Pod Security Standards** per namespace; set **requests and limits**; add **readiness/liveness probes**; protect availability with a **PodDisruptionBudget**; and ship logs and metrics."
             },
             {
+              "type": "text",
+              "title": "About this example: a hardened Deployment",
+              "body": "This is a complete Deployment manifest, applied with `kubectl apply -f`, that follows the checklist above in one file. Use it as a template for your own services. Look at `securityContext` (non-root, no privilege escalation, read-only filesystem, dropped capabilities), `resources` (requests and limits) and the two probes."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 3\n  selector:\n    matchLabels: {app: api}\n  template:\n    metadata:\n      labels: {app: api}\n    spec:\n      securityContext:\n        runAsNonRoot: true\n        seccompProfile: {type: RuntimeDefault}\n      containers:\n        - name: api\n          image: registry.example.com/api:1.4.2\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities: {drop: [\"ALL\"]}\n          resources:\n            requests: {cpu: 200m, memory: 256Mi}\n            limits: {memory: 256Mi}\n          readinessProbe:\n            httpGet: {path: /healthz, port: 8080}\n          livenessProbe:\n            httpGet: {path: /livez, port: 8080}\n            initialDelaySeconds: 10",
@@ -965,12 +1070,22 @@
               "note": "Pin image tags to versions or digests; never use :latest in production."
             },
             {
+              "type": "text",
+              "title": "About this example: a PodDisruptionBudget",
+              "body": "This is a PodDisruptionBudget for the `api` Deployment, applied with `kubectl apply -f`. It protects availability while nodes are drained or upgraded. Look at `minAvailable: 2`: with 3 replicas, only one pod may be evicted at a time."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: api\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels: {app: api}",
               "title": "PodDisruptionBudget",
               "output": "poddisruptionbudget.policy/api created",
               "note": "Voluntary disruptions such as drain will not evict below minAvailable."
+            },
+            {
+              "type": "text",
+              "title": "About this example: Pod Security and health checks",
+              "body": "These commands apply and check several protections. The first labels the `prod` namespace so Kubernetes enforces the `restricted` Pod Security level, the others list the PDB, current resource usage and recent events. In the output look at the warning that existing pods violate the new level, and at `ALLOWED DISRUPTIONS` in the PDB table."
             },
             {
               "type": "code",
@@ -1011,6 +1126,11 @@
               ]
             },
             {
+              "type": "text",
+              "title": "About this example: a rejected pod",
+              "body": "This command tries to start a plain nginx pod in the `prod` namespace, which now enforces the `restricted` level. It is meant to fail, to show you what a policy violation looks like. Read the error: each clause names one missing security setting."
+            },
+            {
               "type": "code",
               "language": "bash",
               "code": "kubectl run root-pod --image=nginx -n prod",
@@ -1019,12 +1139,22 @@
               "note": "Each clause in the message maps to one line of the hardened Deployment above."
             },
             {
+              "type": "text",
+              "title": "About this example: a dedicated ServiceAccount",
+              "body": "This small YAML file creates a ServiceAccount named `api` for the workload, applied with `kubectl apply -f`. Pods use `default` unless you say otherwise, which is bad for least privilege. Look at `automountServiceAccountToken: false`, which stops the API token being mounted into the pod."
+            },
+            {
               "type": "code",
               "language": "yaml",
               "code": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: api\n  namespace: prod\nautomountServiceAccountToken: false",
               "title": "Dedicated ServiceAccount for the workload",
               "output": "serviceaccount/api created",
               "note": "Set `serviceAccountName: api` in the pod spec. Disable token automounting unless the app calls the Kubernetes API."
+            },
+            {
+              "type": "text",
+              "title": "About this example: checking probes and limits",
+              "body": "This command inspects a running api pod and filters the `describe` output to the lines that show its health checks and resources. We use it to prove the settings from the hardened Deployment are really applied. Look at `Limits`, `Requests`, the `Liveness` and `Readiness` probe lines, and `Restart Count`, which should be 0."
             },
             {
               "type": "code",

@@ -41,6 +41,11 @@
        "caption": "Click a box to see what it does."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "`deployment.yaml` is a manifest: a YAML file that describes the Deployment we want, and you create it with `kubectl apply -f deployment.yaml`. We show it first because every later command in this lesson works on this `web` Deployment. Look at `replicas: 3` (how many Pods), `selector.matchLabels` and the template `labels` (they must match), the `strategy` block with `maxSurge: 1` and `maxUnavailable: 0`, and `image: nginx:1.27`."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1\n      maxUnavailable: 0\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx:1.27\n          ports:\n            - containerPort: 80",
@@ -80,12 +85,22 @@
        "body": "With `maxSurge: 1` and `maxUnavailable: 0`, Kubernetes starts one new Pod, waits for it to become **Ready**, and only then terminates an old one. Capacity never drops, but the rollout is only as safe as your readiness probe: without one, a Pod counts as ready the moment its container starts."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "The next block is a list of `kubectl` commands you type in a terminal, in order, to run and change the `web` Deployment from `deployment.yaml`. It shows the everyday life of a release: create it, scale it to 5 Pods, update the image to `nginx:1.28`, watch the rollout, then undo or pause it. Pay attention to `kubectl set image` (starts a rolling update) and `kubectl rollout undo` (goes back to the previous version); the output below each command shows what Kubernetes answers."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl apply -f deployment.yaml\nkubectl scale deployment/web --replicas=5\nkubectl set image deployment/web web=nginx:1.28\nkubectl rollout status deployment/web\nkubectl rollout history deployment/web\nkubectl rollout undo deployment/web\nkubectl rollout undo deployment/web --to-revision=1\nkubectl rollout pause deployment/web",
        "title": null,
        "output": "$ kubectl apply -f deployment.yaml\ndeployment.apps/web created\n$ kubectl scale deployment/web --replicas=5\ndeployment.apps/web scaled\n$ kubectl set image deployment/web web=nginx:1.28\ndeployment.apps/web image updated\n$ kubectl rollout status deployment/web\nWaiting for deployment \"web\" rollout to finish: 2 out of 5 new replicas have been updated...\nWaiting for deployment \"web\" rollout to finish: 4 out of 5 new replicas have been updated...\nWaiting for deployment \"web\" rollout to finish: 1 old replicas are pending termination...\ndeployment \"web\" successfully rolled out\n$ kubectl rollout history deployment/web\ndeployment.apps/web\nREVISION  CHANGE-CAUSE\n1         <none>\n2         <none>\n$ kubectl rollout undo deployment/web\ndeployment.apps/web rolled back\n$ kubectl rollout undo deployment/web --to-revision=1\ndeployment.apps/web rolled back\n$ kubectl rollout pause deployment/web\ndeployment.apps/web paused",
        "note": "`rollout status` exits non-zero if the rollout fails to progress within `progressDeadlineSeconds` (default 600s), which makes it useful in CI."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These are read-only `kubectl` commands that let you look at what the Deployment created, without changing anything. We run them after the rollout to see the three layers: the Deployment (`get deploy`), its ReplicaSets (`get rs`) and the Pods (`get pods -o wide`). In the output, compare the READY, UP-TO-DATE and AVAILABLE columns, and notice that an old and a new ReplicaSet can exist side by side."
       },
       {
        "type": "code",
@@ -188,6 +203,11 @@
        ]
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a second version of the `web` Deployment manifest, applied with `kubectl apply -f`, that adds the fields which control how a rollout behaves. It is here so you can see where the tuning knobs live. Look at `maxSurge: 25%` and `maxUnavailable: 25%` (rollout speed), `minReadySeconds` and `progressDeadlineSeconds` (how long a new Pod must be healthy and when a rollout counts as failed), `revisionHistoryLimit` (how many old ReplicaSets are kept for rollback) and the `change-cause` annotation."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  annotations:\n    kubernetes.io/change-cause: \"bump nginx to 1.28\"\nspec:\n  replicas: 5\n  revisionHistoryLimit: 5\n  minReadySeconds: 5\n  progressDeadlineSeconds: 300\n  selector:\n    matchLabels:\n      app: web\n  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 25%\n      maxUnavailable: 25%\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx:1.28\n          ports:\n            - containerPort: 80",
@@ -200,6 +220,11 @@
        "tone": "tip",
        "title": "Record why you changed things",
        "body": "Use `kubectl annotate deployment/web kubernetes.io/change-cause=\"upgrade to nginx 1.28\"` so `rollout history` shows a meaningful CHANGE-CAUSE column."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is sample terminal output (not a file you run) from `kubectl get deploy,rs` and `kubectl get pods`, captured at three moments: before, during and after a rollout with a broken image tag. We show it so you recognise what a bad release looks like and why it is safe. Follow the READY and UP-TO-DATE numbers: the new Pod stays `0/1 ImagePullBackOff` while the 5 old Pods stay available, and the last line tells you the fix, `kubectl rollout undo`."
       },
       {
        "type": "code",
@@ -327,6 +352,11 @@
        "caption": "Click a box to see what it does."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "`statefulset.yaml` is a manifest with two objects separated by `---`: a headless Service named `db` and a StatefulSet named `db`; you create both with `kubectl apply -f statefulset.yaml`. We show it as the standard recipe for running a database with stable identity and its own disk. Look at `clusterIP: None` (makes the Service headless), `serviceName: db` (links the StatefulSet to it), `replicas: 3`, and `volumeClaimTemplates` at the bottom, which gives every Pod its own storage."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: db\nspec:\n  clusterIP: None\n  selector:\n    app: db\n  ports:\n    - port: 5432\n---\napiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: db\nspec:\n  serviceName: db\n  replicas: 3\n  selector:\n    matchLabels:\n      app: db\n  template:\n    metadata:\n      labels:\n        app: db\n    spec:\n      containers:\n        - name: postgres\n          image: postgres:16\n          env:\n            - name: POSTGRES_PASSWORD\n              value: example\n            - name: PGDATA\n              value: /var/lib/postgresql/data/pgdata\n          volumeMounts:\n            - name: data\n              mountPath: /var/lib/postgresql/data\n  volumeClaimTemplates:\n    - metadata:\n        name: data\n      spec:\n        accessModes: [\"ReadWriteOnce\"]\n        resources:\n          requests:\n            storage: 5Gi",
@@ -344,6 +374,11 @@
        "tone": "warning",
        "title": "PVCs are not deleted automatically",
        "body": "Deleting or scaling down a StatefulSet does **not** delete the PVCs created from `volumeClaimTemplates`, protecting your data. Delete them explicitly, or set `persistentVolumeClaimRetentionPolicy` to opt in to automatic cleanup."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These `kubectl` commands show how the Pods of the `db` StatefulSet behave after you applied `statefulset.yaml`. We list the Pods and their PVCs, scale down, ask a Pod for its hostname, and delete one Pod on purpose. In the output look at the predictable names `db-0`, `db-1`, `db-2` and notice that a deleted Pod comes back with the same name and the same PVC."
       },
       {
        "type": "code",
@@ -390,6 +425,11 @@
        ]
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These commands check that each Pod can be reached by its own DNS name and then clean up leftover storage. The first one starts a temporary busybox Pod that runs `nslookup db-0.db`, the second shows the StatefulSet, and the last deletes the PVC `data-db-2` that stayed behind after scaling down. In the output, look at the `Address` line: it is the IP of the single Pod `db-0`, not a shared virtual IP."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl run -it --rm dns --image=busybox:1.36 --restart=Never -- nslookup db-0.db\nkubectl get sts db -o wide\nkubectl delete pvc data-db-2",
@@ -422,6 +462,11 @@
        "type": "text",
        "title": "Rolling update sample",
        "body": "StatefulSet updates go in reverse ordinal order: `db-2`, then `db-1`, then `db-0`, waiting for each to be Ready. Set `updateStrategy.rollingUpdate.partition: 2` to update only Pods with ordinal >= 2 (a canary)."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a changed version of the `db` StatefulSet from `statefulset.yaml`, applied with `kubectl apply -f`, that demonstrates a canary update. We use it to update only one Pod first and keep the others on the old version. The key line is `rollingUpdate.partition: 2`: only Pods with an ordinal of 2 or higher (so just `db-2`) get the new image `postgres:16.4`. The `persistentVolumeClaimRetentionPolicy` lines say that PVCs are kept (`Retain`) on delete or scale-down."
       },
       {
        "type": "code",
@@ -543,6 +588,11 @@
        "body": "A **DaemonSet** ensures a copy of a Pod runs on every (or selected) node. When a node joins, the Pod is added; when it leaves, the Pod is garbage collected. Typical uses are log collectors (Fluent Bit), node metrics exporters, CNI plugins and storage drivers."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a manifest for a DaemonSet called `node-exporter`, created with `kubectl apply -f`; it runs a monitoring agent that exposes metrics from every node. It is the typical DaemonSet use case, so we show it right after the idea of one Pod per node. Look at what is missing (there is no `replicas`, because the node count decides), the `tolerations` entry that lets it also run on control-plane nodes, `hostPort: 9100`, and `updateStrategy` with `maxUnavailable: 1`."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-exporter\nspec:\n  selector:\n    matchLabels:\n      app: node-exporter\n  updateStrategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxUnavailable: 1\n  template:\n    metadata:\n      labels:\n        app: node-exporter\n    spec:\n      tolerations:\n        - key: node-role.kubernetes.io/control-plane\n          operator: Exists\n          effect: NoSchedule\n      containers:\n        - name: exporter\n          image: quay.io/prometheus/node-exporter:v1.8.2\n          ports:\n            - containerPort: 9100\n              hostPort: 9100",
@@ -560,6 +610,11 @@
        "tone": "info",
        "title": "Updates",
        "body": "`RollingUpdate` replaces Pods node by node, `maxUnavailable` at a time. `OnDelete` only recreates a Pod after you delete it manually, giving full control for sensitive agents."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These are `kubectl` commands for checking and updating the `node-exporter` DaemonSet. We list DaemonSets in the `kube-system` namespace, see on which nodes the Pods run (`-o wide` adds a NODE column), wait for a rollout to finish, and change the image. Run them after applying the manifest above, and check that you get exactly one Pod per node."
       },
       {
        "type": "code",
@@ -609,6 +664,11 @@
          "kubernetes.io/os=linux"
         ]
        ]
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is another DaemonSet manifest, named `log-agent`, applied with `kubectl apply -f`. It shows how to run the Pod only on some nodes instead of all of them. Look at `nodeSelector: disktype: ssd`: only nodes labelled `disktype=ssd` get a Pod. Also see the `hostPath` volume, which lets the agent read the node's own `/var/log`, something a normal Deployment rarely needs."
       },
       {
        "type": "code",
@@ -725,6 +785,11 @@
        "caption": "Click a box to see what it does."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a manifest for a Job called `report`, created with `kubectl apply -f job.yaml`; it runs a small task until it succeeds instead of running forever. We show it as the basic shape of a batch Job. Look at `completions: 5` (five successful Pods are needed), `parallelism: 2` (two run at once), `backoffLimit: 3` (retries before giving up), `restartPolicy: Never`, and `ttlSecondsAfterFinished` (automatic cleanup)."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: report\nspec:\n  completions: 5\n  parallelism: 2\n  backoffLimit: 3\n  activeDeadlineSeconds: 600\n  ttlSecondsAfterFinished: 3600\n  template:\n    spec:\n      restartPolicy: Never\n      containers:\n        - name: report\n          image: busybox:1.36\n          command: [\"sh\", \"-c\", \"echo generating report; sleep 5\"]",
@@ -736,6 +801,11 @@
        "type": "text",
        "title": "CronJobs",
        "body": "A **CronJob** creates Jobs on a cron schedule (`minute hour day-of-month month day-of-week`). `concurrencyPolicy` decides what happens if the previous run is still going: `Allow` (default), `Forbid` (skip the new run) or `Replace` (cancel the old one). `startingDeadlineSeconds` limits how late a missed run may start."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a manifest for a CronJob called `nightly-backup`, applied with `kubectl apply -f`; it creates a new Job on a schedule. It is here because most real batch work is repeated. Read `schedule: \"0 2 * * *\"` (every day at 02:00), `timeZone`, `concurrencyPolicy: Forbid` (skip a run if the last one is still going), the two history limits, and `jobTemplate`, which is simply a Job spec nested inside."
       },
       {
        "type": "code",
@@ -752,12 +822,22 @@
        "body": "A CronJob may rarely run a task twice or skip a run. Design tasks so repeating them is harmless."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These `kubectl` commands create and manage Jobs without writing a YAML file. We create a one-off Job, list it, read its logs, trigger the CronJob `nightly-backup` by hand with `--from=cronjob/...`, and pause its schedule with `suspend: true`. Use them for quick tests and for running a backup now; the manual run is the part to remember."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl create job once --image=busybox -- echo hello\nkubectl get jobs\nkubectl logs job/once\nkubectl create job manual-run --from=cronjob/nightly-backup\nkubectl patch cronjob nightly-backup -p '{\"spec\":{\"suspend\":true}}'",
        "title": null,
        "output": "$ kubectl create job once --image=busybox -- echo hello\njob.batch/once created\n$ kubectl get jobs\nNAME   STATUS     COMPLETIONS   DURATION   AGE\nonce   Complete   1/1           4s         9s\n$ kubectl logs job/once\nhello\n$ kubectl create job manual-run --from=cronjob/nightly-backup\njob.batch/manual-run created\n$ kubectl patch cronjob nightly-backup -p '{\"spec\":{\"suspend\":true}}'\ncronjob.batch/nightly-backup patched",
        "note": null
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These commands watch the `report` Job from `job.yaml` while it runs. `-w` keeps the list updating, `-l job-name=report` finds the Pods that belong to that Job, and the last commands show the CronJob and recent Jobs in creation order. In the output, look at the COMPLETIONS column (for example 3/5) and the Pod STATUS going from Running to Completed."
       },
       {
        "type": "code",
@@ -850,6 +930,11 @@
          "Cancel the old run, start the new one"
         ]
        ]
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a Job manifest named `flaky`, applied with `kubectl apply -f`, whose container runs `exit 1`, so it fails on purpose. We use it to see what Kubernetes does with a task that never succeeds. Look at `backoffLimit: 2` (after that many retries the Job is marked Failed) and `restartPolicy: Never` (each retry is a new Pod, so you can read the logs of every failed attempt)."
       },
       {
        "type": "code",
@@ -971,6 +1056,11 @@
        "body": "**Startup** probe: has the app finished booting? Other probes are disabled until it passes. **Readiness** probe: should this Pod receive traffic? Failure removes it from Service endpoints but does not restart it. **Liveness** probe: is the process stuck? Failure makes the kubelet restart the container.\n\nProbes can be `httpGet`, `tcpSocket`, `exec` or `grpc`."
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is only a fragment of a Pod spec (the `containers:` part of a manifest, not a full file) showing all three probes and the resources of one container named `api`. It sits here to show how the probes from the previous text are written. Look at `startupProbe` (allows up to 30 x 2s to boot), `readinessProbe` on `/ready` (controls traffic), `livenessProbe` on `/healthz` (restarts the container after 3 failures), and `requests` and `limits` under `resources`."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "containers:\n  - name: api\n    image: myorg/api:2.1\n    startupProbe:\n      httpGet: {path: /healthz, port: 8080}\n      failureThreshold: 30\n      periodSeconds: 2\n    readinessProbe:\n      httpGet: {path: /ready, port: 8080}\n      periodSeconds: 5\n    livenessProbe:\n      httpGet: {path: /healthz, port: 8080}\n      periodSeconds: 10\n      failureThreshold: 3\n    resources:\n      requests: {cpu: 250m, memory: 256Mi}\n      limits: {memory: 512Mi}",
@@ -1016,12 +1106,22 @@
        ]
       },
       {
+       "type": "text",
+       "title": "What this example is",
+       "body": "These `kubectl` commands help you find out why a Pod such as `api-7d9f` was restarted or killed. The first shows how the previous container ended (`Last State`, for example OOMKilled), the second prints its QoS class, `kubectl top pod` shows live CPU and memory use, and the last lists events for that Pod. Use them when a Pod restarts and you suspect memory limits or a failing probe."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl describe pod api-7d9f | grep -A5 \"Last State\"\nkubectl get pod api-7d9f -o jsonpath='{.status.qosClass}'\nkubectl top pod\nkubectl get events --field-selector involvedObject.name=api-7d9f",
        "title": null,
        "output": "$ kubectl describe pod api-7d9f | grep -A5 \"Last State\"\n    Last State:     Terminated\n      Reason:       OOMKilled\n      Exit Code:    137\n      Started:      Thu, 13 Nov 2026 09:12:04 +0100\n      Finished:     Thu, 13 Nov 2026 09:14:51 +0100\n$ kubectl get pod api-7d9f -o jsonpath='{.status.qosClass}'\nBurstable\n$ kubectl top pod\nNAME       CPU(cores)   MEMORY(bytes)\napi-7d9f   42m          187Mi\n$ kubectl get events --field-selector involvedObject.name=api-7d9f\nLAST SEEN   TYPE      REASON      OBJECT         MESSAGE\n3m          Warning   Unhealthy   pod/api-7d9f   Readiness probe failed: HTTP probe failed with statuscode: 503\n2m          Warning   BackOff     pod/api-7d9f   Back-off restarting failed container api in pod api-7d9f",
        "note": "`Reason: OOMKilled` and `Exit Code: 137` in Last State confirm a memory-limit kill."
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is a complete, working `Deployment` manifest called `api` that you can apply with `kubectl apply -f`; it puts the probes and resources into a real file instead of a fragment. We show it so you can copy a full example. Look at where `startupProbe`, `readinessProbe`, `livenessProbe` and `resources` sit inside the container, and check that the probe ports match the `containerPort`."
       },
       {
        "type": "code",
@@ -1131,6 +1231,11 @@
          "OOMKilled (exit 137)"
         ]
        ]
+      },
+      {
+       "type": "text",
+       "title": "What this example is",
+       "body": "This is sample output of `kubectl describe pod` for a Pod whose liveness probe keeps failing; it is text you read, not a file you apply. We show it so you can recognise this problem in real life. Look at `Restart Count: 4`, `Ready: False`, `Last State: Terminated`, and the Events at the bottom: `Liveness probe failed` followed by `Killing`, which means the kubelet is restarting the container."
       },
       {
        "type": "code",

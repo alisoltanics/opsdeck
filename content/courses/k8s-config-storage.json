@@ -42,12 +42,22 @@
        "caption": "Click a box to see what it does."
       },
       {
+       "type": "text",
+       "title": "Two ways to create a ConfigMap",
+       "body": "This is the command-line way to create a ConfigMap, followed by a declarative alternative. `kubectl create configmap app-config` builds it from a literal (`LOG_LEVEL=info`) and from a local file (`nginx.conf`), and `kubectl get ... -o yaml` prints back what the cluster stored. We show it first so you see that a ConfigMap is just named key/value data; look at how the file name became a key under `data`. The second half pipes a YAML manifest into `kubectl apply` to create `app-settings`."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl create configmap app-config \\\n  --from-literal=LOG_LEVEL=info \\\n  --from-file=nginx.conf\nkubectl get configmap app-config -o yaml\n\n# or declaratively\ncat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: app-settings\ndata:\n  LOG_LEVEL: info\n  FEATURE_X: \"true\"\n  app.properties: |\n    mode=production\n    retries=3\nEOF",
        "title": "Creating a ConfigMap",
        "output": "configmap/app-config created\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  creationTimestamp: \"2025-03-10T09:12:41Z\"\n  name: app-config\n  namespace: default\n  resourceVersion: \"48213\"\n  uid: 7c1f0b52-6a3e-4d0e-9c64-2f1d8e5b9a10\ndata:\n  LOG_LEVEL: info\n  nginx.conf: |\n    server {\n      listen 80;\n      location / { return 200 \"ok\\n\"; }\n    }\nconfigmap/app-settings created",
        "note": "Values under `data` are always strings, so quote booleans and numbers. Use `binaryData` for non-UTF-8 content. `--from-file=nginx.conf` makes the file name the key and the file content the value."
+      },
+      {
+       "type": "text",
+       "title": "The app-settings manifest in full",
+       "body": "This is the full YAML file for the `app-settings` ConfigMap, the same object the previous command created, written as a manifest you can keep in Git and apply with `kubectl apply -f`. Look at the two kinds of keys under `data`: short values such as `LOG_LEVEL` and `FEATURE_X`, and multi-line blocks (`app.properties`, `nginx.conf`) introduced by `|` that become the content of whole files. Note the quotes around `\"true\"`, because every value is a string."
       },
       {
        "type": "code",
@@ -58,12 +68,22 @@
        "note": "Literal keys (LOG_LEVEL) suit environment variables; file-style keys (app.properties, nginx.conf) suit volume mounts."
       },
       {
+       "type": "text",
+       "title": "Checking what was stored",
+       "body": "These two commands list the ConfigMaps in the namespace and then show the details of `app-settings`. We use them to confirm the object exists and holds the data we expect before any Pod depends on it. In the output, check the DATA column (number of keys) and the `Data` section, which prints every key and its value in clear text."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl get configmap\nkubectl describe configmap app-settings",
        "title": "Inspecting a ConfigMap",
        "output": "NAME               DATA   AGE\nkube-root-ca.crt   1      21d\napp-config         2      3m\napp-settings       4      2m\n\nName:         app-settings\nNamespace:    default\nLabels:       <none>\nAnnotations:  <none>\n\nData\n====\nFEATURE_X:\n----\ntrue\n\nLOG_LEVEL:\n----\ninfo\n\napp.properties:\n----\nmode=production\nretries=3\n\nnginx.conf:\n----\nserver {\n  listen 80;\n  location / { return 200 \"ok\\n\"; }\n}\n\n\nBinaryData\n====\n\nEvents:  <none>",
        "note": "DATA counts keys. Unlike Secrets, describe prints the values in clear text."
+      },
+      {
+       "type": "text",
+       "title": "A Pod that consumes the ConfigMap",
+       "body": "This is a Pod manifest, saved as `cfg-demo.yaml` and applied with `kubectl apply -f cfg-demo.yaml`, that uses `app-settings` in three ways. `env` with `configMapKeyRef` injects one key as `LOG_LEVEL`, `envFrom` injects every key as variables, and the `configMap` volume mounted at `/etc/app` turns the `app.properties` key into a file. Its command prints the variables and the file, so `kubectl logs` shows whether it worked."
       },
       {
        "type": "code",
@@ -74,6 +94,11 @@
        "note": "`env`/`envFrom` inject variables; the `configMap` volume projects each key as a file."
       },
       {
+       "type": "text",
+       "title": "Looking at the mounted files",
+       "body": "These commands run inside the running `cfg-demo` Pod to list the `/etc/app` directory and print the `app.properties` file. We do this to prove the ConfigMap key really became a file. In the output, notice that the file is a symlink into a `..data` directory, which is how Kubernetes swaps in updated content."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl exec cfg-demo -- ls -l /etc/app\nkubectl exec cfg-demo -- cat /etc/app/app.properties",
@@ -82,12 +107,22 @@
        "note": "Each key becomes a symlink into a timestamped ..data directory; the kubelet swaps that link atomically on updates."
       },
       {
+       "type": "text",
+       "title": "What the Pod sees",
+       "body": "This is not a file you create or apply. It is a plain-text summary of what the `cfg-demo` Pod sees: the contents of `/etc/app/app.properties` and the two environment variables injected from the ConfigMap. We show it so you can match each value back to the keys in `app-settings`."
+      },
+      {
        "type": "code",
        "language": "text",
        "code": "# /etc/app/app.properties (inside the container)\nmode=production\nretries=3\n\n# environment (env | grep -E 'LOG|FEATURE')\nLOG_LEVEL=info\nFEATURE_X=true",
        "title": "Sample content as seen in the container",
        "output": "",
        "note": "Not applyable: this is what the Pod sees, not a manifest."
+      },
+      {
+       "type": "text",
+       "title": "Using a ConfigMap in a Deployment",
+       "body": "This is a Deployment manifest (`kubectl apply -f`) that runs two nginx replicas configured from `app-settings`. It sets `LOG_LEVEL` as an environment variable and mounts only the `nginx.conf` key as `/etc/nginx/conf.d/default.conf`. Look at the `subPath` line: it lets you place one file into an existing directory, but files mounted this way do not receive later ConfigMap updates."
       },
       {
        "type": "code",
@@ -122,6 +157,11 @@
          "subPath mounts never receive updates"
         ]
        ]
+      },
+      {
+       "type": "text",
+       "title": "Locking a ConfigMap with immutable",
+       "body": "This is a small ConfigMap manifest, `app-config-v2`, with `immutable: true` on the last line. Immutable ConfigMaps cannot be edited after creation, which protects running Pods from accidental changes and reduces load on the API server. The output shows the error you get when you try to edit one anyway."
       },
       {
        "type": "code",
@@ -308,12 +348,22 @@
        ]
       },
       {
+       "type": "text",
+       "title": "A Secret written as a manifest",
+       "body": "This is the YAML file for a Secret named `db-creds`, applied with `kubectl apply -f`. The type `Opaque` means generic key/value data, and values under `data` must be base64-encoded (`YXBw` is `app`). Remember that base64 is only an encoding, not encryption, so anyone who can read this file can read the password."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db-creds\ntype: Opaque\ndata:\n  username: YXBw\n  password: UzNjcjN0IQ==",
        "title": "Opaque Secret manifest (base64 data)",
        "output": "secret/db-creds configured",
        "note": "Alternative: use `stringData:` with plaintext values and the API server encodes them for you on write."
+      },
+      {
+       "type": "text",
+       "title": "Skipping the manual base64 step",
+       "body": "This is another Secret manifest, `db-creds-plain`, applied with `kubectl apply -f`. Instead of `data` it uses `stringData`, where you type plain values and the API server encodes them for you. We show it because it is the easiest way to write a Secret by hand; compare the `password` line with the base64 version above."
       },
       {
        "type": "code",
@@ -324,12 +374,22 @@
        "note": "stringData is write-only: kubectl get -o yaml returns it base64-encoded under data."
       },
       {
+       "type": "text",
+       "title": "How Secrets appear when you read them",
+       "body": "These three commands list Secrets, print `db-creds` as YAML, and describe it. We run them to see what Kubernetes reveals. In the output, look at the base64 values from `get -o yaml` versus the byte sizes only that `describe` shows."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl get secret\nkubectl get secret db-creds -o yaml\nkubectl describe secret db-creds",
        "title": "Reading Secrets",
        "output": "NAME         TYPE                             DATA   AGE\ndb-creds     Opaque                           2      5m\nregcred      kubernetes.io/dockerconfigjson   1      5m\nweb-tls      kubernetes.io/tls                2      5m\n\napiVersion: v1\ndata:\n  password: UzNjcjN0IQ==\n  username: YXBw\nkind: Secret\nmetadata:\n  creationTimestamp: \"2025-03-10T09:30:02Z\"\n  name: db-creds\n  namespace: default\n  resourceVersion: \"49110\"\n  uid: 3b9a1d7e-52f4-4c8a-b0a1-9d6e47c2f8a3\ntype: Opaque\n\nName:         db-creds\nNamespace:    default\nLabels:       <none>\nAnnotations:  <none>\n\nType:  Opaque\n\nData\n====\npassword:  7 bytes\nusername:  3 bytes",
        "note": "`get -o yaml` shows base64 values; `describe` deliberately shows only sizes."
+      },
+      {
+       "type": "text",
+       "title": "A Secret for private image registries",
+       "body": "This is a Secret manifest named `regcred` of type `kubernetes.io/dockerconfigjson`, used to pull images from a private registry. It has one key, `.dockerconfigjson`, whose base64 value holds the registry login. A Pod references it with `imagePullSecrets`, as shown in the Deployment later in this lesson."
       },
       {
        "type": "code",
@@ -340,12 +400,22 @@
        "note": "Decoded, .dockerconfigjson is the JSON shown next."
       },
       {
+       "type": "text",
+       "title": "What is inside that long value",
+       "body": "This is the JSON you get after base64-decoding the `.dockerconfigjson` value from `regcred`. It is not applied anywhere; we show it so the long string is not a mystery. Look at the registry host key (`registry.example.com`) and the `username`, `password` and `auth` fields."
+      },
+      {
        "type": "code",
        "language": "text",
        "code": "{\n  \"auths\": {\n    \"registry.example.com\": {\n      \"username\": \"bot\",\n      \"password\": \"TOKEN\",\n      \"auth\": \"Ym90OlRPS0VO\"\n    }\n  }\n}",
        "title": "Decoded .dockerconfigjson",
        "output": null,
        "note": "Use it in a Pod with `imagePullSecrets: [{name: regcred}]`."
+      },
+      {
+       "type": "text",
+       "title": "The shape of a TLS Secret",
+       "body": "This is an illustrative manifest for a Secret named `web-tls` of type `kubernetes.io/tls`, used for HTTPS certificates. It must contain exactly the keys `tls.crt` (the certificate) and `tls.key` (the private key), both base64-encoded. The values are truncated here, so create the real one with `kubectl create secret tls`."
       },
       {
        "type": "code",
@@ -356,11 +426,21 @@
        "note": "Shown with truncated values, so it is not applyable. Create the real one with `kubectl create secret tls web-tls --cert=tls.crt --key=tls.key`."
       },
       {
+       "type": "text",
+       "title": "Checking a certificate inside the Secret",
+       "body": "This command reads the `tls.crt` key of `web-tls`, decodes it from base64 and shows the first two lines. We use it to verify that the Secret holds a real PEM certificate. The `-----BEGIN CERTIFICATE-----` line is the sign that it decoded correctly."
+      },
+      {
        "type": "code",
        "language": "text",
        "code": "$ kubectl get secret web-tls -o jsonpath='{.data.tls\\.crt}' | base64 -d | head -2\n-----BEGIN CERTIFICATE-----\nMIIDXTCCAkWgAwIBAgIJAL...",
        "title": "Decoded TLS content",
        "output": null
+      },
+      {
+       "type": "text",
+       "title": "Creating Secrets from the command line",
+       "body": "These commands create the three Secrets used in this lesson without writing YAML: a generic one (`db-creds`), a TLS one (`web-tls`) and a registry one (`regcred`). The last line reads the password back and decodes it. Look at that last output: it shows how easy it is to recover a Secret value, which is why access to Secrets must be restricted."
       },
       {
        "type": "code",
@@ -371,6 +451,11 @@
        "note": "The last command prints the plaintext password for anyone with `get` on Secrets."
       },
       {
+       "type": "text",
+       "title": "A Pod that mounts a Secret",
+       "body": "This is a Pod manifest, `secret-demo`, applied with `kubectl apply -f`, that uses the `db-creds` Secret in two ways. `secretKeyRef` injects the password as the `DB_PASSWORD` variable, and the `secret` volume mounts each key as a file under `/etc/creds` with mode `0400` (owner read-only). The output shows the files, the variable, and that the mount is a `tmpfs` held in memory."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: secret-demo\nspec:\n  containers:\n  - name: app\n    image: busybox:1.36\n    command: [\"sleep\", \"3600\"]\n    env:\n    - name: DB_PASSWORD\n      valueFrom:\n        secretKeyRef:\n          name: db-creds\n          key: password\n    volumeMounts:\n    - name: creds\n      mountPath: /etc/creds\n      readOnly: true\n  volumes:\n  - name: creds\n    secret:\n      secretName: db-creds\n      defaultMode: 0400",
@@ -379,12 +464,22 @@
        "note": "Mounted Secrets live in a tmpfs (memory), never written to node disk. Files update eventually; env vars do not."
       },
       {
+       "type": "text",
+       "title": "The decoded result in the container",
+       "body": "This is not a file you apply. It shows what the `secret-demo` Pod sees: the two files under `/etc/creds` and the `DB_PASSWORD` variable. Notice that the values are already decoded, so the application never handles base64 itself."
+      },
+      {
        "type": "code",
        "language": "text",
        "code": "# /etc/creds/username  (mode 0400, no trailing newline)\napp\n\n# /etc/creds/password\nS3cr3t!\n\n# environment\nDB_PASSWORD=S3cr3t!",
        "title": "What the container sees",
        "output": null,
        "note": "Files hold the decoded value; Kubernetes decodes base64 for you in both env vars and volumes."
+      },
+      {
+       "type": "text",
+       "title": "Secrets in a Deployment",
+       "body": "This is a Deployment manifest, `api`, applied with `kubectl apply -f`, that combines three Secrets. `imagePullSecrets` uses `regcred` to pull the private image, `envFrom` with `secretRef` turns every key of `db-creds` into an environment variable, and the `web-tls` volume mounts the certificate files at `/etc/tls`. It shows how Secrets are used in a realistic workload."
       },
       {
        "type": "code",
@@ -558,12 +653,22 @@
        "body": "A **StorageClass** describes a kind of storage (SSD, replicated, ...) and the provisioner that creates it. When a PVC names a class, the provisioner creates a PV automatically: **dynamic provisioning**. A class marked default is used when the PVC omits `storageClassName`.\n\n`volumeBindingMode: WaitForFirstConsumer` delays provisioning until a Pod is scheduled, so the volume is created in the right zone."
       },
       {
+       "type": "text",
+       "title": "A StorageClass in YAML",
+       "body": "This is the manifest for a StorageClass named `fast-ssd`, applied with `kubectl apply -f`. It tells Kubernetes which driver (`provisioner: ebs.csi.aws.com`) and settings (`type: gp3`) to use when a claim asks for storage. Look at `reclaimPolicy`, `allowVolumeExpansion` and `volumeBindingMode`, which control what happens on deletion, resizing and timing."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: fast-ssd\n  annotations:\n    storageclass.kubernetes.io/is-default-class: \"false\"\nprovisioner: ebs.csi.aws.com\nparameters:\n  type: gp3\nreclaimPolicy: Delete\nallowVolumeExpansion: true\nvolumeBindingMode: WaitForFirstConsumer",
        "title": "StorageClass manifest",
        "output": "storageclass.storage.k8s.io/fast-ssd created",
        "note": "The provisioner and parameters are driver specific; this sample uses the AWS EBS CSI driver."
+      },
+      {
+       "type": "text",
+       "title": "A manually created PersistentVolume",
+       "body": "This is a PersistentVolume manifest, `pv-manual-10g`, applied with `kubectl apply -f`. It describes 10Gi of storage that an administrator provides by hand, here a `hostPath` folder on the node, which is only suitable for test clusters. Look at `storageClassName: manual` and `Retain`: a claim must use the same class to bind to it."
       },
       {
        "type": "code",
@@ -574,11 +679,21 @@
        "note": "hostPath is for single-node test clusters only. A PVC with storageClassName: manual and a request up to 10Gi can bind to it."
       },
       {
+       "type": "text",
+       "title": "Claiming the volume",
+       "body": "This is a PersistentVolumeClaim manifest, `manual-claim`, applied with `kubectl apply -f`. A claim is a request for storage: it asks for 10Gi with `ReadWriteOnce` access and class `manual`, which matches the PV we just created. Kubernetes then binds the two together."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: manual-claim\nspec:\n  accessModes: [\"ReadWriteOnce\"]\n  storageClassName: manual\n  resources:\n    requests:\n      storage: 10Gi",
        "title": "PVC that binds the static PV",
        "output": "persistentvolumeclaim/manual-claim created"
+      },
+      {
+       "type": "text",
+       "title": "Seeing classes, volumes and claims",
+       "body": "These commands list StorageClasses, PersistentVolumes and PersistentVolumeClaims. We run them to check that the claim and volume found each other. In the output, look for `Bound` in the STATUS column and the CLAIM column of the PV, which names the claim using it."
       },
       {
        "type": "code",
@@ -587,6 +702,11 @@
        "title": "Listing storage objects",
        "output": "NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE\nfast-ssd             ebs.csi.aws.com         Delete          WaitForFirstConsumer   true                   2d\nstandard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  21d\n\nNAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                  STORAGECLASS   AGE\npv-manual-10g                              10Gi       RWO            Retain           Bound    default/manual-claim   manual         3m\npvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4   5Gi        RWO            Delete           Bound    default/data-pvc       standard       12m\n\nNAME           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE\ndata-pvc       Bound    pvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4   5Gi        RWO            standard       12m\nmanual-claim   Bound    pv-manual-10g                              10Gi       RWO            manual         2m",
        "note": "PVs are cluster-scoped (no namespace), so CLAIM shows namespace/name. Statuses: Available, Bound, Released, Failed (PV); Pending, Bound, Lost (PVC)."
+      },
+      {
+       "type": "text",
+       "title": "Dynamic storage for a database Pod",
+       "body": "This file holds two objects separated by `---`, applied with `kubectl apply -f`. The first is a 5Gi claim `data-pvc` with no PV prepared by hand: the `standard` class creates one automatically. The second is a Pod `db` that mounts the claim at `/var/lib/postgresql/data` through `claimName`, so the database files live on durable storage."
       },
       {
        "type": "code",
@@ -691,6 +811,11 @@
        ]
       },
       {
+       "type": "text",
+       "title": "What happens when a claim is deleted",
+       "body": "These commands delete the claim `manual-claim` and then check the PV it was using. We run them to see the `Retain` policy in action. In the output, the PV status changes from `Bound` to `Released` and still names the old claim, so its data is kept."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl delete pvc manual-claim\nkubectl get pv pv-manual-10g",
@@ -705,12 +830,22 @@
        "body": "With a `Delete` reclaim policy the underlying disk is destroyed with the claim. For important data use `Retain`: `kubectl patch pv NAME -p '{\"spec\":{\"persistentVolumeReclaimPolicy\":\"Retain\"}}'`. For databases prefer a StatefulSet with `volumeClaimTemplates` so each replica gets its own PVC."
       },
       {
+       "type": "text",
+       "title": "Troubleshooting a claim",
+       "body": "These commands are the standard checklist for storage problems: list classes, list claims and volumes, describe the claim `data-pvc`, and read its events. Use them when a Pod is stuck waiting for a volume. In the output, check the `Status`, the bound volume name, `Used By`, and the events at the bottom for provisioning errors."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl get storageclass\nkubectl get pvc,pv\nkubectl describe pvc data-pvc\nkubectl get events --field-selector involvedObject.name=data-pvc",
        "title": "Inspecting storage",
        "output": "NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE\nstandard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  21d\n\nNAME                                                        CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM              STORAGECLASS   AGE\npersistentvolume/pvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4   5Gi        RWO            Delete           Bound    default/data-pvc   standard       12m\n\nNAME                             STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE\npersistentvolumeclaim/data-pvc   Bound    pvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4   5Gi        RWO            standard       12m\n\nName:          data-pvc\nNamespace:     default\nStorageClass:  standard\nStatus:        Bound\nVolume:        pvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4\nLabels:        <none>\nAnnotations:   pv.kubernetes.io/bind-completed: yes\n               volume.kubernetes.io/selected-node: worker-1\nFinalizers:    [kubernetes.io/pvc-protection]\nCapacity:      5Gi\nAccess Modes:  RWO\nVolumeMode:    Filesystem\nUsed By:       db\nEvents:\n  Type    Reason                 Age   From                         Message\n  ----    ------                 ----  ----                         -------\n  Normal  WaitForFirstConsumer   45s   persistentvolume-controller  waiting for first consumer to be created before binding\n  Normal  ExternalProvisioning   40s   persistentvolume-controller  Waiting for a volume to be created\n  Normal  ProvisioningSucceeded  38s   rancher.io/local-path        Successfully provisioned volume pvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4\n\nLAST SEEN   TYPE     REASON                  OBJECT                       MESSAGE\n45s         Normal   WaitForFirstConsumer    persistentvolumeclaim/data-pvc   waiting for first consumer to be created before binding\n38s         Normal   ProvisioningSucceeded   persistentvolumeclaim/data-pvc   Successfully provisioned volume pvc-5e1c2a7d-9b34-4f10-8d2a-6a0b7c93e1f4",
        "note": "Look for the bound volume name and any provisioning errors in the events."
+      },
+      {
+       "type": "text",
+       "title": "Testing that data survives",
+       "body": "These commands write a file `marker.txt` into the database directory, delete the Pod, recreate it from `db-pod.yaml` and read the file back. This is the practical proof of why PVCs exist. If the final command prints `hello`, the data outlived the Pod."
       },
       {
        "type": "code",
@@ -837,6 +972,11 @@
        "body": "In a shared cluster one team can starve the others. Kubernetes governs this per namespace with two objects:\n\n- A **ResourceQuota** caps the **aggregate** consumption of a namespace: total CPU/memory requests and limits, storage, and object counts.\n- A **LimitRange** constrains **individual** objects: default requests/limits for containers that omit them, plus min and max values per container, Pod or PVC.\n\nThey work together: once a quota covers `requests.cpu` or `limits.memory`, every new Pod must specify them, and a LimitRange default supplies them automatically."
       },
       {
+       "type": "text",
+       "title": "A quota for a whole namespace",
+       "body": "This is a ResourceQuota manifest, `team-a-quota`, applied with `kubectl apply -f quota.yaml`. It sets a ceiling on the total resources the `team-a` namespace may use. Look under `hard`: totals for CPU and memory requests and limits, plus object counts such as `pods`, `persistentvolumeclaims` and `services.loadbalancers`."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: team-a-quota\n  namespace: team-a\nspec:\n  hard:\n    requests.cpu: \"4\"\n    requests.memory: 8Gi\n    limits.cpu: \"8\"\n    limits.memory: 16Gi\n    pods: \"20\"\n    persistentvolumeclaims: \"5\"\n    requests.storage: 100Gi\n    services.loadbalancers: \"1\"",
@@ -891,6 +1031,11 @@
        ]
       },
       {
+       "type": "text",
+       "title": "Defaults and bounds per container",
+       "body": "This is a LimitRange manifest, `container-defaults`, applied with `kubectl apply -f limitrange.yaml` in the `team-a` namespace. It works per container, unlike the quota which works per namespace. `defaultRequest` and `default` fill in missing values, and `min` and `max` set the smallest and largest values allowed."
+      },
+      {
        "type": "code",
        "language": "yaml",
        "code": "apiVersion: v1\nkind: LimitRange\nmetadata:\n  name: container-defaults\n  namespace: team-a\nspec:\n  limits:\n  - type: Container\n    defaultRequest:\n      cpu: 100m\n      memory: 128Mi\n    default:\n      cpu: 500m\n      memory: 512Mi\n    min:\n      cpu: 50m\n      memory: 64Mi\n    max:\n      cpu: \"2\"\n      memory: 2Gi",
@@ -925,6 +1070,11 @@
        ]
       },
       {
+       "type": "text",
+       "title": "A Pod that breaks the maximum",
+       "body": "This command tries to start a Pod `huge` in `team-a` with a CPU limit of 4, which is above the LimitRange maximum of 2. We run it to see the rule being enforced. The error message names the broken rule: `maximum cpu usage per Container is 2, but limit is 4`."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl run huge -n team-a --image=nginx:alpine --limits=cpu=4",
@@ -933,11 +1083,21 @@
        "note": "Note: on newer kubectl, `--limits` is removed; use a manifest with resources.limits.cpu: \"4\" for the same result."
       },
       {
+       "type": "text",
+       "title": "A Pod that exceeds the quota",
+       "body": "This command creates a Pod `big` that requests 3 CPUs, using `--overrides` to set resources inline. The namespace already uses 3500m of its 4 CPU request quota, so it does not fit. The error lists what was requested, what is used and what the limit is."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl run big -n team-a --image=nginx:alpine --overrides='{\"spec\":{\"containers\":[{\"name\":\"big\",\"image\":\"nginx:alpine\",\"resources\":{\"requests\":{\"cpu\":\"3\"},\"limits\":{\"cpu\":\"3\"}}}]}}'",
        "title": "Pod rejected by ResourceQuota",
        "output": "Error from server (Forbidden): pods \"big\" is forbidden: exceeded quota: team-a-quota, requested: requests.cpu=3, used: requests.cpu=3500m, limited: requests.cpu=4"
+      },
+      {
+       "type": "text",
+       "title": "A Pod with no resources set",
+       "body": "This command starts a plain nginx Pod with no CPU or memory values. Because the quota covers requests and limits, every Pod must declare them. The error lists the missing fields; a LimitRange with defaults avoids this."
       },
       {
        "type": "code",
@@ -948,11 +1108,21 @@
        "note": "This is what happens when no LimitRange supplies defaults."
       },
       {
+       "type": "text",
+       "title": "Checking the injected defaults",
+       "body": "This command prints the `resources` section of a Pod named `probe` that was created without any resource values. We run it to see the LimitRange at work. The output shows the `requests` and `limits` that were added automatically, matching `defaultRequest` and `default`."
+      },
+      {
        "type": "code",
        "language": "bash",
        "code": "kubectl get pod probe -n team-a -o jsonpath='{.spec.containers[0].resources}'",
        "title": "Defaults injected into a Pod",
        "output": "{\"limits\":{\"cpu\":\"500m\",\"memory\":\"512Mi\"},\"requests\":{\"cpu\":\"100m\",\"memory\":\"128Mi\"}}"
+      },
+      {
+       "type": "text",
+       "title": "Setting up and monitoring the namespace",
+       "body": "These commands create the `team-a` namespace, apply `quota.yaml` and `limitrange.yaml`, and then inspect them. `describe resourcequota` shows Used versus Hard for each resource, and `describe limitrange` shows the defaults and bounds. The last command lists events with reason `FailedCreate`, where rejections from the quota appear."
       },
       {
        "type": "code",
