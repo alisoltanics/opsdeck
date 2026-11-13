@@ -120,8 +120,24 @@
        "language": "bash",
        "code": "kubectl get nodes -o wide\nkubectl get pods -n kube-system\nkubectl cluster-info",
        "title": "Inspect a running cluster",
-       "output": null,
+       "output": "$ kubectl get nodes -o wide\nNAME            STATUS   ROLES           AGE   VERSION   INTERNAL-IP    EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION     CONTAINER-RUNTIME\ncp-1            Ready    control-plane   42d   v1.31.2   192.168.1.10   <none>        Ubuntu 24.04.1 LTS   6.8.0-48-generic   containerd://1.7.22\nworker-1        Ready    <none>          42d   v1.31.2   192.168.1.11   <none>        Ubuntu 24.04.1 LTS   6.8.0-48-generic   containerd://1.7.22\nworker-2        Ready    <none>          42d   v1.31.2   192.168.1.12   <none>        Ubuntu 24.04.1 LTS   6.8.0-48-generic   containerd://1.7.22\n\n$ kubectl get pods -n kube-system\nNAME                               READY   STATUS    RESTARTS   AGE\ncoredns-7c65d6cfc9-4x2kq           1/1     Running   0          42d\ncoredns-7c65d6cfc9-m8vzt           1/1     Running   0          42d\netcd-cp-1                          1/1     Running   0          42d\nkube-apiserver-cp-1                1/1     Running   0          42d\nkube-controller-manager-cp-1       1/1     Running   1          42d\nkube-proxy-5hj7d                   1/1     Running   0          42d\nkube-proxy-q9w2s                   1/1     Running   0          42d\nkube-proxy-zz6tn                   1/1     Running   0          42d\nkube-scheduler-cp-1                1/1     Running   1          42d\n\n$ kubectl cluster-info\nKubernetes control plane is running at https://192.168.1.10:6443\nCoreDNS is running at https://192.168.1.10:6443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy",
        "note": "On most clusters the control plane components appear as Pods in `kube-system`; on managed services (EKS, GKE, AKS) the control plane is hidden from you."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl api-resources | head -12\nkubectl api-versions | head -8\nkubectl get --raw='/readyz?verbose' | tail -4",
+       "title": "Discover what the API server offers",
+       "output": "$ kubectl api-resources | head -12\nNAME                SHORTNAMES   APIVERSION   NAMESPACED   KIND\nbindings                         v1           true         Binding\nconfigmaps          cm           v1           true         ConfigMap\nendpoints           ep           v1           true         Endpoints\nevents              ev           v1           true         Event\nnamespaces          ns           v1           false        Namespace\nnodes               no           v1           false        Node\npersistentvolumes   pv           v1           false        PersistentVolume\npods                po           v1           true         Pod\nsecrets                          v1           true         Secret\nservices            svc          v1           true         Service\ndeployments         deploy       apps/v1      true         Deployment\n\n$ kubectl api-versions | head -8\nadmissionregistration.k8s.io/v1\napiextensions.k8s.io/v1\napiregistration.k8s.io/v1\napps/v1\nauthentication.k8s.io/v1\nauthorization.k8s.io/v1\nautoscaling/v2\nbatch/v1\n\n$ kubectl get --raw='/readyz?verbose' | tail -4\n[+]shutdown ok\n[+]poststarthook/start-kube-apiserver-admission-initializer ok\n[+]etcd ok\nreadyz check passed",
+       "note": "`api-resources` lists every object kind (and its short name) the cluster understands; `api-versions` lists the group/version strings you put in `apiVersion`."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "$ kubectl describe node worker-1\nName:               worker-1\nRoles:              <none>\nLabels:             kubernetes.io/arch=amd64\n                    kubernetes.io/hostname=worker-1\n                    kubernetes.io/os=linux\nTaints:             <none>\nConditions:\n  Type             Status  Reason                       Message\n  ----             ------  ------                       -------\n  MemoryPressure   False   KubeletHasSufficientMemory   kubelet has sufficient memory available\n  DiskPressure     False   KubeletHasNoDiskPressure     kubelet has no disk pressure\n  Ready            True    KubeletReady                 kubelet is posting ready status\nCapacity:\n  cpu:             4\n  memory:          8053740Ki\n  pods:            110\nAllocatable:\n  cpu:             4\n  memory:          7951340Ki\n  pods:            110\nSystem Info:\n  Kubelet Version:            v1.31.2\n  Container Runtime Version:  containerd://1.7.22\nNon-terminated Pods:          (3 in total)\n  Namespace    Name              CPU Requests  Memory Requests\n  kube-system  kube-proxy-q9w2s  0 (0%)        0 (0%)\n  default      web-6d8f9c-abcde  100m (2%)     128Mi (1%)",
+       "title": "Sample: what a node reports about itself (abridged)",
+       "output": null,
+       "note": "Conditions tell you if the kubelet is healthy; Capacity vs Allocatable is what the scheduler can actually hand out to Pods."
       }
      ],
      "exercises": [
@@ -241,8 +257,16 @@
        "language": "bash",
        "code": "kubectl config get-contexts\nkubectl config current-context\nkubectl config use-context dev-cluster\nkubectl config set-context --current --namespace=shop",
        "title": "Working with contexts",
+       "output": "$ kubectl config get-contexts\nCURRENT   NAME           CLUSTER        AUTHINFO      NAMESPACE\n*         dev-cluster    dev-cluster    dev-admin     shop\n          prod-cluster   prod-cluster   prod-reader\n\n$ kubectl config current-context\ndev-cluster\n\n$ kubectl config use-context prod-cluster\nSwitched to context \"prod-cluster\".\n\n$ kubectl config set-context --current --namespace=shop\nContext \"dev-cluster\" modified.",
+       "note": "`use-context` rewrites `current-context` in the kubeconfig file. It is blocked in the app console, so run it in your own terminal; here, just read what it prints. The `*` marks the active context."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "apiVersion: v1\nkind: Config\ncurrent-context: dev-cluster          # context kubectl uses right now\n\nclusters:                             # WHERE: API servers to talk to\n  - name: dev-cluster\n    cluster:\n      server: https://127.0.0.1:6443\n      certificate-authority-data: LS0tLS1CRUdJTi...   # truncated CA cert (base64)\n  - name: prod-cluster\n    cluster:\n      server: https://prod.example.com:6443\n      certificate-authority-data: LS0tLS1CRUdJTi...\n\nusers:                                # WHO: credentials\n  - name: dev-admin\n    user:\n      client-certificate-data: LS0tLS1CRUdJTi...\n      client-key-data: LS0tLS1CRUdJTi...\n  - name: prod-reader\n    user:\n      token: <redacted>\n\ncontexts:                             # WHICH combination: cluster + user + default namespace\n  - name: dev-cluster\n    context:\n      cluster: dev-cluster\n      user: dev-admin\n      namespace: shop\n  - name: prod-cluster\n    context:\n      cluster: prod-cluster\n      user: prod-reader",
+       "title": "~/.kube/config (kubeconfig, fake data)",
        "output": null,
-       "note": null
+       "note": "`clusters` says where the API servers are and which CA to trust; `users` holds credentials (certificate pair, token or exec plugin); `contexts` pair one cluster with one user and an optional default namespace; `current-context` selects the active pair. Never commit or paste real kubeconfigs: they contain secrets. Use KUBECONFIG=a:b to merge several files. This is not a manifest, so it cannot be applied."
       },
       {
        "type": "text",
@@ -262,8 +286,24 @@
        "language": "bash",
        "code": "kubectl apply -f web-pod.yaml\nkubectl get pod web -o wide\nkubectl describe pod web\nkubectl logs web\nkubectl exec -it web -- sh\nkubectl delete -f web-pod.yaml",
        "title": "The daily loop",
-       "output": null,
+       "output": "$ kubectl apply -f web-pod.yaml\npod/web created\n\n$ kubectl get pod web -o wide\nNAME   READY   STATUS    RESTARTS   AGE   IP            NODE       NOMINATED NODE   READINESS GATES\nweb    1/1     Running   0          23s   10.244.1.14   worker-1   <none>           <none>\n\n$ kubectl describe pod web\nName:             web\nNamespace:        default\nNode:             worker-1/192.168.1.11\nStatus:           Running\nIP:               10.244.1.14\nContainers:\n  nginx:\n    Image:          nginx:1.27\n    Port:           80/TCP\n    State:          Running\n      Started:      Fri, 13 Nov 2026 09:14:02 +0000\n    Ready:          True\n    Restart Count:  0\nEvents:\n  Type    Reason     Age   From               Message\n  ----    ------     ----  ----               -------\n  Normal  Scheduled  25s   default-scheduler  Successfully assigned default/web to worker-1\n  Normal  Pulled     24s   kubelet            Container image \"nginx:1.27\" already present on machine\n  Normal  Created    24s   kubelet            Created container nginx\n  Normal  Started    24s   kubelet            Started container nginx\n\n$ kubectl logs web\n/docker-entrypoint.sh: Configuration complete; ready for start up\n2026/11/13 09:14:02 [notice] 1#1: nginx/1.27.2\n2026/11/13 09:14:02 [notice] 1#1: start worker processes\n\n$ kubectl exec -it web -- sh\n# nginx -v\nnginx version: nginx/1.27.2\n# exit\n\n$ kubectl delete -f web-pod.yaml\npod \"web\" deleted",
        "note": null
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  labels:\n    app: web\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: nginx\n          image: nginx:1.27\n          ports:\n            - containerPort: 80",
+       "title": "web-deployment.yaml (declarative desired state)",
+       "output": null,
+       "note": "You declare 3 replicas; the Deployment controller keeps 3 Pods alive and replaces any that disappear. Re-running `kubectl apply` after editing the file changes the cluster to match."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl apply -f web-deployment.yaml\nkubectl get deployment web\nkubectl diff -f web-deployment.yaml\nkubectl get pod web -o yaml | head -20",
+       "title": "Apply, diff and read back an object",
+       "output": "$ kubectl apply -f web-deployment.yaml\ndeployment.apps/web created\n\n$ kubectl get deployment web\nNAME   READY   UP-TO-DATE   AVAILABLE   AGE\nweb    3/3     3            3           18s\n\n$ kubectl diff -f web-deployment.yaml\n(no output: live object already matches the file)\n\n$ kubectl get pod web -o yaml | head -20\napiVersion: v1\nkind: Pod\nmetadata:\n  creationTimestamp: \"2026-11-13T09:14:00Z\"\n  name: web\n  namespace: default\n  resourceVersion: \"184233\"\n  uid: 5f0c1c52-7a43-4c1d-9c0e-2f6a2b0f9a11\nspec:\n  containers:\n  - image: nginx:1.27\n    name: nginx\n    ports:\n    - containerPort: 80\n  nodeName: worker-1\nstatus:\n  phase: Running\n  podIP: 10.244.1.14",
+       "note": "`kubectl diff` shows what apply would change; `-o yaml` shows the full object including the `status` the cluster added."
       },
       {
        "type": "callout",
@@ -446,7 +486,15 @@
        "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: api\nspec:\n  restartPolicy: Always\n  initContainers:\n    - name: wait-db\n      image: busybox:1.36\n      command: ['sh', '-c', 'until nc -z db 5432; do sleep 2; done']\n  containers:\n    - name: api\n      image: ghcr.io/example/api:1.4\n      ports:\n        - containerPort: 8080\n      readinessProbe:\n        httpGet:\n          path: /ready\n          port: 8080\n        periodSeconds: 5\n      livenessProbe:\n        httpGet:\n          path: /healthz\n          port: 8080\n        initialDelaySeconds: 10\n        periodSeconds: 10",
        "title": "Init container and probes",
        "output": null,
-       "note": null
+       "note": "`initContainers` run to completion one by one before the app starts. `readinessProbe` gates traffic; `livenessProbe` restarts a stuck container. `restartPolicy: Always` is the default for Pods that should keep running."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-sidecar\n  labels:\n    app: web\nspec:\n  containers:\n    - name: nginx\n      image: nginx:1.27\n      ports:\n        - containerPort: 80\n      resources:\n        requests:\n          cpu: 100m\n          memory: 64Mi\n        limits:\n          cpu: 250m\n          memory: 128Mi\n      volumeMounts:\n        - name: logs\n          mountPath: /var/log/nginx\n    - name: log-tailer\n      image: busybox:1.36\n      command: ['sh', '-c', 'tail -F /logs/access.log']\n      volumeMounts:\n        - name: logs\n          mountPath: /logs\n  volumes:\n    - name: logs\n      emptyDir: {}",
+       "title": "Multi-container Pod with shared volume and resources",
+       "output": null,
+       "note": "Both containers share the Pod's network namespace (localhost) and the `emptyDir` volume `logs`, which lives as long as the Pod. `requests` are what the scheduler reserves; `limits` are the ceiling (exceed memory and the container is OOMKilled)."
       },
       {
        "type": "table",
@@ -481,8 +529,62 @@
        "language": "bash",
        "code": "kubectl get pod api -w\nkubectl describe pod api\nkubectl logs api -c api --previous\nkubectl get pod api -o jsonpath='{.status.phase}'",
        "title": "Debugging a Pod",
-       "output": null,
+       "output": "$ kubectl get pod api -w\nNAME   READY   STATUS     RESTARTS   AGE\napi    0/1     Init:0/1   0          4s\napi    0/1     PodInitializing   0   12s\napi    0/1     Running    0          14s\napi    1/1     Running    0          21s\n\n$ kubectl describe pod api\nName:         api\nNamespace:    default\nNode:         worker-2/192.168.1.12\nStatus:       Running\nInit Containers:\n  wait-db:\n    State:          Terminated\n      Reason:       Completed\n      Exit Code:    0\nContainers:\n  api:\n    Image:          ghcr.io/example/api:1.4\n    State:          Running\n    Ready:          True\n    Restart Count:  2\n    Liveness:       http-get http://:8080/healthz delay=10s timeout=1s period=10s #success=1 #failure=3\n    Readiness:      http-get http://:8080/ready delay=0s timeout=1s period=5s #success=1 #failure=3\nConditions:\n  Type              Status\n  Initialized       True\n  Ready             True\n  ContainersReady   True\n  PodScheduled      True\nEvents:\n  Type     Reason     Age                From     Message\n  ----     ------     ----               ----     -------\n  Warning  Unhealthy  3m (x3 over 3m)    kubelet  Liveness probe failed: HTTP probe failed with statuscode: 500\n  Normal   Killing    3m                 kubelet  Container api failed liveness probe, will be restarted\n\n$ kubectl logs api -c api --previous\n2026-11-13T09:20:11Z INFO  listening on :8080\n2026-11-13T09:20:45Z ERROR db connection lost: dial tcp 10.96.40.7:5432: i/o timeout\n2026-11-13T09:20:45Z FATAL health check failing, exiting\n\n$ kubectl get pod api -o jsonpath='{.status.phase}'\nRunning",
        "note": "`--previous` shows logs of the last crashed container instance."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "$ kubectl get pods\nNAME            READY   STATUS             RESTARTS      AGE\napi             1/1     Running            2 (3m ago)    9m\nweb-sidecar     2/2     Running            0             5m\nbroken-image    0/1     ImagePullBackOff   0             2m\ncrashy          0/1     CrashLoopBackOff   6 (40s ago)   8m\nbig-job         0/1     OOMKilled          3 (1m ago)    4m\npending-pod     0/1     Pending            0             6m",
+       "title": "Sample: common STATUS values in kubectl get pods",
+       "output": null,
+       "note": "READY is ready containers / total containers. `ImagePullBackOff`: wrong image name or no registry access. `CrashLoopBackOff`: the process keeps exiting, check `logs --previous`. `OOMKilled`: memory limit exceeded. `Pending`: not scheduled, check `describe` Events for insufficient resources or taints."
+      },
+      {
+       "type": "table",
+       "title": "Reading a Pod manifest field by field",
+       "head": [
+        "Field",
+        "Meaning",
+        "Example"
+       ],
+       "rows": [
+        [
+         "`apiVersion`",
+         "API group/version of the kind",
+         "`v1`"
+        ],
+        [
+         "`kind`",
+         "Object type",
+         "`Pod`"
+        ],
+        [
+         "`metadata.name`",
+         "Unique name in the namespace",
+         "`api`"
+        ],
+        [
+         "`spec.containers[].image`",
+         "Image to run, always pin a tag",
+         "`nginx:1.27`"
+        ],
+        [
+         "`spec.containers[].resources`",
+         "Requests (scheduling) and limits (ceiling)",
+         "`cpu: 250m`"
+        ],
+        [
+         "`spec.restartPolicy`",
+         "What kubelet does when a container exits",
+         "`Always`"
+        ],
+        [
+         "`status.phase`",
+         "Filled by the cluster, never written by you",
+         "`Running`"
+        ]
+       ]
       }
      ],
      "exercises": [
@@ -602,8 +704,16 @@
        "language": "bash",
        "code": "kubectl create namespace staging\nkubectl get pods -n staging\nkubectl get pods -A\nkubectl config set-context --current --namespace=staging",
        "title": "Namespace commands",
-       "output": null,
+       "output": "$ kubectl create namespace staging\nnamespace/staging created\n\n$ kubectl get pods -n staging\nNo resources found in staging namespace.\n\n$ kubectl get pods -A\nNAMESPACE     NAME                        READY   STATUS    RESTARTS   AGE\ndefault       web                         1/1     Running   0          6m\nkube-system   coredns-7c65d6cfc9-4x2kq    1/1     Running   0          42d\nkube-system   etcd-cp-1                   1/1     Running   0          42d\nstaging       web-1                       1/1     Running   0          2m\n\n$ kubectl config set-context --current --namespace=staging\nContext \"dev-cluster\" modified.",
        "note": null
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: staging\n  labels:\n    env: staging",
+       "title": "namespace.yaml",
+       "output": null,
+       "note": "A Namespace is just a named scope; names of namespaced objects only need to be unique inside it. Nodes and PersistentVolumes are cluster-scoped and have no namespace."
       },
       {
        "type": "text",
@@ -623,8 +733,24 @@
        "language": "bash",
        "code": "kubectl get pods -l app=web\nkubectl get pods -l 'env in (staging,prod),tier!=backend'\nkubectl get pods --show-labels\nkubectl label pod web-1 version=v2\nkubectl annotate pod web-1 note='checked'",
        "title": "Selecting and editing",
+       "output": "$ kubectl get pods -l app=web\nNAME    READY   STATUS    RESTARTS   AGE\nweb-1   1/1     Running   0          4m\nweb-2   1/1     Running   0          4m\n\n$ kubectl get pods -l 'env in (staging,prod),tier!=backend'\nNAME    READY   STATUS    RESTARTS   AGE\nweb-1   1/1     Running   0          4m\n\n$ kubectl get pods --show-labels\nNAME    READY   STATUS    RESTARTS   AGE   LABELS\nweb-1   1/1     Running   0          4m    app=web,env=staging,tier=frontend\nweb-2   1/1     Running   0          4m    app=web,env=prod,tier=frontend\ndb-0    1/1     Running   0          4m    app=db,env=staging,tier=backend\n\n$ kubectl label pod web-1 version=v2\npod/web-1 labeled\n\n$ kubectl annotate pod web-1 note='checked'\npod/web-1 annotated",
+       "note": "Annotations hold non-identifying metadata (owners, URLs); labels are for selecting. Pods in `staging` can reach Services by short name inside the namespace and as `svc.staging` across namespaces."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\n  namespace: staging\nspec:\n  selector:\n    app: web\n    tier: frontend\n  ports:\n    - port: 80\n      targetPort: 80",
+       "title": "Selector in action: a Service",
        "output": null,
-       "note": "Equality (`=`, `!=`) and set-based (`in`, `notin`, existence) selectors are both supported."
+       "note": "The `selector` is the same label query as `-l app=web,tier=frontend`: any Pod in the namespace carrying both labels becomes an endpoint of this Service."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get namespaces\nkubectl describe namespace staging\nkubectl get endpoints web -n staging",
+       "title": "Inspecting namespaces and what a selector matched",
+       "output": "$ kubectl get namespaces\nNAME              STATUS   AGE\ndefault           Active   42d\nkube-node-lease   Active   42d\nkube-public       Active   42d\nkube-system       Active   42d\nstaging           Active   9m\n\n$ kubectl describe namespace staging\nName:         staging\nLabels:       env=staging\n              kubernetes.io/metadata.name=staging\nAnnotations:  <none>\nStatus:       Active\nNo resource quota.\nNo LimitRange resource.\n\n$ kubectl get endpoints web -n staging\nNAME   ENDPOINTS                       AGE\nweb    10.244.1.14:80,10.244.2.9:80    3m",
+       "note": null
       },
       {
        "type": "callout",

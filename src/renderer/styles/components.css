@@ -2359,3 +2359,7 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 .k8s-con:fullscreen, .k8s-con.is-full { border-radius: 0; border: 0; height: 100vh; width: 100vw; position: fixed; inset: 0; z-index: 500; }
 .k8s-con:fullscreen .k8s-con-feed, .k8s-con.is-full .k8s-con-feed { max-height: none; min-height: 0; }
 .k8s-con:fullscreen .k8s-con-out, .k8s-con.is-full .k8s-con-out { max-height: none; }
+
+.k8s-con-modal .overlay-body { padding: 0; }
+.k8s-con-modal .k8s-con { border-radius: 0 0 var(--r-md) var(--r-md); border-width: 1px 0 0; box-shadow: none; }
+.k8s-con-modal .k8s-con-feed { min-height: 320px; max-height: 62vh; }

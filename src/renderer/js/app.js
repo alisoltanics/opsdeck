@@ -45,7 +45,7 @@
     {
       label: 'Learn',
       items: [
-        { id: 'academy', label: 'Academy', icon: 'graduation-cap', href: '#/academy', badge: 'academy' },
+        { id: 'academy', label: 'Academy', icon: 'graduation-cap', href: '#/academy?track=docker', badge: 'academy' },
       ],
     },
   ];
@@ -130,7 +130,7 @@
     {
       label: 'Learn',
       items: [
-        { id: 'academy', label: 'Kubernetes Academy', icon: 'graduation-cap', href: '#/academy/courses?track=kubernetes' },
+        { id: 'academy', label: 'Kubernetes Academy', icon: 'graduation-cap', href: '#/academy?track=kubernetes' },
       ],
     },
   ];
@@ -310,6 +310,21 @@
     } catch { return 'docker'; }
   })();
 
+  // Docker and Kubernetes have separate academies. The track comes from the
+  // workspace the learner entered from, or from the course/lesson being opened.
+  function syncAcademyTrack(route) {
+    const [section, id] = route.parts;
+    let track = route.query.get('track');
+    if (!track && section === 'course') track = store.trackForCourse(id);
+    if (!track && section === 'lesson') track = store.trackForLesson(id);
+    if (!track) track = currentWorkspace === 'kubernetes' ? 'kubernetes' : 'docker';
+    if (track === 'kubernetes' || track === 'docker') {
+      currentWorkspace = track;
+      try { localStorage.setItem(WORKSPACE_KEY, track); } catch { /* optional */ }
+      store.setTrack(track);
+    }
+  }
+
   function workspaceIdForRoute(route) {
     let id = currentWorkspace;
     if (route?.name === 'kubernetes') id = 'kubernetes';
@@ -429,6 +444,7 @@
     const seq = ++renderSeq;
     const route = parseHash();
     store.state.route = route;
+    if (route.name === 'academy') syncAcademyTrack(route);
     setFaviconTitle(route);
 
     const previous = document.getElementById('view');
@@ -673,6 +689,7 @@
         ${icon('search', 13)}<span>Search or jump to…</span><span class="kbd">Ctrl K</span>
       </button>
       <div class="topbar-actions">
+        ${workspaceIdForRoute(route) === 'kubernetes' ? `<button type="button" class="btn btn-secondary btn-sm topbar-console" data-open-k8s-console title="Open the kubectl console over this page">${icon('terminal', 13)}<span>Kubectl console</span></button>` : ''}
         ${OD.ai ? OD.ai.topbarButton() : ''}
         <a class="env-pill ${ok ? '' : 'offline'}" href="#/terminal" title="${esc(ok ? `Engine ${status.serverVersion || ''}` : (status?.reason || 'Engine offline'))}"><span class="dot"></span>${ok ? 'Engine online' : 'Engine offline'}</a>
         <div class="zoom-control" title="Interface scale — Ctrl + / Ctrl − / Ctrl 0">
@@ -999,6 +1016,7 @@
 
     document.getElementById('topbar')?.addEventListener('click', (event) => {
       if (event.target.closest('#topbar-search')) openPalette();
+      if (event.target.closest('[data-open-k8s-console]')) OD.views.kubernetes?.openConsoleModal?.();
     });
     document.getElementById('sidebar')?.addEventListener('click', (event) => {
       if (event.target.closest('[data-action="retry-status"]')) runGlobalAction('retry-status');

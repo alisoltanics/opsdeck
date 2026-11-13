@@ -84,14 +84,130 @@
        "language": "bash",
        "code": "kubectl apply -f deployment.yaml\nkubectl scale deployment/web --replicas=5\nkubectl set image deployment/web web=nginx:1.28\nkubectl rollout status deployment/web\nkubectl rollout history deployment/web\nkubectl rollout undo deployment/web\nkubectl rollout undo deployment/web --to-revision=1\nkubectl rollout pause deployment/web",
        "title": null,
-       "output": null,
+       "output": "$ kubectl apply -f deployment.yaml\ndeployment.apps/web created\n$ kubectl scale deployment/web --replicas=5\ndeployment.apps/web scaled\n$ kubectl set image deployment/web web=nginx:1.28\ndeployment.apps/web image updated\n$ kubectl rollout status deployment/web\nWaiting for deployment \"web\" rollout to finish: 2 out of 5 new replicas have been updated...\nWaiting for deployment \"web\" rollout to finish: 4 out of 5 new replicas have been updated...\nWaiting for deployment \"web\" rollout to finish: 1 old replicas are pending termination...\ndeployment \"web\" successfully rolled out\n$ kubectl rollout history deployment/web\ndeployment.apps/web\nREVISION  CHANGE-CAUSE\n1         <none>\n2         <none>\n$ kubectl rollout undo deployment/web\ndeployment.apps/web rolled back\n$ kubectl rollout undo deployment/web --to-revision=1\ndeployment.apps/web rolled back\n$ kubectl rollout pause deployment/web\ndeployment.apps/web paused",
        "note": "`rollout status` exits non-zero if the rollout fails to progress within `progressDeadlineSeconds` (default 600s), which makes it useful in CI."
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl get deploy web\nkubectl get rs -l app=web\nkubectl get pods -l app=web -o wide\nkubectl describe deploy web\nkubectl get events --sort-by=.lastTimestamp | tail -6",
+       "title": "Inspecting the result",
+       "output": "$ kubectl get deploy web\nNAME   READY   UP-TO-DATE   AVAILABLE   AGE\nweb    5/5     5            5           12m\n$ kubectl get rs -l app=web\nNAME             DESIRED   CURRENT   READY   AGE\nweb-5d8c7f6b9d   0         0         0       12m\nweb-7c4b9f8d6b   5         5         5       4m\n$ kubectl get pods -l app=web -o wide\nNAME                   READY   STATUS    RESTARTS   AGE   IP            NODE       NOMINATED NODE   READINESS GATES\nweb-7c4b9f8d6b-4xk2p   1/1     Running   0          4m    10.244.1.12   worker-1   <none>           <none>\nweb-7c4b9f8d6b-9hq7t   1/1     Running   0          4m    10.244.2.9    worker-2   <none>           <none>\nweb-7c4b9f8d6b-bn6wd   1/1     Running   0          3m    10.244.1.13   worker-1   <none>           <none>\nweb-7c4b9f8d6b-m2zlc   1/1     Running   0          3m    10.244.2.10   worker-2   <none>           <none>\nweb-7c4b9f8d6b-tr5vs   1/1     Running   0          3m    10.244.1.14   worker-1   <none>           <none>\n$ kubectl describe deploy web\nName:                   web\nNamespace:              default\nSelector:               app=web\nReplicas:               5 desired | 5 updated | 5 total | 5 available | 0 unavailable\nStrategyType:           RollingUpdate\nRollingUpdateStrategy:  0 max unavailable, 1 max surge\nPod Template:\n  Containers:\n   web:\n    Image:        nginx:1.28\n    Port:         80/TCP\nConditions:\n  Type           Status  Reason\n  Available      True    MinimumReplicasAvailable\n  Progressing    True    NewReplicaSetAvailable\nOldReplicaSets:  web-5d8c7f6b9d (0/0 replicas created)\nNewReplicaSet:   web-7c4b9f8d6b (5/5 replicas created)\n$ kubectl get events --sort-by=.lastTimestamp | tail -6\n4m    Normal  ScalingReplicaSet  deployment/web  Scaled up replica set web-7c4b9f8d6b to 1\n4m    Normal  ScalingReplicaSet  deployment/web  Scaled down replica set web-5d8c7f6b9d to 4 from 5\n3m    Normal  ScalingReplicaSet  deployment/web  Scaled up replica set web-7c4b9f8d6b to 2 from 1\n3m    Normal  ScalingReplicaSet  deployment/web  Scaled down replica set web-5d8c7f6b9d to 3 from 4\n3m    Normal  ScalingReplicaSet  deployment/web  Scaled up replica set web-7c4b9f8d6b to 5 from 4\n3m    Normal  ScalingReplicaSet  deployment/web  Scaled down replica set web-5d8c7f6b9d to 0 from 1",
+       "note": "The ReplicaSet name is the Deployment name plus a hash of the Pod template; Pod names add a random suffix."
+      },
+      {
+       "type": "table",
+       "title": "Reading `kubectl get deploy`",
+       "head": [
+        "Column",
+        "Meaning",
+        "Example"
+       ],
+       "rows": [
+        [
+         "`NAME`",
+         "Deployment name",
+         "web"
+        ],
+        [
+         "`READY`",
+         "Ready Pods / desired replicas",
+         "5/5"
+        ],
+        [
+         "`UP-TO-DATE`",
+         "Pods running the latest Pod template",
+         "5"
+        ],
+        [
+         "`AVAILABLE`",
+         "Pods ready for at least `minReadySeconds`, serving traffic",
+         "5"
+        ],
+        [
+         "`AGE`",
+         "Time since the Deployment was created",
+         "12m"
+        ]
+       ]
+      },
+      {
+       "type": "table",
+       "title": "Reading `kubectl get rs`",
+       "head": [
+        "Column",
+        "Meaning",
+        "Example"
+       ],
+       "rows": [
+        [
+         "`DESIRED`",
+         "Replicas the ReplicaSet should have",
+         "5"
+        ],
+        [
+         "`CURRENT`",
+         "Pods that exist and are owned by it",
+         "5"
+        ],
+        [
+         "`READY`",
+         "Pods passing readiness",
+         "5"
+        ],
+        [
+         "`NAME` suffix",
+         "Hash of the Pod template; changes with every template edit",
+         "7c4b9f8d6b"
+        ]
+       ]
+      },
+      {
+       "type": "steps",
+       "items": [
+        {
+         "title": "Before: 5 old Pods",
+         "body": "`web-5d8c7f6b9d` has 5/5 Pods on nginx:1.27, `web-7c4b9f8d6b` does not exist yet."
+        },
+        {
+         "title": "Surge: 1 new Pod",
+         "body": "With maxSurge 1 and maxUnavailable 0 the new ReplicaSet scales to 1. Total Pods: 6 (5 old + 1 new)."
+        },
+        {
+         "title": "New Pod becomes Ready",
+         "body": "Only now is one old Pod removed: old 4, new 1. Capacity never drops below 5."
+        },
+        {
+         "title": "Repeat",
+         "body": "Old 4/new 1, then old 3/new 2 ... each step waits for readiness."
+        },
+        {
+         "title": "After: 5 new Pods",
+         "body": "`web-7c4b9f8d6b` 5/5 on nginx:1.28, `web-5d8c7f6b9d` scaled to 0 and kept for rollback."
+        }
+       ]
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  annotations:\n    kubernetes.io/change-cause: \"bump nginx to 1.28\"\nspec:\n  replicas: 5\n  revisionHistoryLimit: 5\n  minReadySeconds: 5\n  progressDeadlineSeconds: 300\n  selector:\n    matchLabels:\n      app: web\n  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 25%\n      maxUnavailable: 25%\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx:1.28\n          ports:\n            - containerPort: 80",
+       "title": "Sample: rollout tuning fields",
+       "output": null,
+       "note": "With 5 replicas, 25% surge rounds up to 2 extra Pods and 25% unavailable rounds down to 1. `change-cause` fills the CHANGE-CAUSE column of rollout history."
       },
       {
        "type": "callout",
        "tone": "tip",
        "title": "Record why you changed things",
        "body": "Use `kubectl annotate deployment/web kubernetes.io/change-cause=\"upgrade to nginx 1.28\"` so `rollout history` shows a meaningful CHANGE-CAUSE column."
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "# Before (kubectl get deploy,rs)\nweb   5/5   5   5    deploy: nginx:1.27\nweb-5d8c7f6b9d   5 5 5\n\n# Mid-rollout (maxSurge 1, maxUnavailable 0)\nweb   5/5   2   5\nweb-5d8c7f6b9d   4 4 4\nweb-7c4b9f8d6b   1 1 1\n\n# Failed rollout (bad image tag nginx:9.9)\nNAME   READY   UP-TO-DATE   AVAILABLE   AGE\nweb    5/5     1            5           20m\nweb-7c4b9f8d6b-abcde   0/1   ImagePullBackOff   0   2m\n# old Pods keep serving; fix with: kubectl rollout undo deployment/web",
+       "title": "Sample: what you see during a bad rollout",
+       "output": null,
+       "note": "Because maxUnavailable is 0, a broken new version never takes down the working Pods."
       }
      ],
      "exercises": [
@@ -234,8 +350,86 @@
        "language": "bash",
        "code": "kubectl get sts,pods -l app=db\nkubectl get pvc\nkubectl scale sts/db --replicas=2\nkubectl exec db-0 -- hostname\nkubectl delete pod db-1\nkubectl get pod db-1 -w",
        "title": null,
-       "output": null,
+       "output": "$ kubectl get sts,pods -l app=db\nNAME                  READY   AGE\nstatefulset.apps/db   3/3     6m\n\nNAME       READY   STATUS    RESTARTS   AGE\npod/db-0   1/1     Running   0          6m\npod/db-1   1/1     Running   0          5m\npod/db-2   1/1     Running   0          4m\n$ kubectl get pvc\nNAME        STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE\ndata-db-0   Bound    pvc-3f1c9a52-8d17-4b0e-a6a1-0c2b7e1d9f01   5Gi        RWO            standard       6m\ndata-db-1   Bound    pvc-9b7e44d0-52c3-4f6a-8e3b-71a4c0e2d812   5Gi        RWO            standard       5m\ndata-db-2   Bound    pvc-c20d1b6e-77aa-4c19-9f40-5e8d3a6b1c37   5Gi        RWO            standard       4m\n$ kubectl scale sts/db --replicas=2\nstatefulset.apps/db scaled\n$ kubectl exec db-0 -- hostname\ndb-0\n$ kubectl delete pod db-1\npod \"db-1\" deleted\n$ kubectl get pod db-1 -w\nNAME   READY   STATUS              RESTARTS   AGE\ndb-1   0/1     ContainerCreating   0          2s\ndb-1   1/1     Running             0          6s",
        "note": "After deleting `db-1` it is recreated with the same name and the same PVC."
+      },
+      {
+       "type": "table",
+       "title": "Stable identity per Pod",
+       "head": [
+        "Item",
+        "db-0",
+        "db-1",
+        "db-2"
+       ],
+       "rows": [
+        [
+         "Pod name / hostname",
+         "db-0",
+         "db-1",
+         "db-2"
+        ],
+        [
+         "DNS name",
+         "db-0.db.default.svc.cluster.local",
+         "db-1.db.default.svc.cluster.local",
+         "db-2.db.default.svc.cluster.local"
+        ],
+        [
+         "PVC",
+         "data-db-0",
+         "data-db-1",
+         "data-db-2"
+        ],
+        [
+         "Start order",
+         "1st",
+         "2nd (after db-0 Ready)",
+         "3rd (after db-1 Ready)"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl run -it --rm dns --image=busybox:1.36 --restart=Never -- nslookup db-0.db\nkubectl get sts db -o wide\nkubectl delete pvc data-db-2",
+       "title": "Check DNS and clean up storage",
+       "output": "$ kubectl run -it --rm dns --image=busybox:1.36 --restart=Never -- nslookup db-0.db\nServer:    10.96.0.10\nAddress 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local\n\nName:      db-0.db\nAddress 1: 10.244.1.21 db-0.db.default.svc.cluster.local\npod \"dns\" deleted\n$ kubectl get sts db -o wide\nNAME   READY   AGE   CONTAINERS   IMAGES\ndb     2/2     14m   postgres     postgres:16\n$ kubectl delete pvc data-db-2\npersistentvolumeclaim \"data-db-2\" deleted",
+       "note": "Scaling down to 2 leaves data-db-2 behind; delete it only when you no longer need the data."
+      },
+      {
+       "type": "table",
+       "title": "Reading `kubectl get sts`",
+       "head": [
+        "Column",
+        "Meaning",
+        "Example"
+       ],
+       "rows": [
+        [
+         "`READY`",
+         "Ready Pods / desired replicas",
+         "3/3"
+        ],
+        [
+         "`AGE`",
+         "Time since creation",
+         "6m"
+        ]
+       ]
+      },
+      {
+       "type": "text",
+       "title": "Rolling update sample",
+       "body": "StatefulSet updates go in reverse ordinal order: `db-2`, then `db-1`, then `db-0`, waiting for each to be Ready. Set `updateStrategy.rollingUpdate.partition: 2` to update only Pods with ordinal >= 2 (a canary)."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: db\nspec:\n  serviceName: db\n  replicas: 3\n  podManagementPolicy: OrderedReady\n  updateStrategy:\n    type: RollingUpdate\n    rollingUpdate:\n      partition: 2\n  persistentVolumeClaimRetentionPolicy:\n    whenDeleted: Retain\n    whenScaled: Retain\n  selector:\n    matchLabels:\n      app: db\n  template:\n    metadata:\n      labels:\n        app: db\n    spec:\n      containers:\n        - name: postgres\n          image: postgres:16.4\n          env:\n            - name: POSTGRES_PASSWORD\n              value: example\n            - name: PGDATA\n              value: /var/lib/postgresql/data/pgdata\n          volumeMounts:\n            - name: data\n              mountPath: /var/lib/postgresql/data\n  volumeClaimTemplates:\n    - metadata:\n        name: data\n      spec:\n        accessModes: [\"ReadWriteOnce\"]\n        resources:\n          requests:\n            storage: 5Gi",
+       "title": "Sample: canary update with partition",
+       "output": null,
+       "note": "Only db-2 gets postgres:16.4; lower the partition to 0 to roll out to the rest. Apply the headless Service from the first example too."
       }
      ],
      "exercises": [
@@ -372,8 +566,57 @@
        "language": "bash",
        "code": "kubectl get ds -n kube-system\nkubectl get pods -o wide -l app=node-exporter\nkubectl rollout status ds/node-exporter\nkubectl set image ds/node-exporter exporter=quay.io/prometheus/node-exporter:v1.8.2",
        "title": null,
-       "output": null,
+       "output": "$ kubectl get ds -n kube-system\nNAME         DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE\nkube-proxy   3         3         3       3            3           kubernetes.io/os=linux   41d\n$ kubectl get pods -o wide -l app=node-exporter\nNAME                  READY   STATUS    RESTARTS   AGE   IP           NODE            NOMINATED NODE   READINESS GATES\nnode-exporter-5qzvd   1/1     Running   0          3m    192.168.1.12 worker-1        <none>           <none>\nnode-exporter-k8x2m   1/1     Running   0          3m    192.168.1.13 worker-2        <none>           <none>\nnode-exporter-tw7pj   1/1     Running   0          3m    192.168.1.10 control-plane   <none>           <none>\n$ kubectl rollout status ds/node-exporter\nWaiting for daemon set \"node-exporter\" rollout to finish: 1 out of 3 new pods have been updated...\nWaiting for daemon set \"node-exporter\" rollout to finish: 2 of 3 updated pods are available...\ndaemon set \"node-exporter\" successfully rolled out\n$ kubectl set image ds/node-exporter exporter=quay.io/prometheus/node-exporter:v1.8.2\ndaemonset.apps/node-exporter image updated",
        "note": null
+      },
+      {
+       "type": "table",
+       "title": "Reading `kubectl get ds`",
+       "head": [
+        "Column",
+        "Meaning",
+        "Example"
+       ],
+       "rows": [
+        [
+         "`DESIRED`",
+         "Nodes that should run a Pod (after selectors and taints)",
+         "3"
+        ],
+        [
+         "`CURRENT`",
+         "Nodes currently running a daemon Pod",
+         "3"
+        ],
+        [
+         "`READY`",
+         "Daemon Pods passing readiness",
+         "3"
+        ],
+        [
+         "`UP-TO-DATE`",
+         "Pods running the latest template",
+         "3"
+        ],
+        [
+         "`AVAILABLE`",
+         "Pods ready and available",
+         "3"
+        ],
+        [
+         "`NODE SELECTOR`",
+         "nodeSelector from the Pod template",
+         "kubernetes.io/os=linux"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: log-agent\nspec:\n  selector:\n    matchLabels:\n      app: log-agent\n  template:\n    metadata:\n      labels:\n        app: log-agent\n    spec:\n      nodeSelector:\n        disktype: ssd\n      containers:\n        - name: agent\n          image: busybox:1.36\n          command: [\"sh\", \"-c\", \"tail -F /var/log/syslog\"]\n          volumeMounts:\n            - name: varlog\n              mountPath: /var/log\n              readOnly: true\n      volumes:\n        - name: varlog\n          hostPath:\n            path: /var/log",
+       "title": "Sample: DaemonSet restricted to labelled nodes",
+       "output": "# kubectl label node worker-1 disktype=ssd\nnode/worker-1 labeled\n# kubectl get ds log-agent\nNAME        DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR     AGE\nlog-agent   1         1         1       1            1           disktype=ssd      20s",
+       "note": "Only nodes carrying the label get a Pod; DESIRED follows label changes automatically."
       }
      ],
      "exercises": [
@@ -513,8 +756,108 @@
        "language": "bash",
        "code": "kubectl create job once --image=busybox -- echo hello\nkubectl get jobs\nkubectl logs job/once\nkubectl create job manual-run --from=cronjob/nightly-backup\nkubectl patch cronjob nightly-backup -p '{\"spec\":{\"suspend\":true}}'",
        "title": null,
-       "output": null,
+       "output": "$ kubectl create job once --image=busybox -- echo hello\njob.batch/once created\n$ kubectl get jobs\nNAME   STATUS     COMPLETIONS   DURATION   AGE\nonce   Complete   1/1           4s         9s\n$ kubectl logs job/once\nhello\n$ kubectl create job manual-run --from=cronjob/nightly-backup\njob.batch/manual-run created\n$ kubectl patch cronjob nightly-backup -p '{\"spec\":{\"suspend\":true}}'\ncronjob.batch/nightly-backup patched",
        "note": null
+      },
+      {
+       "type": "code",
+       "language": "bash",
+       "code": "kubectl apply -f job.yaml\nkubectl get jobs report -w\nkubectl get pods -l job-name=report\nkubectl get cronjob\nkubectl get jobs --sort-by=.metadata.creationTimestamp",
+       "title": "Watching a Job and a CronJob",
+       "output": "$ kubectl get jobs report -w\nNAME     STATUS    COMPLETIONS   DURATION   AGE\nreport   Running   0/5           3s         3s\nreport   Running   2/5           9s         9s\nreport   Running   4/5           15s        15s\nreport   Complete  5/5           21s        21s\n$ kubectl get pods -l job-name=report\nNAME           READY   STATUS      RESTARTS   AGE\nreport-2h8kq   0/1     Completed   0          25s\nreport-5mvx9   0/1     Completed   0          25s\nreport-b7tcw   0/1     Completed   0          19s\nreport-lp4rn   0/1     Completed   0          19s\nreport-xk9d2   0/1     Completed   0          13s\n$ kubectl get cronjob\nNAME             SCHEDULE    TIMEZONE        SUSPEND   ACTIVE   LAST SCHEDULE   AGE\nnightly-backup   0 2 * * *   Europe/Berlin   False     0        7h              3d\n$ kubectl get jobs --sort-by=.metadata.creationTimestamp\nNAME                      STATUS     COMPLETIONS   DURATION   AGE\nnightly-backup-29012280   Complete   1/1           6s         2d7h\nnightly-backup-29013720   Complete   1/1           5s         1d7h\nnightly-backup-29015160   Complete   1/1           5s         7h",
+       "note": "Parallelism 2 means two Pods run at a time until 5 completions are reached."
+      },
+      {
+       "type": "table",
+       "title": "Job fields",
+       "head": [
+        "Field",
+        "Meaning",
+        "Sample"
+       ],
+       "rows": [
+        [
+         "`completions`",
+         "Successful Pods needed to finish the Job",
+         "5"
+        ],
+        [
+         "`parallelism`",
+         "Pods running at the same time",
+         "2"
+        ],
+        [
+         "`backoffLimit`",
+         "Retries before the Job is marked Failed",
+         "3"
+        ],
+        [
+         "`activeDeadlineSeconds`",
+         "Hard time limit for the whole Job",
+         "600"
+        ],
+        [
+         "`ttlSecondsAfterFinished`",
+         "Auto-delete finished Job after this long",
+         "3600"
+        ]
+       ]
+      },
+      {
+       "type": "table",
+       "title": "Cron schedule examples",
+       "head": [
+        "Schedule",
+        "Runs"
+       ],
+       "rows": [
+        [
+         "`*/5 * * * *`",
+         "Every 5 minutes"
+        ],
+        [
+         "`0 2 * * *`",
+         "Daily at 02:00"
+        ],
+        [
+         "`30 6 * * 1-5`",
+         "06:30 on weekdays"
+        ],
+        [
+         "`0 0 1 * *`",
+         "Midnight on the 1st of each month"
+        ]
+       ]
+      },
+      {
+       "type": "table",
+       "title": "concurrencyPolicy values",
+       "head": [
+        "Value",
+        "Behaviour when previous run is still going"
+       ],
+       "rows": [
+        [
+         "`Allow`",
+         "Start another run (default)"
+        ],
+        [
+         "`Forbid`",
+         "Skip the new run"
+        ],
+        [
+         "`Replace`",
+         "Cancel the old run, start the new one"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: flaky\nspec:\n  backoffLimit: 2\n  template:\n    spec:\n      restartPolicy: Never\n      containers:\n        - name: task\n          image: busybox:1.36\n          command: [\"sh\", \"-c\", \"echo trying; exit 1\"]",
+       "title": "Sample: a failing Job",
+       "output": "$ kubectl get jobs flaky\nNAME    STATUS   COMPLETIONS   DURATION   AGE\nflaky   Failed   0/1           48s        48s\n$ kubectl describe job flaky | tail -4\nEvents:\n  Warning  BackoffLimitExceeded  job-controller  Job has reached the specified backoff limit",
+       "note": "Failed Pods are kept so you can read their logs until the Job is deleted."
       }
      ],
      "exercises": [
@@ -677,8 +1020,125 @@
        "language": "bash",
        "code": "kubectl describe pod api-7d9f | grep -A5 \"Last State\"\nkubectl get pod api-7d9f -o jsonpath='{.status.qosClass}'\nkubectl top pod\nkubectl get events --field-selector involvedObject.name=api-7d9f",
        "title": null,
-       "output": null,
+       "output": "$ kubectl describe pod api-7d9f | grep -A5 \"Last State\"\n    Last State:     Terminated\n      Reason:       OOMKilled\n      Exit Code:    137\n      Started:      Thu, 13 Nov 2026 09:12:04 +0100\n      Finished:     Thu, 13 Nov 2026 09:14:51 +0100\n$ kubectl get pod api-7d9f -o jsonpath='{.status.qosClass}'\nBurstable\n$ kubectl top pod\nNAME       CPU(cores)   MEMORY(bytes)\napi-7d9f   42m          187Mi\n$ kubectl get events --field-selector involvedObject.name=api-7d9f\nLAST SEEN   TYPE      REASON      OBJECT         MESSAGE\n3m          Warning   Unhealthy   pod/api-7d9f   Readiness probe failed: HTTP probe failed with statuscode: 503\n2m          Warning   BackOff     pod/api-7d9f   Back-off restarting failed container api in pod api-7d9f",
        "note": "`Reason: OOMKilled` and `Exit Code: 137` in Last State confirm a memory-limit kill."
+      },
+      {
+       "type": "code",
+       "language": "yaml",
+       "code": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: api\n  template:\n    metadata:\n      labels:\n        app: api\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27\n          ports:\n            - containerPort: 80\n          startupProbe:\n            httpGet: {path: /, port: 80}\n            failureThreshold: 30\n            periodSeconds: 2\n          readinessProbe:\n            httpGet: {path: /, port: 80}\n            periodSeconds: 5\n          livenessProbe:\n            httpGet: {path: /, port: 80}\n            periodSeconds: 10\n            failureThreshold: 3\n          resources:\n            requests: {cpu: 250m, memory: 256Mi}\n            limits: {memory: 512Mi}",
+       "title": "Complete Deployment with probes and resources (applicable)",
+       "output": "$ kubectl apply -f api.yaml\ndeployment.apps/api created\n$ kubectl get pods -l app=api\nNAME                   READY   STATUS    RESTARTS   AGE\napi-6c7d8b9f5d-hx4tm   1/1     Running   0          18s\napi-6c7d8b9f5d-q9wnz   1/1     Running   0          18s\n$ kubectl describe pod -l app=api | grep -E \"Liveness|Readiness|Startup|Limits|Requests\" \n    Limits:\n    Requests:\n    Liveness:   http-get http://:80/ delay=0s timeout=1s period=10s #success=1 #failure=3\n    Readiness:  http-get http://:80/ delay=0s timeout=1s period=5s #success=1 #failure=3\n    Startup:    http-get http://:80/ delay=0s timeout=1s period=2s #success=1 #failure=30",
+       "note": "The earlier snippet uses a placeholder image; this one runs anywhere."
+      },
+      {
+       "type": "table",
+       "title": "Probe fields",
+       "head": [
+        "Field",
+        "Meaning",
+        "Default"
+       ],
+       "rows": [
+        [
+         "`initialDelaySeconds`",
+         "Wait before the first probe",
+         "0"
+        ],
+        [
+         "`periodSeconds`",
+         "Seconds between probes",
+         "10"
+        ],
+        [
+         "`timeoutSeconds`",
+         "Seconds before a probe counts as failed",
+         "1"
+        ],
+        [
+         "`successThreshold`",
+         "Successes needed to flip to healthy",
+         "1"
+        ],
+        [
+         "`failureThreshold`",
+         "Failures needed to act (restart / unready)",
+         "3"
+        ]
+       ]
+      },
+      {
+       "type": "table",
+       "title": "Probe handlers",
+       "head": [
+        "Handler",
+        "Sample",
+        "Passes when"
+       ],
+       "rows": [
+        [
+         "`httpGet`",
+         "`httpGet: {path: /healthz, port: 8080}`",
+         "Status 200-399"
+        ],
+        [
+         "`tcpSocket`",
+         "`tcpSocket: {port: 5432}`",
+         "Port accepts a connection"
+        ],
+        [
+         "`exec`",
+         "`exec: {command: [\"cat\",\"/tmp/ready\"]}`",
+         "Command exits 0"
+        ],
+        [
+         "`grpc`",
+         "`grpc: {port: 9090}`",
+         "gRPC health check returns SERVING"
+        ]
+       ]
+      },
+      {
+       "type": "table",
+       "title": "Resource units",
+       "head": [
+        "Value",
+        "Meaning"
+       ],
+       "rows": [
+        [
+         "`cpu: 250m`",
+         "250 millicores = 0.25 CPU core"
+        ],
+        [
+         "`cpu: \"1\"`",
+         "One full core"
+        ],
+        [
+         "`memory: 256Mi`",
+         "256 mebibytes (268 MB)"
+        ],
+        [
+         "`memory: 1Gi`",
+         "1 gibibyte"
+        ],
+        [
+         "CPU over limit",
+         "Throttled"
+        ],
+        [
+         "Memory over limit",
+         "OOMKilled (exit 137)"
+        ]
+       ]
+      },
+      {
+       "type": "code",
+       "language": "text",
+       "code": "$ kubectl describe pod api-6c7d8b9f5d-hx4tm\n...\n    State:          Running\n      Started:      Thu, 13 Nov 2026 09:20:11 +0100\n    Last State:     Terminated\n      Reason:       Error\n      Exit Code:    1\n    Ready:          False\n    Restart Count:  4\n...\nEvents:\n  Warning  Unhealthy  kubelet  Liveness probe failed: Get \"http://10.244.1.7:8080/healthz\": context deadline exceeded\n  Normal   Killing    kubelet  Container api failed liveness probe, will be restarted",
+       "title": "Sample: a failing liveness probe",
+       "output": null,
+       "note": "Restart Count climbing together with Unhealthy/Killing events means liveness is killing the container; raise failureThreshold or add a startupProbe."
       }
      ],
      "exercises": [

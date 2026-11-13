@@ -13,7 +13,6 @@
 
   const state = {
     courseLevel: 'All',
-    courseTrack: 'All',
     courseQuery: '',
     refQuery: '',
     refKind: 'engine',
@@ -62,7 +61,9 @@
       ['glossary', 'glossary', 'Glossary', 'book-open'],
       ['search', 'search', 'Search', 'search'],
     ];
-    return `<nav class="academy-nav" aria-label="Academy sections">${links.map(([key, href, label, ic]) => `<a href="#/academy${href === 'academy' ? '' : `/${href}`}" class="${active === key ? 'active' : ''}">${icon(ic, 13)}<span>${esc(label)}</span></a>`).join('')}</nav>`;
+    const k8s = OD.store.state.track === 'kubernetes';
+    const visible = links.filter(([key]) => !(k8s && ['reference', 'troubleshooting', 'labs', 'glossary'].includes(key)));
+    return `<nav class="academy-nav" aria-label="Academy sections">${visible.map(([key, href, label, ic]) => `<a href="#/academy${href === 'academy' ? '' : `/${href}`}" class="${active === key ? 'active' : ''}">${icon(ic, 13)}<span>${esc(label)}</span></a>`).join('')}</nav>`;
   }
 
   function sectionHead(opts) {
@@ -352,6 +353,23 @@
     </div>`).join('')}</div>`;
   }
 
+  // Every lesson of the course in order, grouped by module, with its state.
+  function roadmap(course, current) {
+    const modules = course.modules || [];
+    const total = course.lessonList.length;
+    const done = course.lessonList.filter((l) => OD.store.isComplete(l.id)).length;
+    const cells = modules.map((m) => `<div class="roadmap-module"><div class="roadmap-module-title">${esc(m.title)}</div><div class="roadmap-lessons">${(m.lessons || []).map((l) => {
+      const full = course.lessonList.find((x) => x.id === l.id) || l;
+      const n = course.lessonList.findIndex((x) => x.id === l.id) + 1;
+      const isDone = OD.store.isComplete(l.id);
+      const started = OD.store.progressFor(l.id)?.status === 'in_progress';
+      const state = l.id === current.id ? 'current' : isDone ? 'done' : started ? 'progress' : 'todo';
+      const label = state === 'current' ? 'You are here' : isDone ? 'Completed' : started ? 'In progress' : 'Not started';
+      return `<a class="roadmap-dot ${state}" href="#/academy/lesson/${esc(l.id)}" title="${n}. ${esc(full.title)} — ${label}" aria-label="${n}. ${esc(full.title)} — ${label}" ${state === 'current' ? 'aria-current="step"' : ''}><span>${isDone ? icon('check', 11) : n}</span></a>`;
+    }).join('')}</div></div>`).join('');
+    return `<details class="roadmap" open><summary><span class="roadmap-title">${icon('map', 13)}Roadmap</span><span class="roadmap-count">${done} of ${total} complete</span><span class="roadmap-legend"><i class="done"></i>Done<i class="current"></i>Here<i class="progress"></i>Started<i class="todo"></i>Left</span></summary><div class="roadmap-body">${cells}</div></details>`;
+  }
+
   function resumeCard() {
     const last = OD.store.resumeLesson();
     if (!last) return '';
@@ -380,7 +398,7 @@
       <div class="academy-hero">
         <div>
           <div class="academy-greeting">${icon('sparkles', 12)}${esc(OD.store.greet())} · Academy</div>
-          <h1>${a.completed ? 'Keep the momentum.' : 'Build Docker fluency, one lesson at a time.'}</h1>
+          <h1>${a.completed ? 'Keep the momentum.' : (OD.store.state.track === 'kubernetes' ? 'Build Kubernetes fluency, one lesson at a time.' : 'Build Docker fluency, one lesson at a time.')}</h1>
           <p>${a.lessons} lessons across ${a.courses} courses, with quizzes, labs, diagrams and a searchable command reference. Your progress is stored locally.</p>
           <div class="academy-hero-actions">
             ${next ? `<a class="btn btn-primary btn-lg" href="#/academy/lesson/${esc(next.id)}">${icon('play', 15)}<span>${a.completed ? 'Continue learning' : 'Start learning'}</span></a>` : ''}
@@ -448,36 +466,34 @@
   // ------------------------------------------------------------------ courses
 
   function renderCourses() {
-    const wanted = OD.store.state.route?.query?.get?.('track');
-    const rawRoute = OD.store.state.route?.raw;
-    if (rawRoute !== state.trackAppliedFor) {
-      state.trackAppliedFor = rawRoute;
-      if (wanted && ['docker', 'kubernetes'].includes(wanted)) state.courseTrack = wanted;
-    }
     const courses = OD.store.state.academy.courses;
     const levels = ['All', 'Beginner', 'Intermediate', 'Advanced', 'Expert'];
     const q = state.courseQuery.trim().toLowerCase();
-    const filtered = courses.filter((c) => (state.courseLevel === 'All' || c.level === state.courseLevel) && (state.courseTrack === 'All' || (c.track || 'docker') === state.courseTrack) && (!q || `${c.title} ${c.subtitle} ${c.description}`.toLowerCase().includes(q)));
+    const filtered = courses.filter((c) => (state.courseLevel === 'All' || c.level === state.courseLevel) && (!q || `${c.title} ${c.subtitle} ${c.description}`.toLowerCase().includes(q)));
     return `<div class="page">
       ${academyNav('courses')}
       ${resumeCard()}
       <div class="page-head">
-        <div class="page-head-left"><div class="eyebrow">${icon('graduation-cap', 12)}Curriculum</div><h1 class="page-title">Academy</h1><p class="page-sub">Docker and Kubernetes courses from first principles to expert operations. Every lesson has objectives, real commands, a knowledge check and a next step.</p></div>
+        <div class="page-head-left"><div class="eyebrow">${icon('graduation-cap', 12)}Curriculum</div><h1 class="page-title">${OD.store.state.track === 'kubernetes' ? 'Kubernetes Academy' : 'Docker Academy'}</h1><p class="page-sub">${OD.store.state.track === 'kubernetes' ? 'Kubernetes' : 'Docker'} courses from first principles to expert operations. Every lesson has objectives, real commands, a knowledge check and a next step.</p></div>
         <div class="page-actions"><span class="badge tone-accent">${courses.length} courses</span><span class="badge tone-slate">${OD.store.allLessons().length} lessons</span>${OD.ai ? OD.ai.button({ kind: 'academy' }, { label: 'Ask AI about the Academy' }) : ''}</div>
       </div>
       <div class="toolbar">
-        <div class="filter-row">${[['All', 'All tracks'], ['docker', 'Docker'], ['kubernetes', 'Kubernetes']].map(([v, l]) => `<button type="button" class="chip ${state.courseTrack === v ? 'active' : ''}" data-track="${v}">${l}</button>`).join('')}</div>
         <label class="search-box">${icon('search', 14)}<input id="course-search" type="search" placeholder="Find a course…" value="${esc(state.courseQuery)}" /></label>
         <div class="filter-row">${levels.map((l) => `<button type="button" class="chip ${state.courseLevel === l ? 'active' : ''}" data-level="${l}">${l}</button>`).join('')}</div>
         <div class="toolbar-spacer"></div><span class="muted text-xs">${filtered.length} shown</span>
       </div>
       <div class="course-grid" id="course-grid">${filtered.map(courseCard).join('') || U.empty({ icon: 'search', title: 'No courses match', body: 'Clear the filter or search for a different term.' })}</div>
-      ${U.card({ class: 'mt-4', title: 'How the Academy fits together', icon: 'map', sub: 'Courses are ordered, but every lesson stands alone', body: `<div class="outcome-grid">${[
+      ${U.card({ class: 'mt-4', title: 'How the Academy fits together', icon: 'map', sub: 'Courses are ordered, but every lesson stands alone', body: `<div class="outcome-grid">${(OD.store.state.track === 'kubernetes' ? [
+        ['Foundations', 'Architecture, kubectl, the declarative model and Pods.'],
+        ['Run workloads', 'Deployments, StatefulSets, DaemonSets, Jobs, probes and resources.'],
+        ['Connect & configure', 'Services, Ingress, network policies, ConfigMaps, Secrets and storage.'],
+        ['Operate & secure', 'Troubleshooting, RBAC, Helm, autoscaling and a production checklist.'],
+      ] : [
         ['Foundations', 'Start with the container model, then the CLI and lifecycle.'],
         ['Build & ship', 'Dockerfiles, BuildKit, registries and supply chain security.'],
         ['Run in production', 'Compose, networking, storage, limits, logging, monitoring.'],
         ['Operate & recover', 'Troubleshooting, performance, daemon hardening and real projects.'],
-      ].map(([t, b]) => `<div class="outcome-item">${icon('check', 14)}<div><strong>${t}</strong><div class="muted text-xs">${b}</div></div></div>`).join('')}</div>` })}
+      ]).map(([t, b]) => `<div class="outcome-item">${icon('check', 14)}<div><strong>${t}</strong><div class="muted text-xs">${b}</div></div></div>`).join('')}</div>` })}
     </div>`;
   }
 
@@ -632,8 +648,13 @@
         <a href="#/academy/course/${esc(course.id)}">${esc(course.title)}</a>${icon('chevron-right', 11)}
         <span>${esc(lesson.moduleTitle || '')}</span>
       </div>
+      ${roadmap(course, lesson)}
       <div class="lesson-layout">
         <div class="lesson-main">
+          <div class="lesson-topnav">
+            ${prev ? `<a class="btn btn-sm btn-secondary" href="#/academy/lesson/${esc(prev.id)}">${icon('arrow-left', 13)}<span>Previous lesson</span></a>` : `<span class="btn btn-sm btn-secondary" aria-disabled="true" style="opacity:.45">${icon('arrow-left', 13)}<span>Previous lesson</span></span>`}
+            ${next ? `<a class="btn btn-sm btn-primary" href="#/academy/lesson/${esc(next.id)}"><span>Next lesson</span>${icon('arrow-right', 13)}</a>` : ''}
+          </div>
           <h1 class="lesson-title">${esc(lesson.title)}</h1>
           <p class="lesson-summary">${esc(lesson.summary)}</p>
           <div class="lesson-meta">
@@ -685,6 +706,7 @@
               ${U.button({ label: bookmarked ? 'Bookmarked' : 'Bookmark', icon: 'bookmark', size: 'sm', variant: bookmarked ? 'subtle' : 'secondary', attrs: 'data-lesson-action="bookmark"' })}
               ${U.button({ label: 'Focus notes', icon: 'notebook-pen', size: 'sm', variant: 'secondary', attrs: 'data-lesson-action="notes"' })}
               ${OD.ai ? OD.ai.button({ kind: 'lesson', id: lesson.id, name: lesson.title }, { label: 'Ask AI', size: 'sm' }) : ''}
+              ${prev ? `<a class="btn btn-sm btn-secondary" href="#/academy/lesson/${esc(prev.id)}">${icon('arrow-left', 13)}<span>Previous lesson</span></a>` : ''}
               ${next ? `<a class="btn btn-sm btn-secondary" href="#/academy/lesson/${esc(next.id)}">${icon('arrow-right', 13)}<span>Next lesson</span></a>` : ''}
             </div>
           </div>
@@ -1913,13 +1935,33 @@
     }
   }
 
+  // Inline icons and styled runs sit directly against neighbouring text in places
+  // where the container is not a flex row. Add the missing space after render.
+  function fixSpacing(root) {
+    const display = (el) => getComputedStyle(el).display;
+    root.querySelectorAll('svg.icon').forEach((svg) => {
+      const next = svg.nextSibling;
+      const parent = svg.parentElement;
+      if (!parent || /flex|grid/.test(display(parent))) return;
+      if (next && next.nodeType === 3 && /^\S/.test(next.nodeValue)) svg.style.marginInlineEnd = '6px';
+    });
+    root.querySelectorAll('.lesson-prose strong, .lesson-prose a, .lesson-prose code, .callout-body strong, .callout-body a, .callout-body code, .step-body strong').forEach((el) => {
+      const prev = el.previousSibling;
+      const next = el.nextSibling;
+      const tail = (n) => (n && n.nodeType === 3 ? n.nodeValue.slice(-1) : '');
+      const head = (n) => (n && n.nodeType === 3 ? n.nodeValue.charAt(0) : '');
+      if (/[\p{L}\p{N}]/u.test(tail(prev)) && el.textContent) el.style.marginInlineStart = '.25em';
+      if (/[\p{L}\p{N}]/u.test(head(next))) el.style.marginInlineEnd = '.25em';
+    });
+  }
+
   function mount(root, route) {
+    fixSpacing(root);
     const parts = route.parts || [];
     const section = parts[0] || '';
     switch (section) {
       case 'courses':
         root.querySelectorAll('[data-level]').forEach((chip) => chip.addEventListener('click', () => { state.courseLevel = chip.dataset.level; rerender(); }));
-        root.querySelectorAll('[data-track]').forEach((chip) => chip.addEventListener('click', () => { state.courseTrack = chip.dataset.track; rerender(); }));
         root.querySelector('#course-search')?.addEventListener('input', (event) => {
           state.courseQuery = event.target.value;
           rerender();

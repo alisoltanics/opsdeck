@@ -104,6 +104,7 @@
       state.bootError = null;
     }
     normalizeAcademy();
+    state.academyFull = state.academy;
     buildIndex();
     applySettings(state.progress.settings || {});
     state.status = await refreshStatus();
@@ -132,7 +133,52 @@
     a.meta.glossary = Array.isArray(a.meta.glossary) ? a.meta.glossary : [];
   }
 
+  // The Academy is two separate curricula. Everything the views and stats read
+  // (courses, paths, reference, labs, diagrams, glossary) is scoped to one track.
+  function trackOfCourse(course) { return course?.track === 'kubernetes' ? 'kubernetes' : 'docker'; }
+
+  function scopeAcademy() {
+    const full = state.academyFull;
+    if (!full) return;
+    const track = state.track;
+    const courses = full.courses.filter((c) => trackOfCourse(c) === track);
+    const ids = new Set(courses.map((c) => c.id));
+    const diagrams = Object.fromEntries(Object.entries(full.diagrams.diagrams || {}).filter(([id]) => id.startsWith('k8s-') === (track === 'kubernetes')));
+    const docker = track === 'docker';
+    state.academy = {
+      ...full,
+      courses,
+      paths: full.paths.filter((p) => (p.stages || []).every((st) => ids.has(st.courseId))),
+      commands: docker ? full.commands : { engine: [], compose: [], dockerfile: [], properties: [] },
+      guides: docker ? full.guides : { guides: [] },
+      labs: docker ? full.labs : [],
+      diagrams: { diagrams },
+      meta: { ...full.meta, glossary: docker ? full.meta.glossary : [] },
+    };
+  }
+
+  function setTrack(track) {
+    const next = track === 'kubernetes' ? 'kubernetes' : 'docker';
+    if (next === state.track && state.academy) return false;
+    state.track = next;
+    buildIndex();
+    return true;
+  }
+
+  function trackForCourse(courseId) {
+    const course = state.academyFull?.courses.find((c) => c.id === courseId);
+    return course ? trackOfCourse(course) : null;
+  }
+
+  function trackForLesson(lessonId) {
+    const course = state.academyFull?.courses.find((c) => c.modules.some((m) => (m.lessons || []).some((l) => l.id === lessonId)));
+    return course ? trackOfCourse(course) : null;
+  }
+
   function buildIndex() {
+    if (state.academyFull === undefined || state.academyFull === null) state.academyFull = state.academy;
+    state.track = state.track || 'docker';
+    scopeAcademy();
     index.courses.clear();
     index.lessons.clear();
     index.commands = [];
@@ -268,6 +314,7 @@
         state.academy = res.academy;
         state.progress = res.progress || state.progress;
         normalizeAcademy();
+        state.academyFull = state.academy;
         buildIndex();
         applySettings(state.progress.settings || state.settings);
         emit();
@@ -584,7 +631,7 @@
   OD.store = {
     state, index, api, boot, subscribe, emit,
     refreshStatus, refreshAcademy, refreshProgress, refreshSettings: applySettings,
-    applyTheme, resolvedTheme, setSetting,
+    applyTheme, resolvedTheme, setSetting, setTrack, trackForCourse, trackForLesson,
     courseById, lessonById, commandById, guideById, pathById, diagramById,
     commandsFor, allLabs, allLessons, labs: allLabs,
     progressFor, isComplete, isBookmarked, noteFor, quizFor,

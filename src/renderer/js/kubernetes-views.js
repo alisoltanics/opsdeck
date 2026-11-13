@@ -1433,21 +1433,10 @@
     return list.map(consoleEntryHtml).join('');
   }
 
-  async function renderConsole() {
-    if (!api?.kubernetes) return unavailable();
-    const [data, commands] = await Promise.all([loadBootstrap(), loadCommands('console')]);
-    if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
-    if (!data.contexts?.length) return noContexts(data);
+  function consoleCardHtml(data, commands) {
     const suggestions = commands.slice(0, 8).map((item) => `<button type="button" class="k8s-suggest" data-k8s-suggest="${esc(item.command)}" title="${esc(item.description || '')}">${esc(item.label)}</button>`).join('');
     const ns = data.namespace || 'default';
-    return `<div class="page k8s-console-page">
-      ${pageHead({
-        title: PAGES.console,
-        sub: 'A real kubectl session with the selected context enforced. No host shell, no pipes and no kubeconfig edits.',
-        actions: pageActions('console'),
-      })}
-      ${selectorBar(data)}
-      <section class="k8s-con" data-k8s-console-card data-context="${esc(data.selected || '')}" data-namespace="${esc(ns)}">
+    return `<section class="k8s-con" data-k8s-console-card data-context="${esc(data.selected || '')}" data-namespace="${esc(ns)}">
         <header class="k8s-con-bar">
           <span class="k8s-con-title">${icon('terminal', 15)}<strong>kubectl</strong></span>
           <span class="k8s-con-chip" title="Context">${icon('cloud', 11)}${esc(data.selected || '—')}</span>
@@ -1471,7 +1460,47 @@
           <span>${icon('shield-check', 11)} Watch/follow, port-forward, proxy, attach, edit and kubeconfig changes are rejected. Pod shells have their own terminal.</span>
           <span class="k8s-con-keys"><kbd>Tab</kbd> complete <kbd>↑</kbd><kbd>↓</kbd> history <kbd>Ctrl+L</kbd> clear <kbd>Esc</kbd> exit fullscreen</span>
         </footer>
-      </section>
+      </section>`;
+  }
+
+  // The same console, opened over any Kubernetes page from the header.
+  async function openConsoleModal() {
+    if (!api?.kubernetes) return;
+    let data;
+    let commands;
+    try {
+      [data, commands] = await Promise.all([loadBootstrap(), loadCommands('console')]);
+    } catch (error) {
+      U.toast('Console unavailable', 'error', { description: error.message });
+      return;
+    }
+    if (!data.tools?.kubectl?.installed) { U.toast('kubectl is not installed', 'warning', { description: 'Open Kubernetes → Local tools to install it.' }); return; }
+    if (!data.contexts?.length) { U.toast('No Kubernetes context', 'warning', { description: 'Import a kubeconfig or start a local cluster first.' }); return; }
+    U.modal({
+      title: 'Kubectl console',
+      eyebrow: 'Kubernetes',
+      icon: 'terminal',
+      subtitle: `Context ${data.selected || '—'} · namespace ${data.namespace || 'default'}`,
+      width: 'min(1100px, 95vw)',
+      className: 'k8s-con-modal',
+      body: consoleCardHtml(data, commands),
+      onMount: ({ root }) => mountConsole(root),
+    });
+  }
+
+  async function renderConsole() {
+    if (!api?.kubernetes) return unavailable();
+    const [data, commands] = await Promise.all([loadBootstrap(), loadCommands('console')]);
+    if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
+    if (!data.contexts?.length) return noContexts(data);
+    return `<div class="page k8s-console-page">
+      ${pageHead({
+        title: PAGES.console,
+        sub: 'A real kubectl session with the selected context enforced. No host shell, no pipes and no kubeconfig edits.',
+        actions: pageActions('console'),
+      })}
+      ${selectorBar(data)}
+      ${consoleCardHtml(data, commands)}
       <div class="mt-4 k8s-con-below">${commandsCard('console', commands)}</div>
     </div>`;
   }
@@ -1914,6 +1943,7 @@
   }
 
   OD.views.kubernetes = {
+    openConsoleModal,
     render,
     mount,
     dispose,
