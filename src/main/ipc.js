@@ -567,6 +567,7 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('intel:diagnostics', (p) => intelligence.diagnostics(p || {}));
   handle('intel:notify', (p) => intelligence.notify(p || {}));
   handle('intel:database-insights', (p) => intelligence.databaseInsights(p || {}));
+  handle('intel:deployments', (p) => intelligence.deployments(p || {}));
   handle('intel:docker-insights', () => intelligence.dockerInsights());
   handle('intel:kubernetes-insights', (p) => intelligence.kubernetesInsights(p || {}));
   handle('intel:kubernetes-multicluster', (p) => intelligence.kubernetesMultiCluster(p || {}));

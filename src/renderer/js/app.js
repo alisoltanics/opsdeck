@@ -220,6 +220,7 @@
       label: 'Respond',
       items: [
         { id: 'observability', section: 'alerts', label: 'Alerts', icon: 'bell', href: '#/observability/alerts' },
+        { id: 'observability', section: 'deployments', label: 'Deployments', icon: 'rocket', href: '#/observability/deployments' },
         { id: 'observability', section: 'incidents', label: 'Incidents', icon: 'alert-triangle', href: '#/observability/incidents' },
         { id: 'observability', section: 'dashboards', label: 'Dashboards', icon: 'layout-dashboard', href: '#/observability/dashboards' },
         { id: 'observability', section: 'metrics', label: 'Metrics explorer', icon: 'bar-chart', href: '#/observability/metrics' },

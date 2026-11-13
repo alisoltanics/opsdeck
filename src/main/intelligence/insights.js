@@ -1813,6 +1813,94 @@ function analyzeMultiCluster(snapshot = {}) {
   };
 }
 
+/**
+ * Recent deployment evidence.
+ *
+ * Kubernetes rollout history is read from retained ReplicaSets (the same
+ * objects `kubectl rollout history` uses). Docker contributes container
+ * creation records. Nothing is invented: when a source is unavailable it is
+ * reported, and images/change causes are only shown when the object carried
+ * them.
+ */
+function analyzeDeployments({ replicasets = [], containers = [], context = '', sources = {}, limit = 80 } = {}) {
+  const items = [];
+  for (const replicaSet of Array.isArray(replicasets) ? replicasets : []) {
+    const metadata = replicaSet.metadata || {};
+    const owner = (metadata.ownerReferences || []).find((entry) => entry.kind === 'Deployment');
+    if (!owner) continue;
+    const annotations = metadata.annotations || {};
+    const containersList = replicaSet.spec?.template?.spec?.containers || [];
+    const images = [...new Set(containersList.map((container) => clean(container.image, 300)).filter(Boolean))];
+    const replicas = num(replicaSet.spec?.replicas) ?? 0;
+    const ready = num(replicaSet.status?.readyReplicas) ?? 0;
+    const available = num(replicaSet.status?.availableReplicas) ?? 0;
+    const state = replicas === 0 ? 'superseded' : ready >= replicas ? 'active' : 'progressing';
+    items.push({
+      id: `k8s:${clean(metadata.namespace, 200)}:${clean(metadata.name, 240)}`,
+      source: 'kubernetes',
+      at: clean(metadata.creationTimestamp, 40),
+      workload: clean(owner.name || '', 240) || clean(metadata.name, 240),
+      namespace: clean(metadata.namespace, 200),
+      kind: 'Deployment',
+      version: clean(annotations['deployment.kubernetes.io/revision'], 40),
+      image: images.join(', '),
+      state,
+      detail: [
+        `${ready}/${replicas} replica(s) ready`,
+        available ? `${available} available` : '',
+        clean(annotations['kubernetes.io/change-cause'], 300),
+      ].filter(Boolean).join(' · '),
+      context: clean(context, 200),
+      href: '#/kubernetes/deployments',
+    });
+  }
+  for (const container of Array.isArray(containers) ? containers : []) {
+    const at = clean(container.createdAt, 60);
+    const parsed = Date.parse(at);
+    items.push({
+      id: `docker:${clean(container.id, 120)}`,
+      source: 'docker',
+      at: Number.isFinite(parsed) ? new Date(parsed).toISOString() : at,
+      workload: clean(container.compose ? `${container.compose}/${container.service || container.name}` : container.name, 240),
+      namespace: clean(container.compose || '', 200),
+      kind: container.compose ? 'Compose service' : 'Container',
+      version: '',
+      image: clean(container.image, 300),
+      state: clean(container.state, 30) || 'unknown',
+      detail: [
+        clean(container.status, 200),
+        container.compose ? `project ${container.compose}` : '',
+      ].filter(Boolean).join(' · '),
+      context: clean(container.compose ? 'Compose' : 'Docker engine', 120),
+      href: container.compose ? '#/compose' : '#/containers',
+    });
+  }
+  const sorted = items
+    .map((item) => ({ ...item, timestamp: Date.parse(item.at) || 0 }))
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, clamp(limit, 1, 200));
+  const dayAgo = Date.now() - 24 * 3600e3;
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    items: sorted,
+    summary: {
+      total: items.length,
+      shown: sorted.length,
+      kubernetes: items.filter((item) => item.source === 'kubernetes').length,
+      docker: items.filter((item) => item.source === 'docker').length,
+      last24h: items.filter((item) => item.timestamp >= dayAgo).length,
+      progressing: items.filter((item) => item.state === 'progressing').length,
+    },
+    sources,
+    limitations: [
+      'Kubernetes history comes from ReplicaSets that the cluster still retains; older revisions may be garbage-collected.',
+      'Docker rows show when a container was created, not when its image was pulled or built.',
+      'Deployments performed outside these two providers are not visible here.',
+    ],
+  };
+}
+
 function kubernetesInsights(data = {}, cost = {}) {
   const items = data.items || {};
   const health = analyzeKubernetesHealth(items);
@@ -2139,6 +2227,7 @@ module.exports = {
   analyzeKubernetesTroubleshooting,
   kubernetesInsights,
   analyzeMultiCluster,
+  analyzeDeployments,
   observabilityAnomalies,
   observabilityCapacity,
   observabilityDependencies,

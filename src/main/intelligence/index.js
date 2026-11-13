@@ -30,6 +30,7 @@ const {
   analyzeDockerOptimizer, compareDockerEnvironments,
   kubernetesInsights: kubernetesInsightsReport,
   analyzeMultiCluster,
+  analyzeDeployments,
   observabilityInsights: observabilityInsightsModule,
   sortFindings, summarize,
 } = require('./insights');
@@ -658,6 +659,62 @@ class IntelligenceService {
    * Database health, schema, workload, history and forecast. The connection is
    * only read; no query is executed that the SQL guard would not allow.
    */
+  /**
+   * Deployment evidence for the observability workspace.
+   *
+   * Kubernetes ReplicaSets and Docker containers are read independently; one
+   * unavailable provider is reported without hiding the other. Secrets are
+   * never requested.
+   */
+  async deployments(payload = {}) {
+    const sources = {};
+    let replicasets = [];
+    let containers = [];
+    let context = '';
+    if (this.kubernetes) {
+      try {
+        const state = await this.kubernetes.contextState?.();
+        context = state?.selected || '';
+        if (!context) {
+          sources.kubernetes = { ok: false, error: 'No Kubernetes context is configured.' };
+        } else {
+          const result = await this.kubernetes.kubeJson(
+            ['get', 'replicasets', '--all-namespaces', '-o', 'json'],
+            { timeout: 20000, context },
+          );
+          if (result.ok) {
+            replicasets = Array.isArray(result.data?.items) ? result.data.items : [];
+            sources.kubernetes = { ok: true, count: replicasets.length };
+          } else {
+            sources.kubernetes = { ok: false, error: safeError(result.stderr || 'The replicaset list failed.', 'Kubernetes did not answer.') };
+          }
+        }
+      } catch (error) {
+        sources.kubernetes = { ok: false, error: safeError(error, 'Kubernetes could not be read.') };
+      }
+    } else {
+      sources.kubernetes = { ok: false, error: 'Kubernetes is not available in this build.' };
+    }
+    if (this.docker) {
+      try {
+        const result = await this.docker.containersList();
+        if (result?.ok === false) sources.docker = { ok: false, error: safeError(result.error || 'Docker did not answer.', 'Docker could not be read.') };
+        else {
+          containers = result?.items || [];
+          sources.docker = { ok: true, count: containers.length };
+        }
+      } catch (error) {
+        sources.docker = { ok: false, error: safeError(error, 'Docker could not be read.') };
+      }
+    } else {
+      sources.docker = { ok: false, error: 'Docker is not available in this build.' };
+    }
+    return analyzeDeployments({
+      replicasets, containers, context, sources,
+      limit: clamp(payload.limit || 80, 1, 200),
+    });
+  }
+
   async databaseInsights(payload = {}) {
     if (!this.databases) return { ok: false, error: 'Database access is not available.' };
     const started = Date.now();

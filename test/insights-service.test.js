@@ -421,3 +421,48 @@ test('service: notes are scoped to one database object', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('service: deployment evidence reads Kubernetes and Docker independently', async () => {
+  const kubernetes = {
+    contextState: async () => ({ selected: 'prod' }),
+    kubeJson: async (args, options) => {
+      assert.deepEqual(args.slice(0, 2), ['get', 'replicasets']);
+      assert.equal(options.context, 'prod');
+      return {
+        ok: true,
+        data: {
+          items: [{
+            metadata: {
+              name: 'api-abc', namespace: 'shop', creationTimestamp: '2026-01-01T10:00:00.000Z',
+              annotations: { 'deployment.kubernetes.io/revision': '4' },
+              ownerReferences: [{ kind: 'Deployment', name: 'api' }],
+            },
+            spec: { replicas: 2, template: { spec: { containers: [{ image: 'shop/api:4' }] } } },
+            status: { readyReplicas: 2, availableReplicas: 2 },
+          }],
+        },
+      };
+    },
+  };
+  const docker = {
+    containersList: async () => ({ ok: true, items: [{ id: 'c1', name: 'web', image: 'shop/web:1', state: 'running', createdAt: '2026-01-02T10:00:00.000Z' }] }),
+  };
+  const { instance } = service({ kubernetes, docker });
+  try {
+    const result = await instance.deployments({ limit: 10 });
+    assert.equal(result.ok, true);
+    assert.equal(result.items.length, 2);
+    assert.equal(result.summary.kubernetes, 1);
+    assert.equal(result.summary.docker, 1);
+
+    // A denied kubectl call must not hide the Docker records.
+    instance.kubernetes.kubeJson = async () => ({ ok: false, stderr: 'forbidden: cannot list replicasets' });
+    const partial = await instance.deployments({});
+    assert.equal(partial.items.length, 1);
+    assert.equal(partial.sources.kubernetes.ok, false);
+    assert.match(partial.sources.kubernetes.error, /forbidden/);
+    assert.equal(partial.sources.docker.ok, true);
+  } finally {
+    instance.dispose();
+  }
+});

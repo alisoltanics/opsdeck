@@ -18,7 +18,7 @@ const {
   analyzeKubernetesHealth, analyzeKubernetesSecurity, analyzeKubernetesStorage,
   analyzeKubernetesNetwork, analyzeKubernetesOptimization, analyzeKubernetesCost,
   analyzeKubernetesGitOps, analyzeKubernetesTroubleshooting, kubernetesInsights,
-  analyzeMultiCluster,
+  analyzeMultiCluster, analyzeDeployments,
   observabilityAnomalies, observabilityCapacity, observabilitySlos,
   observabilityDependencies, observabilityProfiles,
   __test,
@@ -626,6 +626,70 @@ test('kubernetes: multi-cluster comparison isolates unreachable contexts', () =>
   assert.ok(result.findings.some((entry) => /unhealthy pods/i.test(entry.title)));
   assert.ok(result.findings.some((entry) => /unavailable deployments/i.test(entry.title)));
   assert.ok(result.limitations.some((entry) => /stage: node counts are unavailable/i.test(entry)));
+});
+
+test('deployments: Kubernetes ReplicaSets and Docker records are merged honestly', () => {
+  const result = analyzeDeployments({
+    context: 'prod',
+    sources: { kubernetes: { ok: true, count: 3 }, docker: { ok: true, count: 1 } },
+    replicasets: [
+      {
+        metadata: {
+          name: 'api-7d8f', namespace: 'shop', creationTimestamp: '2026-01-02T10:00:00.000Z',
+          annotations: { 'deployment.kubernetes.io/revision': '7', 'kubernetes.io/change-cause': 'bump image to 1.2.3' },
+          ownerReferences: [{ kind: 'Deployment', name: 'api' }],
+        },
+        spec: { replicas: 3, template: { spec: { containers: [{ image: 'shop/api:1.2.3' }] } } },
+        status: { readyReplicas: 2, availableReplicas: 2 },
+      },
+      {
+        metadata: {
+          name: 'api-old', namespace: 'shop', creationTimestamp: '2026-01-01T10:00:00.000Z',
+          annotations: { 'deployment.kubernetes.io/revision': '6' },
+          ownerReferences: [{ kind: 'Deployment', name: 'api' }],
+        },
+        spec: { replicas: 0, template: { spec: { containers: [{ image: 'shop/api:1.2.2' }] } } },
+        status: {},
+      },
+      {
+        metadata: { name: 'orphan-rs', namespace: 'shop', creationTimestamp: '2026-01-02T12:00:00.000Z' },
+        spec: { replicas: 1, template: { spec: { containers: [{ image: 'no/owner:1' }] } } },
+        status: { readyReplicas: 1 },
+      },
+    ],
+    containers: [{
+      id: 'c1', name: 'shop-web-1', compose: 'shop', service: 'web', image: 'shop/web:latest',
+      state: 'running', status: 'Up 2 hours', createdAt: '2026-01-03T10:00:00.000Z',
+    }],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.items.length, 3, 'a ReplicaSet without a Deployment owner is not a rollout');
+  assert.equal(result.summary.total, 3);
+  assert.equal(result.summary.kubernetes, 2);
+  assert.equal(result.summary.docker, 1);
+  assert.equal(result.summary.progressing, 1);
+  assert.equal(result.items[0].source, 'docker');
+  assert.equal(result.items[0].workload, 'shop/web');
+  const active = result.items.find((item) => item.workload === 'api');
+  assert.equal(active.state, 'progressing');
+  assert.equal(active.version, '7');
+  assert.match(active.image, /1\.2\.3/);
+  assert.match(active.detail, /2\/3 replica/);
+  assert.match(active.detail, /bump image/);
+  assert.equal(active.context, 'prod');
+  assert.equal(result.items.find((item) => item.workload === 'api' && item.version === '6').state, 'superseded');
+  assert.ok(result.items.every((item) => item.source === 'kubernetes' || item.source === 'docker'));
+});
+
+test('deployments: an unavailable source is reported without hiding the other', () => {
+  const result = analyzeDeployments({
+    sources: { kubernetes: { ok: false, error: 'forbidden' }, docker: { ok: true, count: 1 } },
+    containers: [{ id: 'c9', name: 'worker', image: 'shop/worker:2', state: 'exited', createdAt: '2026-01-04T10:00:00.000Z' }],
+  });
+  assert.equal(result.items.length, 1);
+  assert.equal(result.sources.kubernetes.ok, false);
+  assert.equal(result.sources.docker.ok, true);
+  assert.ok(result.limitations.some((entry) => /garbage-collected/i.test(entry)));
 });
 
 test('observability: SLO error budgets are computed from real samples', async () => {

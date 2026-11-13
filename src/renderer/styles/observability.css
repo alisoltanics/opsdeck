@@ -617,3 +617,10 @@
     gap: 3px;
   }
 }
+
+/* Deployment timeline ------------------------------------------------------ */
+.obs-filter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.obs-filter-bar .input { max-width: 380px; }
+.obs-wrap { max-width: 320px; overflow-wrap: anywhere; }
+.obs-hidden { display: none !important; }
+.obs-limits { margin: 6px 0 0; padding-inline-start: 18px; line-height: 1.7; }

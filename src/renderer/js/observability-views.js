@@ -34,6 +34,7 @@
     notifications: 'Notifications',
     agents: 'Agents & ingest',
     remediation: 'Remediation',
+    deployments: 'Deployments',
     settings: 'Settings',
     insights: 'Intelligence',
   };
@@ -71,6 +72,7 @@
     agents: null,
     remediation: null,
     reports: { types: [], result: null },
+    deployments: { items: [], summary: null, sources: {}, limitations: [], query: '', source: '' },
     settings: null,
     timer: null,
     liveTimer: null,
@@ -305,6 +307,17 @@
         S.agents = await api.observability.agents();
       } else if (page === 'remediation') {
         S.remediation = await api.observability.remediation();
+      } else if (page === 'deployments') {
+        const result = await api.intelligence.deployments({ limit: 120 });
+        if (!result || result.ok === false) throw new Error(result?.error || 'Deployment evidence could not be read.');
+        S.deployments = {
+          ...S.deployments,
+          items: result.items || [],
+          summary: result.summary || null,
+          sources: result.sources || {},
+          limitations: result.limitations || [],
+          generatedAt: result.generatedAt,
+        };
       } else if (page === 'settings') {
         const boot = await api.observability.bootstrap();
         S.settings = boot.config;
@@ -347,6 +360,7 @@
       notifications: 'Webhook, Slack, Discord, Telegram and email delivery channels.',
       agents: 'Bearer-token agents and the localhost OTLP/HTTP JSON receiver.',
       remediation: 'Approval-gated actions with allowlists, cooldowns and an audit trail.',
+      deployments: 'Real rollout evidence from Kubernetes ReplicaSets and Docker containers.',
       settings: 'Collection cadence, retention, collectors and workspace preferences.',
     }[page] || '';
   }
@@ -1157,6 +1171,60 @@
 
   // -------------------------------------------------------------- remediation
 
+  function deploymentsBody() {
+    const data = S.deployments || {};
+    const summary = data.summary || {};
+    const sourceErrors = Object.entries(data.sources || {})
+      .filter(([, value]) => value && value.ok === false)
+      .map(([source, value]) => `${source}: ${value.error || 'unavailable'}`);
+    const term = String(data.query || '').trim().toLowerCase();
+    const source = String(data.source || '');
+    const items = (data.items || []).filter((item) => {
+      if (source && item.source !== source) return false;
+      if (!term) return true;
+      return [item.workload, item.namespace, item.image, item.version, item.state, item.context, item.kind]
+        .join('\n').toLowerCase().includes(term);
+    });
+    const tone = (state) => ({ active: 'green', running: 'green', progressing: 'orange', superseded: 'slate', created: 'cyan', exited: 'slate', stopped: 'slate', paused: 'amber' }[String(state || '').toLowerCase()] || 'slate');
+    const rows = items.map((item) => `<tr data-deploy-search="${esc([item.workload, item.namespace, item.image, item.version, item.state, item.context, item.kind, item.detail].join(' ').toLowerCase())}">
+      <td class="obs-nowrap">${item.at ? esc(fmtDateTime(item.at)) : '—'}<div class="mono" style="color:var(--muted);font-size:10px">${item.at ? esc(timeAgo(item.at)) : ''}</div></td>
+      <td>${U.badge(item.source === 'kubernetes' ? 'Kubernetes' : 'Docker', item.source === 'kubernetes' ? 'cyan' : 'violet')}</td>
+      <td><strong>${esc(item.workload)}</strong><div class="mono" style="color:var(--muted);font-size:10px">${esc(item.kind || '')}${item.namespace ? ` · ${esc(item.namespace)}` : ''}</div></td>
+      <td class="mono obs-wrap">${esc(item.image || '—')}${item.version ? `<div style="color:var(--muted);font-size:10px">revision ${esc(item.version)}</div>` : ''}</td>
+      <td>${U.badge(item.state || 'unknown', tone(item.state))}</td>
+      <td class="obs-wrap">${esc(item.detail || '—')}</td>
+      <td class="obs-nowrap"><a class="btn btn-ghost btn-xs" href="${esc(item.href || '#/containers')}">Open${icon('arrow-up-right', 11)}</a></td>
+    </tr>`);
+    return `<div class="obs-stat-grid">
+      ${U.statCard({ label: 'Deployment records', value: fmtNumber(summary.total ?? 0), icon: 'rocket', tone: 'cyan', sub: `${fmtNumber(summary.shown ?? 0)} in this view` })}
+      ${U.statCard({ label: 'Kubernetes rollouts', value: fmtNumber(summary.kubernetes ?? 0), icon: 'cloud', tone: 'green', sub: 'Retained ReplicaSets across namespaces' })}
+      ${U.statCard({ label: 'Docker creations', value: fmtNumber(summary.docker ?? 0), icon: 'box', tone: 'orange', sub: 'Container creation timestamps' })}
+      ${U.statCard({ label: 'Last 24 hours', value: fmtNumber(summary.last24h ?? 0), icon: 'clock', tone: 'violet', sub: `${fmtNumber(summary.progressing ?? 0)} still progressing` })}
+    </div>
+    ${sourceErrors.length ? U.infoBanner('Partial coverage', sourceErrors.join(' · '), 'warning') : ''}
+    ${U.card({
+      title: 'Deployment timeline',
+      icon: 'rocket',
+      sub: 'Rollout history read from the cluster and the Docker engine; no event is synthesised',
+      actions: `${LINK('Kubernetes deployments', 'cloud', '#/kubernetes/deployments')}${LINK('Containers', 'box', '#/containers')}`,
+      body: `<div class="obs-filter-bar">
+        <input class="input input-sm" data-obs-deploy-search placeholder="Filter workload, image, namespace or change cause…" value="${esc(data.query || '')}">
+        <select class="input input-sm" data-obs-deploy-source aria-label="Filter deployment source">
+          <option value="">All sources</option>
+          <option value="kubernetes" ${source === 'kubernetes' ? 'selected' : ''}>Kubernetes</option>
+          <option value="docker" ${source === 'docker' ? 'selected' : ''}>Docker</option>
+        </select>
+        <span class="obs-muted">${fmtNumber(items.length)} of ${fmtNumber((data.items || []).length)} record(s)</span>
+      </div>
+      ${table(['When', 'Source', 'Workload', 'Image / revision', 'State', 'Detail', ''], rows, {
+        icon: 'rocket',
+        emptyTitle: items.length ? 'No record matches the filter' : 'No deployment record',
+        emptyBody: 'Kubernetes ReplicaSets and Docker containers were read, but neither reported a retained deployment.',
+      })}`,
+    })}
+    ${(data.limitations || []).length ? `<div class="obs-muted" style="margin-top:10px"><strong>How to read this</strong><ul class="obs-limits">${data.limitations.map((item) => `<li>${esc(item)}</li>`).join('')}</ul></div>` : ''}`;
+  }
+
   function remediationBody() {
     const status = S.remediation || {};
     const policies = status.policies || [];
@@ -1647,6 +1715,7 @@
     notifications: notificationsBody,
     agents: agentsBody,
     remediation: remediationBody,
+    deployments: deploymentsBody,
     settings: settingsBody,
   };
 
@@ -2212,12 +2281,20 @@
     if (el.matches('[data-obs-trace-service]')) { S.traces.service = el.value; refresh(); return; }
     if (el.matches('[data-obs-trace-errors]')) { S.traces.errors = el.checked; refresh(); return; }
     if (el.matches('[data-obs-metric-name]')) { S.metrics.name = el.value; refresh(); return; }
+    if (el.matches('[data-obs-deploy-source]')) { S.deployments.source = el.value; refresh(); return; }
   }
 
   function onInput(event) {
     const el = event.target;
     if (el.matches('[data-obs-log-search]')) S.logs.query = el.value;
     else if (el.matches('[data-obs-metric-search]')) S.metrics.search = el.value;
+    else if (el.matches('[data-obs-deploy-search]')) {
+      S.deployments.query = el.value;
+      const term = el.value.trim().toLowerCase();
+      document.querySelectorAll('[data-deploy-search]').forEach((row) => {
+        row.classList.toggle('obs-hidden', Boolean(term) && !row.dataset.deploySearch.includes(term));
+      });
+    }
   }
 
   // ------------------------------------------------------------------- export

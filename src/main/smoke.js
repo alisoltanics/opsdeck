@@ -87,6 +87,7 @@ const ROUTES = [
   ['observability logs', '#/observability/logs'],
   ['observability traces', '#/observability/traces'],
   ['observability alerts', '#/observability/alerts'],
+  ['observability deployments', '#/observability/deployments'],
   ['observability incidents', '#/observability/incidents'],
   ['observability dashboards', '#/observability/dashboards'],
   ['observability metrics', '#/observability/metrics'],
