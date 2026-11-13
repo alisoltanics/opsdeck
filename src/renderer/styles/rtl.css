@@ -38,3 +38,5 @@
 :root[dir='rtl'] .overlay.open .drawer { transform: none; }
 :root[dir='rtl'] select.input { background-position: 12px 50%, 17px 50%; }
 :root[dir='rtl'] .stat-value, :root[dir='rtl'] .num { unicode-bidi: isolate; }
+:root[dir='rtl'] .k8s-con, :root[dir='rtl'] .k8s-con-feed, :root[dir='rtl'] .k8s-con-prompt { direction: ltr; }
+:root[dir='rtl'] .k8s-con-bar, :root[dir='rtl'] .k8s-con-foot { direction: rtl; }

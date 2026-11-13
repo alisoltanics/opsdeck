@@ -127,6 +127,12 @@
         { id: 'kubernetes', section: 'tools', label: 'Local tools', icon: 'download', href: '#/kubernetes/tools' },
       ],
     },
+    {
+      label: 'Learn',
+      items: [
+        { id: 'academy', label: 'Kubernetes Academy', icon: 'graduation-cap', href: '#/academy/courses?track=kubernetes' },
+      ],
+    },
   ];
 
   const INTELLIGENCE_NAV = [
@@ -313,7 +319,7 @@
     else if (route?.name === 'help') {
       const target = route.parts?.[0];
       if (['docker', 'kubernetes', 'databases', 'observability', 'intelligence'].includes(target)) id = target;
-    } else if (route?.name !== 'settings') id = 'docker';
+    } else if (route?.name !== 'settings' && route?.name !== 'academy') id = 'docker';
     if (id !== currentWorkspace) {
       currentWorkspace = id;
       try { localStorage.setItem(WORKSPACE_KEY, id); } catch { /* optional */ }

@@ -3,6 +3,18 @@
   const OD = (window.OD = window.OD || {});
   OD.i18nFa = OD.i18nFa || {};
   Object.assign(OD.i18nFa, {
+    "Kubernetes Academy": "آکادمی Kubernetes",
+    "Session is empty": "نشست خالی است",
+    "Fullscreen": "تمام‌صفحه",
+    "Exit fullscreen": "خروج از تمام‌صفحه",
+    "Export": "خروجی",
+    "Filter session…": "فیلتر نشست…",
+    "Run again": "اجرای دوباره",
+    "Edit in prompt": "ویرایش در خط فرمان",
+    "Copy output": "کپی خروجی",
+    "Run command": "اجرای دستور",
+    "Run a command that changes the cluster?": "دستوری که کلاستر را تغییر می‌دهد اجرا شود؟",
+    "No match": "موردی پیدا نشد",
     "All tracks": "همه مسیرها",
     "Open beside the page": "باز کردن کنار صفحه",
     "Close help": "بستن راهنما",

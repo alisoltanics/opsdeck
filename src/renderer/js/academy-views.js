@@ -380,6 +380,12 @@
   // ------------------------------------------------------------------ courses
 
   function renderCourses() {
+    const wanted = OD.store.state.route?.query?.get?.('track');
+    const rawRoute = OD.store.state.route?.raw;
+    if (rawRoute !== state.trackAppliedFor) {
+      state.trackAppliedFor = rawRoute;
+      if (wanted && ['docker', 'kubernetes'].includes(wanted)) state.courseTrack = wanted;
+    }
     const courses = OD.store.state.academy.courses;
     const levels = ['All', 'Beginner', 'Intermediate', 'Advanced', 'Expert'];
     const q = state.courseQuery.trim().toLowerCase();

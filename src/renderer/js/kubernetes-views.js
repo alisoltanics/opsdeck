@@ -1369,37 +1369,306 @@
     </div>`;
   }
 
+  // ---------------------------------------------------------------- console
+  // The session lives at module level so a context switch or refresh re-render
+  // never throws away the scrollback.
+  const CS = { entries: [], history: [], filter: '', seq: 0, collapsed: new Set() };
+  try { CS.history = JSON.parse(localStorage.getItem('opsdeck:k8s-console-history') || '[]').slice(-200); } catch { CS.history = []; }
+
+  const KUBECTL_VERBS = ['get', 'describe', 'logs', 'top', 'explain', 'api-resources', 'api-versions', 'version', 'cluster-info', 'config', 'auth', 'events', 'diff', 'rollout', 'apply', 'create', 'delete', 'scale', 'label', 'annotate', 'patch', 'set', 'cordon', 'uncordon', 'drain', 'taint', 'exec', 'cp', 'run', 'expose', 'autoscale'];
+  const KUBECTL_RESOURCES = ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'cronjobs', 'services', 'ingresses', 'networkpolicies', 'nodes', 'namespaces', 'configmaps', 'secrets', 'persistentvolumes', 'persistentvolumeclaims', 'storageclasses', 'serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings', 'events', 'endpoints', 'hpa', 'resourcequotas', 'limitranges'];
+  const KUBECTL_FLAGS = ['-o wide', '-o yaml', '-o json', '-o name', '--all-namespaces', '-n ', '-l ', '--selector=', '--sort-by=', '--show-labels', '--field-selector=', '--previous', '--tail=100', '--since=1h', '--dry-run=client', '--watch-only'];
+  const MUTATING = /^(kubectl\s+)?(apply|annotate|autoscale|cordon|cp|create|debug|delete|drain|exec|expose|label|patch|replace|run|scale|set|taint|uncordon|rollout\s+(restart|undo|pause|resume))\b/i;
+
+  const BODY_MAX = 60000;
+  const fmtMs = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+  const stamp = (t) => new Date(t).toLocaleTimeString([], { hour12: false });
+
+  function highlightOutput(text) {
+    const lines = String(text).split('\n');
+    return lines.map((line, i) => {
+      const safe = esc(line);
+      if (i === 0 && /^(NAME|NAMESPACE|NODE|CONTEXT|LAST SEEN|TYPE|REVISION)\b/.test(line)) return `<span class="k8s-th">${safe}</span>`;
+      return safe
+        .replace(/\b(Running|Ready|Active|Bound|Available|Completed|Succeeded|True)\b/g, '<span class="k8s-ok">$1</span>')
+        .replace(/\b(Pending|ContainerCreating|Terminating|Unknown|Warning|Init:\d+\/\d+|PodInitializing)\b/g, '<span class="k8s-warn">$1</span>')
+        .replace(/\b(Error|CrashLoopBackOff|ImagePullBackOff|ErrImagePull|Failed|Evicted|OOMKilled|NotReady|False|Forbidden|BackOff)\b/g, '<span class="k8s-bad">$1</span>');
+    }).join('\n');
+  }
+
+  function consoleEntryHtml(entry) {
+    const ok = entry.result?.ok === true;
+    const res = entry.result || {};
+    const body = [res.stdout, res.stderr].filter((t) => String(t || '').trim()).join('\n');
+    const lines = body ? body.split('\n').length : 0;
+    const shown = body.length > BODY_MAX ? `${body.slice(0, BODY_MAX)}\n… output truncated in view (${body.length - BODY_MAX} more characters). Use Copy for the full text.` : body;
+    const collapsed = CS.collapsed.has(entry.id);
+    const status = entry.pending ? U.badge('running', 'blue') : ok ? U.badge(`exit ${res.code ?? 0}`, 'green') : U.badge(res.timedOut ? 'timed out' : `exit ${res.code ?? 1}`, 'red');
+    return `<article class="k8s-con-entry ${ok ? 'ok' : entry.pending ? 'pending' : 'fail'}" data-entry="${entry.id}">
+      <header class="k8s-con-entry-head">
+        <span class="k8s-con-meta"><span class="k8s-con-time">${esc(stamp(entry.at))}</span><span class="k8s-con-ctx" title="Context / namespace">${esc(entry.context || '')}${entry.namespace ? ` · ${esc(entry.namespace)}` : ''}</span></span>
+        <code class="k8s-con-cmd"><span class="k8s-con-dollar">$</span> ${esc(res.command || entry.command)}</code>
+        <span class="k8s-con-tools">
+          ${status}${entry.ms != null ? `<span class="faint text-xs">${fmtMs(entry.ms)}${lines ? ` · ${lines} line${lines === 1 ? '' : 's'}` : ''}</span>` : ''}
+          <button type="button" class="icon-btn" data-con-act="rerun" title="Run again" aria-label="Run again">${icon('refresh', 13)}</button>
+          <button type="button" class="icon-btn" data-con-act="reuse" title="Edit in prompt" aria-label="Edit in prompt">${icon('terminal', 13)}</button>
+          <button type="button" class="icon-btn" data-con-act="copy" title="Copy output" aria-label="Copy output">${icon('copy', 13)}</button>
+          <button type="button" class="icon-btn" data-con-act="fold" title="${collapsed ? 'Expand' : 'Collapse'}" aria-label="${collapsed ? 'Expand' : 'Collapse'}">${icon(collapsed ? 'chevron-down' : 'chevron-up', 13)}</button>
+          <button type="button" class="icon-btn" data-con-act="remove" title="Remove" aria-label="Remove">${icon('x', 13)}</button>
+        </span>
+      </header>
+      ${collapsed || entry.pending ? '' : (shown
+        ? `<pre class="k8s-con-out ${res.stderr && !res.stdout ? 'err' : ''}">${highlightOutput(shown)}</pre>`
+        : `<div class="faint text-xs k8s-con-empty">${esc(res.error || 'The command produced no output.')}</div>`)}
+    </article>`;
+  }
+
+  function consoleFeedHtml() {
+    const q = CS.filter.trim().toLowerCase();
+    const list = q ? CS.entries.filter((e) => `${e.command} ${e.result?.stdout || ''} ${e.result?.stderr || ''}`.toLowerCase().includes(q)) : CS.entries;
+    if (!CS.entries.length) {
+      return U.empty({ compact: true, icon: 'terminal', title: 'Session is empty', body: 'Type a kubectl command, press Tab to complete, ↑ ↓ for history. Context and namespace are applied for you.' });
+    }
+    if (!list.length) return U.empty({ compact: true, icon: 'search', title: 'No match', body: 'No command or output contains that text.' });
+    return list.map(consoleEntryHtml).join('');
+  }
+
   async function renderConsole() {
     if (!api?.kubernetes) return unavailable();
     const [data, commands] = await Promise.all([loadBootstrap(), loadCommands('console')]);
     if (!data.tools?.kubectl?.installed) return noKubectl(data.tools);
     if (!data.contexts?.length) return noContexts(data);
-    const suggestions = commands.slice(0, 4).map((item) => `<button type="button" class="k8s-suggest" data-k8s-suggest="${esc(item.command)}" title="${esc(item.description || '')}">${esc(item.label)}</button>`).join('');
-    return `<div class="page">
+    const suggestions = commands.slice(0, 8).map((item) => `<button type="button" class="k8s-suggest" data-k8s-suggest="${esc(item.command)}" title="${esc(item.description || '')}">${esc(item.label)}</button>`).join('');
+    const ns = data.namespace || 'default';
+    return `<div class="page k8s-console-page">
       ${pageHead({
         title: PAGES.console,
-        sub: 'Run real kubectl commands with the selected context enforced. No host shell, no pipes and no kubeconfig edits.',
+        sub: 'A real kubectl session with the selected context enforced. No host shell, no pipes and no kubeconfig edits.',
         actions: pageActions('console'),
       })}
       ${selectorBar(data)}
-      ${U.card({
-        title: 'Kubectl console',
-        icon: 'terminal',
-        sub: `Context ${data.selected || '—'} · namespace ${data.namespace || 'default'}`,
-        body: `<div class="k8s-console-wrap">
-          ${suggestions ? `<div class="k8s-console-suggest">${suggestions}</div>` : ''}
-          <form class="k8s-console" data-k8s-console-form autocomplete="off">
-            <span class="k8s-console-prompt">$</span>
-            <input class="input mono" data-k8s-console-input name="command" placeholder="kubectl get pods -o wide" autocomplete="off" spellcheck="false" aria-label="kubectl command" />
-            <button type="submit" class="btn btn-primary btn-sm" data-k8s-console-run>Run</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-k8s-console-clear>Clear</button>
-          </form>
-          <div class="k8s-console-output" data-k8s-console-output>${U.empty({ compact: true, icon: 'terminal', title: 'No commands yet', body: 'Type a kubectl command or pick a suggestion. Namespace and context are appended automatically when you leave them out.' })}</div>
-          <div class="faint text-xs">${icon('shield-check', 11)} Streaming flags, port-forward, proxy, attach, edit and kubeconfig mutations are rejected. Pod shells have their own interactive terminal.</div>
-        </div>`,
-      })}
-      <div class="mt-4">${commandsCard('console', commands)}</div>
+      <section class="k8s-con" data-k8s-console-card data-context="${esc(data.selected || '')}" data-namespace="${esc(ns)}">
+        <header class="k8s-con-bar">
+          <span class="k8s-con-title">${icon('terminal', 15)}<strong>kubectl</strong></span>
+          <span class="k8s-con-chip" title="Context">${icon('cloud', 11)}${esc(data.selected || '—')}</span>
+          <span class="k8s-con-chip" title="Namespace">${icon('layers', 11)}${esc(ns)}</span>
+          <label class="k8s-con-search">${icon('search', 12)}<input type="search" data-con-filter placeholder="Filter session…" value="${esc(CS.filter)}" aria-label="Filter session" /></label>
+          <span class="k8s-con-count faint text-xs" data-con-count></span>
+          <span class="k8s-con-spacer"></span>
+          <button type="button" class="btn btn-ghost btn-xs" data-con-export title="Save session as text">${icon('download', 12)}<span>Export</span></button>
+          <button type="button" class="btn btn-ghost btn-xs" data-con-clear title="Clear session (Ctrl+L)">${icon('trash', 12)}<span>Clear</span></button>
+          <button type="button" class="btn btn-secondary btn-xs" data-con-fullscreen title="Fullscreen (F11)">${icon('maximize', 12)}<span>Fullscreen</span></button>
+        </header>
+        ${suggestions ? `<div class="k8s-console-suggest k8s-con-quick">${suggestions}</div>` : ''}
+        <div class="k8s-con-feed" data-con-feed tabindex="-1" aria-live="polite">${consoleFeedHtml()}</div>
+        <form class="k8s-con-prompt" data-k8s-console-form autocomplete="off">
+          <div class="k8s-con-hints" data-con-hints hidden role="listbox"></div>
+          <span class="k8s-con-ps"><span class="k8s-con-ps-ctx">${esc(data.selected || '')}</span><span class="k8s-con-ps-ns">${esc(ns)}</span><span class="k8s-con-dollar">$</span></span>
+          <input class="k8s-con-input" data-k8s-console-input name="command" placeholder="kubectl get pods -o wide" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="kubectl command" />
+          <button type="submit" class="btn btn-primary btn-sm" data-k8s-console-run>${icon('play', 12)}<span>Run</span></button>
+        </form>
+        <footer class="k8s-con-foot faint text-xs">
+          <span>${icon('shield-check', 11)} Watch/follow, port-forward, proxy, attach, edit and kubeconfig changes are rejected. Pod shells have their own terminal.</span>
+          <span class="k8s-con-keys"><kbd>Tab</kbd> complete <kbd>↑</kbd><kbd>↓</kbd> history <kbd>Ctrl+L</kbd> clear <kbd>Esc</kbd> exit fullscreen</span>
+        </footer>
+      </section>
+      <div class="mt-4 k8s-con-below">${commandsCard('console', commands)}</div>
     </div>`;
+  }
+
+  function mountConsole(root) {
+    const card = root.querySelector('[data-k8s-console-card]');
+    if (!card) return;
+    const feed = card.querySelector('[data-con-feed]');
+    const input = card.querySelector('[data-k8s-console-input]');
+    const form = card.querySelector('[data-k8s-console-form]');
+    const hints = card.querySelector('[data-con-hints]');
+    const runBtn = card.querySelector('[data-k8s-console-run]');
+    let histIndex = CS.history.length;
+    let draft = '';
+    let hintItems = [];
+    let hintIndex = -1;
+
+    const paintCount = () => {
+      const el = card.querySelector('[data-con-count]');
+      if (el) el.textContent = CS.entries.length ? `${CS.entries.length} command${CS.entries.length === 1 ? '' : 's'}` : '';
+    };
+    const toBottom = () => { feed.scrollTop = feed.scrollHeight; };
+    const paint = (stick = false) => { feed.innerHTML = consoleFeedHtml(); paintCount(); if (stick) toBottom(); };
+    const saveHistory = () => { try { localStorage.setItem('opsdeck:k8s-console-history', JSON.stringify(CS.history.slice(-200))); } catch { /* optional */ } };
+
+    function candidates(value) {
+      const parts = value.replace(/^\s+/, '').split(/\s+/);
+      const trailing = /\s$/.test(value);
+      const tokens = parts[0] === 'kubectl' ? parts.slice(1) : parts;
+      const prefixed = parts[0] === 'kubectl';
+      const cur = trailing ? '' : tokens[tokens.length - 1] || '';
+      const idx = trailing ? tokens.length : tokens.length - 1;
+      let pool = [];
+      if (idx <= 0) pool = KUBECTL_VERBS;
+      else if (cur.startsWith('-')) pool = KUBECTL_FLAGS;
+      else if (['get', 'describe', 'delete', 'top', 'scale', 'rollout', 'label', 'annotate', 'patch', 'logs', 'explain'].includes(tokens[0]) && (idx === 1 || (tokens[0] === 'rollout' && idx === 2))) pool = tokens[0] === 'rollout' && idx === 1 ? ['status', 'history', 'restart', 'undo'] : KUBECTL_RESOURCES.concat(tokens[0] === 'top' ? [] : []);
+      else if (tokens[0] === 'rollout' && idx === 1) pool = ['status', 'history', 'restart', 'undo'];
+      else if (tokens[0] === 'config' && idx === 1) pool = ['view', 'get-contexts', 'current-context'];
+      else if (tokens[0] === 'auth' && idx === 1) pool = ['can-i', 'whoami'];
+      const matches = pool.filter((c) => c.startsWith(cur) && c.trim() !== cur).slice(0, 8);
+      const head = tokens.slice(0, trailing ? tokens.length : -1);
+      return matches.map((m) => ({ label: m.trim(), value: `${prefixed ? 'kubectl ' : ''}${[...head, m].join(' ')}` }));
+    }
+    function hideHints() { hints.hidden = true; hintItems = []; hintIndex = -1; }
+    function showHints() {
+      hintItems = input.value.trim() ? candidates(input.value) : [];
+      if (!hintItems.length) { hideHints(); return; }
+      hintIndex = -1;
+      hints.innerHTML = hintItems.map((h, i) => `<button type="button" role="option" data-hint="${i}">${esc(h.label)}</button>`).join('');
+      hints.hidden = false;
+    }
+    function accept(i) {
+      const h = hintItems[i];
+      if (!h) return;
+      input.value = h.value;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      showHints();
+    }
+
+    async function execute(command, { skipConfirm = false } = {}) {
+      const text = command.trim();
+      if (!text) return;
+      if (MUTATING.test(text) && !skipConfirm) {
+        const ok = await U.confirm({
+          title: 'Run a command that changes the cluster?',
+          message: `${text}\n\nContext ${card.dataset.context} · namespace ${card.dataset.namespace}`,
+          confirmLabel: 'Run command',
+          tone: /^(kubectl\s+)?(delete|drain|taint)\b/i.test(text) ? 'red' : undefined,
+        });
+        if (!ok) return;
+      }
+      if (CS.history[CS.history.length - 1] !== text) CS.history.push(text);
+      saveHistory();
+      histIndex = CS.history.length;
+      const entry = { id: ++CS.seq, command: text, at: Date.now(), pending: true, context: card.dataset.context, namespace: card.dataset.namespace };
+      CS.entries.push(entry);
+      if (CS.entries.length > 150) CS.entries.shift();
+      paint(true);
+      busy(runBtn, true, 'Running…');
+      const started = performance.now();
+      try {
+        entry.result = await api.kubernetes.runCommand({ command: text });
+      } catch (error) {
+        entry.result = { ok: false, error: error.message, code: 1 };
+      }
+      entry.ms = Math.round(performance.now() - started);
+      entry.pending = false;
+      busy(runBtn, false);
+      const stick = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 140 || true;
+      paint(stick);
+      input.focus();
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const command = input.value;
+      input.value = '';
+      hideHints();
+      execute(command);
+    });
+
+    input.addEventListener('input', () => { histIndex = CS.history.length; showHints(); });
+    input.addEventListener('blur', () => setTimeout(hideHints, 120));
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        if (!hintItems.length) showHints();
+        if (hintItems.length === 1) accept(0);
+        else if (hintItems.length) {
+          hintIndex = (hintIndex + (event.shiftKey ? -1 : 1) + hintItems.length) % hintItems.length;
+          hints.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', i === hintIndex));
+          const common = hintItems.map((h) => h.value).reduce((a, b) => { let n = 0; while (n < a.length && a[n] === b[n]) n += 1; return a.slice(0, n); });
+          if (hintIndex === 0 && common.length > input.value.length) { input.value = common; hintIndex = -1; hints.querySelectorAll('button').forEach((b) => b.classList.remove('active')); }
+          else input.dataset.pick = String(hintIndex);
+        }
+        return;
+      }
+      if (event.key === 'Enter' && !hints.hidden && hintIndex >= 0) { event.preventDefault(); accept(hintIndex); return; }
+      if (event.key === 'Escape' && !hints.hidden) { event.stopPropagation(); hideHints(); return; }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (histIndex === CS.history.length) draft = input.value;
+        histIndex = Math.max(0, histIndex - 1);
+        input.value = CS.history[histIndex] ?? input.value;
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        histIndex = Math.min(CS.history.length, histIndex + 1);
+        input.value = histIndex === CS.history.length ? draft : CS.history[histIndex];
+      } else if (event.key === 'l' && event.ctrlKey) {
+        event.preventDefault();
+        CS.entries = [];
+        paint();
+      } else if (event.key === 'u' && event.ctrlKey) {
+        input.value = '';
+      }
+    });
+
+    hints.addEventListener('mousedown', (event) => {
+      const b = event.target.closest('[data-hint]');
+      if (b) { event.preventDefault(); accept(Number(b.dataset.hint)); }
+    });
+
+    card.addEventListener('click', async (event) => {
+      const suggest = event.target.closest('[data-k8s-suggest]');
+      if (suggest) {
+        input.value = suggest.dataset.k8sSuggest || '';
+        input.focus();
+        showHints();
+        return;
+      }
+      if (event.target.closest('[data-con-clear]')) { CS.entries = []; paint(); return; }
+      if (event.target.closest('[data-con-fullscreen]')) {
+        if (document.fullscreenElement) document.exitFullscreen(); else card.requestFullscreen?.().catch(() => card.classList.toggle('is-full'));
+        return;
+      }
+      if (event.target.closest('[data-con-export]')) {
+        const text = CS.entries.map((e) => `# ${new Date(e.at).toISOString()}  ${e.context}/${e.namespace}\n$ ${e.result?.command || e.command}\n${[e.result?.stdout, e.result?.stderr, e.result?.error].filter(Boolean).join('\n')}\n`).join('\n');
+        if (!text.trim()) { U.toast('Nothing to export yet', 'info'); return; }
+        OD.utils.copyText(text, 'Session copied to clipboard');
+        return;
+      }
+      const act = event.target.closest('[data-con-act]');
+      if (act) {
+        const id = Number(act.closest('[data-entry]')?.dataset.entry);
+        const entry = CS.entries.find((e) => e.id === id);
+        if (!entry) return;
+        const kind = act.dataset.conAct;
+        if (kind === 'rerun') execute(entry.command);
+        else if (kind === 'reuse') { input.value = entry.command; input.focus(); }
+        else if (kind === 'copy') OD.utils.copyText([entry.result?.stdout, entry.result?.stderr].filter(Boolean).join('\n') || '', 'Output copied');
+        else if (kind === 'fold') { if (CS.collapsed.has(id)) CS.collapsed.delete(id); else CS.collapsed.add(id); paint(); }
+        else if (kind === 'remove') { CS.entries = CS.entries.filter((e) => e.id !== id); paint(); }
+        return;
+      }
+      if (!window.getSelection()?.toString() && event.target.closest('.k8s-con-feed, .k8s-con-prompt')) input.focus();
+    });
+
+    card.querySelector('[data-con-filter]')?.addEventListener('input', (event) => {
+      CS.filter = event.target.value;
+      paint();
+    });
+
+    card.addEventListener('fullscreenchange', () => {
+      const on = document.fullscreenElement === card;
+      const btn = card.querySelector('[data-con-fullscreen]');
+      if (btn) btn.innerHTML = `${icon(on ? 'shrink' : 'maximize', 12)}<span>${on ? 'Exit fullscreen' : 'Fullscreen'}</span>`;
+      toBottom();
+      input.focus();
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'F11') { event.preventDefault(); card.querySelector('[data-con-fullscreen]')?.click(); }
+    });
+
+    paintCount();
+    toBottom();
+    input.focus({ preventScroll: true });
   }
 
   const RESOURCE_SECTIONS = ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'nodes', 'namespaces', 'services', 'ingresses', 'networkpolicies', 'persistentvolumes', 'persistentvolumeclaims', 'storageclasses', 'configmaps', 'secrets', 'resourcequotas', 'limitranges', 'serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings', 'events'];
@@ -1480,7 +1749,6 @@
       OD.views.insights.mount(root, 'kubernetes');
       return;
     }
-    let consoleResult = null;
     if (OD.kubernetesTopology && root.querySelector('[data-topo-map]')) {
       OD.kubernetesTopology.mount(root, {
         openResourceDrawer,
@@ -1490,10 +1758,6 @@
     }
     root.addEventListener('click', async (event) => {
       if (event.target.closest('[data-copy-text], .code-copy')) return;
-      if (event.target.closest('[data-k8s-console-expand]') && consoleResult) {
-        openCommandOutput(consoleResult);
-        return;
-      }
       const installBtn = event.target.closest('[data-k8s-install-tools]');
       if (installBtn) {
         await startInstall(installBtn);
@@ -1543,23 +1807,6 @@
       const minikubeBtn = event.target.closest('[data-minikube-action]');
       if (minikubeBtn) {
         await runMinikubeAction(minikubeBtn, minikubeBtn.dataset.minikubeAction);
-        return;
-      }
-      const suggest = event.target.closest('[data-k8s-suggest]');
-      if (suggest) {
-        const input = root.querySelector('[data-k8s-console-input]');
-        if (input) {
-          input.value = suggest.dataset.k8sSuggest || '';
-          input.focus();
-          input.setSelectionRange(input.value.length, input.value.length);
-        }
-        return;
-      }
-      if (event.target.closest('[data-k8s-console-clear]')) {
-        const output = root.querySelector('[data-k8s-console-output]');
-        if (output) {
-          output.innerHTML = U.empty({ compact: true, icon: 'terminal', title: 'Console cleared', body: 'Type a kubectl command or pick a suggestion to start again.' });
-        }
         return;
       }
       if (event.target.closest('[data-k8s-toggle-all]')) {
@@ -1619,53 +1866,7 @@
       }
     });
 
-    const consoleHistory = [];
-    let consoleIndex = 0;
-    root.addEventListener('submit', async (event) => {
-      const form = event.target.closest('[data-k8s-console-form]');
-      if (!form) return;
-      event.preventDefault();
-      const input = form.querySelector('[data-k8s-console-input]');
-      const runBtn = form.querySelector('[data-k8s-console-run]');
-      const output = root.querySelector('[data-k8s-console-output]');
-      const command = String(input?.value || '').trim();
-      if (!command || !output) return;
-      consoleHistory.push(command);
-      consoleIndex = consoleHistory.length;
-      output.innerHTML = U.loader('Running kubectl…');
-      busy(runBtn, true, 'Running…');
-      try {
-        const result = await api.kubernetes.runCommand({ command });
-        consoleResult = result;
-        output.innerHTML = consoleEntry(command, result);
-        if (!result?.ok) U.toast('Command failed', 'error', { description: result?.stderr || result?.error || 'Check the output.' });
-        if (input) {
-          input.value = '';
-          input.focus();
-        }
-      } catch (error) {
-        output.innerHTML = consoleEntry(command, { ok: false, error: error.message, code: 1 });
-        U.toast('Could not run the command', 'error', { description: error.message || 'Try again.' });
-      } finally {
-        busy(runBtn, false);
-      }
-    });
-
-    root.addEventListener('keydown', (event) => {
-      const input = event.target.closest('[data-k8s-console-input]');
-      if (!input || !consoleHistory.length) return;
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        consoleIndex = Math.max(0, consoleIndex - 1);
-        input.value = consoleHistory[consoleIndex] || '';
-        input.setSelectionRange(input.value.length, input.value.length);
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        consoleIndex = Math.min(consoleHistory.length, consoleIndex + 1);
-        input.value = consoleHistory[consoleIndex] || '';
-        input.setSelectionRange(input.value.length, input.value.length);
-      }
-    });
+    mountConsole(root);
 
     root.addEventListener('change', async (event) => {
       if (event.target.matches('[data-k8s-context]')) {        const select = event.target;
