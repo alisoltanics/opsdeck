@@ -26,6 +26,8 @@ renderer. Docker and kubectl commands go through `execFile` with argument arrays
 | 🐳 **Docker** | Containers, images, volumes, networks, Compose, builds, live stats and a real in-app shell |
 | ☸️ **Kubernetes** | Live cluster map, resources, pod logs and shells, kubectl console, Minikube controls |
 | 🗄️ **Databases** | PostgreSQL, MySQL/MariaDB, SQLite, MongoDB, Redis and Elasticsearch in one workspace |
+| 📈 **Observability** | Retained metrics, logs, traces, alerts, incidents, SLOs, synthetic checks, reports and deployment evidence |
+| 🧠 **Intelligence** | Cross-module graph, search, timeline, change history, RCA and approval-gated automation |
 | 🎓 **Academy** | 18 courses, 70 lessons, 210 quiz questions, labs and a 119-entry command reference |
 | ✨ **AI** | Context-aware assistant: bring any OpenAI-compatible API or a local CLI, keys never leave the main process |
 
@@ -96,6 +98,29 @@ renderer. Docker and kubectl commands go through `execFile` with argument arrays
 - Secrets are stored with Electron `safeStorage` or AES-256-GCM only
 - AI query generator with Simple and Advanced SQL/Django variants, plus Ask AI across the workspace
   (RTL-aware answers) and readable connection errors
+- Database intelligence: evidence-based health, index and duplicate findings, workload and query
+  regressions, forecasts, declared foreign-key dependencies, schema time machine, saved-query
+  library and per-object investigation notes
+
+**Observability workspace**
+
+- Real collectors for this host, remote servers, Docker, Kubernetes, databases, synthetic checks
+  and the network; unsupported measurements stay missing with a stated reason
+- Retained metrics, logs and traces with a metrics explorer, dashboards and report generation
+- Alerts, silences, incidents, SLOs with error budgets, anomaly and capacity analysis, service
+  dependency maps and latency profiles
+- Deployment timeline built from retained Kubernetes ReplicaSets and Docker container creation
+  records, with per-source errors reported instead of hidden
+
+**Intelligence workspace**
+
+- One read-only inventory and graph across Docker, Kubernetes, databases, hosts and observability,
+  with observed and inferred relationships labelled differently
+- Global search, unified timeline, change detection and environment assignment
+- Root-cause investigations that separate facts, hypotheses and limitations
+- Approval-gated automation: notifications, incidents, reports, diagnostics, read-only SQL,
+  container and Compose restarts, Kubernetes rollouts and scaling, dry runs and an audit trail
+- Resource side panel, favourites, saved searches and workspaces
 
 **Docker Academy**
 
