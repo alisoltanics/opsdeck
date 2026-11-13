@@ -18,15 +18,33 @@ const { destructiveReason } = require('../databases');
 const TRIGGER_TYPES = new Set(['schedule', 'condition', 'event']);
 const OPERATORS = new Set(['>', '>=', '<', '<=', '==', '!=']);
 const AGGREGATIONS = new Set(['avg', 'max', 'min', 'last', 'sum', 'count']);
-const ACTION_TYPES = new Set(['notify', 'create-incident', 'report', 'diagnostics', 'db-query', 'docker-restart']);
-const DESTRUCTIVE_ACTIONS = new Set(['docker-restart']);
+const ACTION_TYPES = new Set([
+  'notify', 'create-incident', 'report', 'diagnostics', 'db-query',
+  'docker-restart', 'docker-compose-restart', 'k8s-restart', 'k8s-scale',
+]);
+const DESTRUCTIVE_ACTIONS = new Set(['docker-restart', 'docker-compose-restart', 'k8s-restart', 'k8s-scale']);
 const CONDITION_TYPES = new Set(['metric', 'resource-status', 'incident-open']);
 const MAX_ACTIONS = 12;
 const MAX_CONDITIONS = 10;
 const MAX_RUNS = 500;
 
+// Workload kinds the cluster can roll or scale. DaemonSets have no replica
+// count, so they can only be restarted.
+const K8S_RESTART_SECTIONS = new Set(['deployments', 'statefulsets', 'daemonsets']);
+const K8S_SCALE_SECTIONS = new Set(['deployments', 'statefulsets']);
+
 function validId(value) {
   return /^[A-Za-z0-9_-]{1,80}$/.test(String(value || ''));
+}
+
+// Kubernetes DNS-1123 names. Anything else is rejected before kubectl runs, so
+// a crafted automation cannot smuggle an extra argument or target another kind.
+function validK8sName(value) {
+  return /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/.test(String(value || ''));
+}
+
+function validK8sNamespace(value) {
+  return /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/.test(String(value || ''));
 }
 
 function validOperator(value) {
@@ -111,6 +129,18 @@ function normalizeAction(input = {}) {
     action.limit = clamp(input.limit || 50, 1, 1000);
   } else if (input.type === 'docker-restart') {
     action.containerId = clean(input.containerId, 128);
+  } else if (input.type === 'docker-compose-restart') {
+    action.project = clean(input.project, 128);
+  } else if (input.type === 'k8s-restart') {
+    action.section = K8S_RESTART_SECTIONS.has(input.section) ? input.section : 'deployments';
+    action.name = clean(input.name, 253);
+    action.namespace = clean(input.namespace, 63);
+    action.replicas = null;
+  } else if (input.type === 'k8s-scale') {
+    action.section = K8S_SCALE_SECTIONS.has(input.section) ? input.section : 'deployments';
+    action.name = clean(input.name, 253);
+    action.namespace = clean(input.namespace, 63);
+    action.replicas = clamp(input.replicas === undefined ? 1 : input.replicas, 0, 100);
   }
   return action;
 }
@@ -157,7 +187,7 @@ function normalizeAutomation(input = {}, existing = null) {
     ? input.approval
     : existing?.approval || (actions.some((action) => DESTRUCTIVE_ACTIONS.has(action.type)) ? 'always' : 'never');
   const item = {
-    id: existing?.id || (validId(input.id) ? input.id : `auto-${Date.now().toString(36)}`),
+    id: existing?.id || (validId(input.id) ? input.id : `auto-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`),
     name,
     description: clean(input.description ?? existing?.description ?? '', 600),
     enabled: input.enabled === undefined ? existing?.enabled !== false : input.enabled === true,
@@ -595,6 +625,73 @@ class AutomationEngine {
       const result = await this.deps.restartContainer(action.containerId);
       if (result?.ok === false) throw new Error(result.error || 'The restart failed.');
       return { ok: true, detail: `Restarted container ${action.containerId}.` };
+    }
+    if (action.type === 'docker-compose-restart') {
+      if (!this.deps.restartCompose) throw new Error('Docker Compose access is not available.');
+      if (!run.approved) throw new Error('Restarting a Compose project requires approval.');
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(action.project)) throw new Error('Choose a valid Compose project.');
+      this.store.audit({
+        action: 'compose-restart',
+        module: 'docker',
+        resource: action.project,
+        outcome: 'pending',
+        detail: `Approved Compose restart via automation ${automation.name}`,
+      });
+      const result = await this.deps.restartCompose(action.project);
+      if (result?.ok === false) throw new Error(result.error || 'The Compose restart failed.');
+      return { ok: true, detail: `Restarted Compose project ${action.project}.` };
+    }
+    if (action.type === 'k8s-restart') {
+      if (!this.deps.restartWorkload) throw new Error('Kubernetes access is not available.');
+      if (!run.approved) throw new Error('Restarting a workload requires approval.');
+      if (!K8S_RESTART_SECTIONS.has(action.section)) throw new Error('That workload kind cannot be restarted.');
+      if (!validK8sNamespace(action.namespace)) throw new Error('Choose a valid namespace for the workload.');
+      if (!validK8sName(action.name)) throw new Error('Choose a valid workload name.');
+      this.store.audit({
+        action: 'workload-restart',
+        module: 'kubernetes',
+        resource: `${action.section}/${action.namespace}/${action.name}`,
+        outcome: 'pending',
+        detail: `Approved rolling restart via automation ${automation.name}`,
+      });
+      const result = await this.deps.restartWorkload({
+        section: action.section,
+        name: action.name,
+        namespace: action.namespace,
+      });
+      if (result?.ok === false) throw new Error(result.error || 'The rollout restart failed.');
+      return {
+        ok: true,
+        detail: `Rolled out ${action.section}/${action.name} in ${action.namespace}.`,
+        meta: { section: action.section, namespace: action.namespace, name: action.name },
+      };
+    }
+    if (action.type === 'k8s-scale') {
+      if (!this.deps.scaleWorkload) throw new Error('Kubernetes access is not available.');
+      if (!run.approved) throw new Error('Scaling a workload requires approval.');
+      if (!K8S_SCALE_SECTIONS.has(action.section)) throw new Error('Only Deployments and StatefulSets can be scaled.');
+      if (!validK8sNamespace(action.namespace)) throw new Error('Choose a valid namespace for the workload.');
+      if (!validK8sName(action.name)) throw new Error('Choose a valid workload name.');
+      const replicas = clamp(action.replicas, 0, 100);
+      this.store.audit({
+        action: 'workload-scale',
+        module: 'kubernetes',
+        resource: `${action.section}/${action.namespace}/${action.name}`,
+        outcome: 'pending',
+        detail: `Approved scale to ${replicas} replica(s) via automation ${automation.name}`,
+      });
+      const result = await this.deps.scaleWorkload({
+        section: action.section,
+        name: action.name,
+        namespace: action.namespace,
+        replicas,
+      });
+      if (result?.ok === false) throw new Error(result.error || 'The scale request failed.');
+      return {
+        ok: true,
+        detail: `Scaled ${action.section}/${action.name} in ${action.namespace} to ${replicas} replica(s).`,
+        meta: { section: action.section, namespace: action.namespace, name: action.name, replicas },
+      };
     }
     throw new Error(`Unsupported action type: ${action.type}`);
   }

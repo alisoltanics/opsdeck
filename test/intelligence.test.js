@@ -533,6 +533,141 @@ test('automation: disabled settings block manual runs but not dry runs', async (
   assert.equal(dry.ok, true);
 });
 
+test('automation: Kubernetes actions are normalized and gated like other disruptive actions', async () => {
+  const normalized = autoTest.normalizeAutomation({
+    name: 'Roll and scale',
+    trigger: { type: 'schedule', everyMinutes: 30 },
+    actions: [
+      { type: 'k8s-restart', section: 'daemonsets', name: 'node-agent', namespace: 'kube-system' },
+      { type: 'k8s-scale', section: 'statefulsets', name: 'db', namespace: 'data', replicas: 999 },
+    ],
+  });
+  assert.equal(normalized.approval, 'always', 'disruptive Kubernetes actions default to approval');
+  assert.equal(normalized.actions[0].section, 'daemonsets');
+  assert.equal(normalized.actions[0].name, 'node-agent');
+  assert.equal(normalized.actions[1].replicas, 100, 'replicas are clamped to the supported range');
+
+  // DaemonSets have no replica count, so scaling one falls back to a safe kind.
+  const coerced = autoTest.normalizeAction({ type: 'k8s-scale', section: 'daemonsets', name: 'agent', namespace: 'kube-system', replicas: 3 });
+  assert.equal(coerced.section, 'deployments');
+
+  const store = newStore(tmpDir());
+  const calls = [];
+  const engine = new AutomationEngine({
+    store,
+    deps: {
+      restartWorkload: async (input) => { calls.push({ kind: 'restart', ...input }); return { ok: true }; },
+      scaleWorkload: async (input) => { calls.push({ kind: 'scale', ...input }); return { ok: true }; },
+    },
+  });
+  const saved = engine.save({
+    name: 'Kubernetes remediation',
+    trigger: { type: 'schedule', everyMinutes: 60 },
+    actions: [
+      { type: 'k8s-restart', section: 'deployments', name: 'api', namespace: 'shop' },
+      { type: 'k8s-scale', section: 'statefulsets', name: 'db', namespace: 'data', replicas: 2 },
+    ],
+  });
+  const pending = await engine.runAutomation(saved.automation.id);
+  assert.equal(pending.pending, true);
+  assert.equal(calls.length, 0, 'nothing runs before approval');
+
+  const approved = await engine.approve(pending.run.id);
+  assert.equal(approved.run.status, 'succeeded');
+  assert.deepEqual(calls, [
+    { kind: 'restart', section: 'deployments', name: 'api', namespace: 'shop' },
+    { kind: 'scale', section: 'statefulsets', name: 'db', namespace: 'data', replicas: 2 },
+  ]);
+  assert.ok(store.get().audit.some((entry) => entry.action === 'workload-restart'));
+  assert.ok(store.get().audit.some((entry) => entry.action === 'workload-scale'));
+});
+
+test('automation: Kubernetes actions reject invalid or unsupported targets', async () => {
+  const store = newStore(tmpDir());
+  let calls = 0;
+  const engine = new AutomationEngine({
+    store,
+    deps: {
+      restartWorkload: async () => { calls += 1; return { ok: true }; },
+      scaleWorkload: async () => { calls += 1; return { ok: true }; },
+    },
+  });
+  // A crafted object name with a slash must never reach kubectl.
+  const restart = engine.save({
+    name: 'Unsafe restart',
+    trigger: { type: 'schedule', everyMinutes: 60 },
+    actions: [{ type: 'k8s-restart', section: 'deployments', name: 'api/../secret', namespace: 'shop' }],
+    approval: 'always',
+  });
+  const pending = await engine.runAutomation(restart.automation.id);
+  const approved = await engine.approve(pending.run.id);
+  assert.equal(approved.run.status, 'failed');
+  assert.match(approved.run.steps[0].detail, /valid workload name/i);
+  assert.equal(calls, 0);
+
+  // An invalid namespace is rejected before kubectl runs.
+  const scale = engine.save({
+    name: 'Unsafe scale',
+    trigger: { type: 'schedule', everyMinutes: 60 },
+    actions: [{ type: 'k8s-scale', section: 'deployments', name: 'api', namespace: 'Prod Cluster', replicas: 1 }],
+    approval: 'always',
+  });
+  const scalePending = await engine.runAutomation(scale.automation.id);
+  assert.notEqual(scale.automation.id, restart.automation.id, 'two workflows created in the same tick keep distinct ids');
+  const scaleResult = await engine.approve(scalePending.run.id);
+  assert.equal(scaleResult.run.status, 'failed');
+  assert.match(scaleResult.run.steps[0].detail, /valid namespace/i);
+  assert.equal(calls, 0);
+});
+
+test('automation: Compose restarts are approval gated and validated', async () => {
+  const store = newStore(tmpDir());
+  const projects = [];
+  const engine = new AutomationEngine({
+    store,
+    deps: { restartCompose: async (project) => { projects.push(project); return { ok: true }; } },
+  });
+  const saved = engine.save({
+    name: 'Restart the shop stack',
+    trigger: { type: 'condition' },
+    conditions: [{ type: 'resource-status', module: 'docker', status: 'unhealthy', operator: '>', threshold: 0 }],
+    actions: [{ type: 'docker-compose-restart', project: 'shop' }],
+  });
+  assert.equal(saved.automation.approval, 'always', 'a Compose restart needs approval');
+
+  const pending = await engine.runAutomation(saved.automation.id, { dryRun: false });
+  // Conditions are not met because there is no resource collector here, so a
+  // direct run is skipped rather than executed.
+  assert.equal(pending.run.status, 'skipped');
+  assert.equal(projects.length, 0);
+
+  const direct = engine.save({
+    name: 'Direct Compose restart',
+    trigger: { type: 'schedule', everyMinutes: 60 },
+    actions: [{ type: 'docker-compose-restart', project: 'shop' }],
+    approval: 'always',
+  });
+  const approval = await engine.runAutomation(direct.automation.id);
+  assert.equal(approval.pending, true);
+  assert.equal(projects.length, 0);
+  const approved = await engine.approve(approval.run.id);
+  assert.equal(approved.run.status, 'succeeded');
+  assert.deepEqual(projects, ['shop']);
+  assert.ok(store.get().audit.some((entry) => entry.action === 'compose-restart'));
+
+  const invalid = engine.save({
+    name: 'Invalid Compose project',
+    trigger: { type: 'schedule', everyMinutes: 60 },
+    actions: [{ type: 'docker-compose-restart', project: '--volumes' }],
+    approval: 'always',
+  });
+  const invalidPending = await engine.runAutomation(invalid.automation.id);
+  const invalidRun = await engine.approve(invalidPending.run.id);
+  assert.equal(invalidRun.run.status, 'failed');
+  assert.match(invalidRun.run.steps[0].detail, /valid Compose project/i);
+  assert.deepEqual(projects, ['shop'], 'the invalid project never reached Docker');
+});
+
 // ----------------------------------------------------------------------- RCA
 
 test('rca: manual scope ranks a metric shift and states limitations', async () => {

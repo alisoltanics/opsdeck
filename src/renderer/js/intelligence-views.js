@@ -65,7 +65,7 @@
     rca: { alerts: [], incidents: [], result: null, busy: false, error: '', form: { subject: 'manual', id: '', scope: '', minutes: 60, broad: false } },
     reports: { types: [], result: null, hours: 24, busy: false },
     environments: { summary: null, items: [] },
-    automation: { items: [], runs: [], containers: [], connections: [], metrics: [], enabled: true },
+    automation: { items: [], runs: [], containers: [], composes: [], connections: [], metrics: [], workloads: [], workloadsLoaded: false, enabled: true },
     audit: { items: [], module: '' },
     settings: null,
     timer: null,
@@ -358,6 +358,8 @@
       S.automation.containers = containers.items || [];
       S.automation.connections = connections.items || connections.connections || [];
       S.automation.metrics = (catalog.catalog || []).slice(0, 400);
+      S.automation.workloads = [];
+      S.automation.workloadsLoaded = false;
       return;
     }
     if (page === 'audit') {
@@ -1038,6 +1040,7 @@
     if (!Array.isArray(draft.conditions)) draft.conditions = [];
     if (!Array.isArray(draft.actions) || !draft.actions.length) draft.actions = [{ type: 'notify', channelIds: [], message: '', severity: 'warning' }];
     await loadAutomationOptions();
+    await loadWorkloadOptions();
     const channels = await safe('automation', () => api.observability.channels(), { channels: [] });
 
     U.drawer({
@@ -1069,6 +1072,16 @@
           if (actionType) {
             setDraft(draft, `actions.${Number(actionType)}`, actionDefault(event.target.value));
             rerender();
+          }
+          const workloadPick = event.target.dataset.intelWorkload;
+          if (workloadPick) {
+            const [section, namespace, name] = String(event.target.value || '').split('|');
+            if (section && name) {
+              setDraft(draft, `actions.${Number(workloadPick)}.section`, section);
+              setDraft(draft, `actions.${Number(workloadPick)}.namespace`, namespace);
+              setDraft(draft, `actions.${Number(workloadPick)}.name`, name);
+              rerender();
+            }
           }
           const conditionType = event.target.dataset.intelConditionType;
           if (conditionType) {
@@ -1130,6 +1143,9 @@
     if (type === 'diagnostics') return { type, target: 'system', id: '' };
     if (type === 'db-query') return { type, connectionId: '', database: '', sql: 'SELECT 1', limit: 50 };
     if (type === 'docker-restart') return { type, containerId: '' };
+    if (type === 'docker-compose-restart') return { type, project: '' };
+    if (type === 'k8s-restart') return { type, section: 'deployments', name: '', namespace: '' };
+    if (type === 'k8s-scale') return { type, section: 'deployments', name: '', namespace: '', replicas: 1 };
     return { type: 'notify', channelIds: [], message: '', severity: 'warning' };
   }
 
@@ -1170,7 +1186,7 @@
       <h3 class="intel-subhead">Actions</h3>
       <div class="intel-draft-list">${actions.join('')}</div>
       <div class="intel-form-actions">${BTN('Add action', 'plus', 'data-intel-action-add', 'secondary', 'xs')}</div>
-      ${U.infoBanner('Safety rules', 'Database actions are checked with the same destructive-statement guard as the query editor; restarting a container always requires approval, retries are bounded, and every run is written to the audit trail.', 'info')}
+      ${U.infoBanner('Safety rules', 'Database actions are checked with the same destructive-statement guard as the query editor; restarting a container or Compose project, or rolling/scaling a Kubernetes workload, always requires approval, retries are bounded, and every run is written to the audit trail.', 'info')}
     </div>`;
   }
 
@@ -1214,7 +1230,7 @@
 
   function actionBlock(action, index, channels) {
     const base = `<div class="intel-draft-row">
-      <div class="intel-draft-head"><strong>Action ${index + 1}</strong>${action.type === 'docker-restart' ? U.badge('destructive', 'red') : ''}${BTN('', 'trash', `data-intel-action-remove="${index}"`, 'ghost', 'xs')}</div>
+      <div class="intel-draft-head"><strong>Action ${index + 1}</strong>${['docker-restart', 'docker-compose-restart', 'k8s-restart', 'k8s-scale'].includes(action.type) ? U.badge('destructive', 'red') : ''}${BTN('', 'trash', `data-intel-action-remove="${index}"`, 'ghost', 'xs')}</div>
       <div class="intel-form-grid">
         <label class="field"><span>Type</span>${select('type', action.type, [
           { value: 'notify', label: 'Send notification' },
@@ -1223,6 +1239,9 @@
           { value: 'diagnostics', label: 'Run diagnostics' },
           { value: 'db-query', label: 'Run read-only SQL' },
           { value: 'docker-restart', label: 'Restart container' },
+          { value: 'docker-compose-restart', label: 'Restart Compose project' },
+          { value: 'k8s-restart', label: 'Restart Kubernetes workload' },
+          { value: 'k8s-scale', label: 'Scale Kubernetes workload' },
         ], `data-intel-action-type="${index}"`)}</label>`;
     if (action.type === 'create-incident') {
       return `${base}
@@ -1259,6 +1278,35 @@
         <label class="field intel-wide"><span>Container</span>${select('containerId', action.containerId || '', [{ value: '', label: 'Choose a container…' }, ...containers], `data-intel-draft="actions.${index}.containerId"`)}</label>
       </div></div>`;
     }
+    if (action.type === 'docker-compose-restart') {
+      const projects = S.automation.composes.map((project) => ({ value: project.name, label: `${project.name} (${project.status || 'unknown'})` }));
+      return `${base}
+        <label class="field intel-wide"><span>Compose project</span>${select('project', action.project || '', [{ value: '', label: 'Choose a Compose project…' }, ...projects], `data-intel-draft="actions.${index}.project"`)}</label>
+        <small>Runs <span class="mono">docker compose restart</span> for every service in the project. Volumes are not touched.</small>
+      </div></div>`;
+    }
+    if (action.type === 'k8s-restart' || action.type === 'k8s-scale') {
+      const sections = action.type === 'k8s-restart'
+        ? ['deployments', 'statefulsets', 'daemonsets']
+        : ['deployments', 'statefulsets'];
+      const workloads = (S.automation.workloads || []).filter((workload) => sections.includes(workload.section));
+      const current = [action.section, action.namespace, action.name].every(Boolean)
+        ? `${action.section}|${action.namespace}|${action.name}`
+        : '';
+      const options = workloads.length
+        ? [{ value: '', label: 'Choose a detected workload…' }, ...workloads.map((workload) => ({
+          value: `${workload.section}|${workload.namespace}|${workload.name}`,
+          label: `${titleCase(workload.section)} · ${workload.namespace}/${workload.name}`,
+        }))]
+        : [{ value: '', label: 'No workload detected — enter it manually' }];
+      return `${base}
+        <label class="field intel-wide"><span>Detected workload</span>${select('workload', current, options, `data-intel-workload="${index}"`)}<small>Read from the current context and every namespace.</small></label>
+        <label class="field"><span>Kind</span>${select('section', action.section || 'deployments', sections.map((section) => ({ value: section, label: titleCase(section) })), `data-intel-draft="actions.${index}.section"`)}</label>
+        <label class="field"><span>Namespace</span><input class="input mono" type="text" value="${esc(action.namespace || '')}" placeholder="default" data-intel-draft="actions.${index}.namespace" /></label>
+        <label class="field"><span>Workload name</span><input class="input mono" type="text" value="${esc(action.name || '')}" placeholder="api" data-intel-draft="actions.${index}.name" /></label>
+        ${action.type === 'k8s-scale' ? `<label class="field"><span>Replicas</span><input class="input" type="number" min="0" max="100" value="${Number(action.replicas ?? 1)}" data-intel-draft-number="actions.${index}.replicas" /><small>Zero stops every replica; it still requires approval.</small></label>` : ''}
+      </div></div>`;
+    }
     return `${base}
         <label class="field intel-wide"><span>Channels</span><select class="input" multiple size="4" data-intel-draft-list="actions.${index}.channelIds">${(channels || []).map((channel) => `<option value="${esc(channel.id)}" ${(action.channelIds || []).includes(channel.id) ? 'selected' : ''}>${esc(channel.name || channel.type)}</option>`).join('')}</select><small>No selection sends to every enabled channel.</small></label>
         <label class="field"><span>Severity</span>${select('severity', action.severity || 'warning', ['info', 'warning', 'error', 'critical'], `data-intel-draft="actions.${index}.severity"`)}</label>
@@ -1280,12 +1328,42 @@
 
   async function loadAutomationOptions() {
     if (S.automation.connections.length && S.automation.containers.length) return;
-    const [connections, containers] = await Promise.all([
+    const [connections, containers, composes] = await Promise.all([
       safe('automation', () => api.databases.connections(), { items: [] }),
       safe('automation', () => api.docker.containers(), { items: [] }),
+      safe('automation', () => api.docker.composeList(), { items: [] }),
     ]);
     S.automation.connections = connections.items || connections.connections || [];
     S.automation.containers = containers.items || [];
+    S.automation.composes = composes.items || [];
+  }
+
+  /**
+   * Read restartable workloads once so the editor can offer a picker instead of
+   * free text. Failures are silent: manual namespace/name fields stay usable on
+   * a machine without a Kubernetes context.
+   */
+  async function loadWorkloadOptions() {
+    if (S.automation.workloadsLoaded) return;
+    S.automation.workloadsLoaded = true;
+    const sections = ['deployments', 'statefulsets', 'daemonsets'];
+    const results = await Promise.all(sections.map((section) => safe(
+      'automation',
+      () => api.kubernetes.resources({ section, allNamespaces: true }),
+      { rows: [] },
+    )));
+    const items = [];
+    results.forEach((result, index) => {
+      for (const row of result?.rows || []) {
+        if (!row?.name) continue;
+        items.push({
+          section: sections[index],
+          name: row.name,
+          namespace: row.namespace || result.namespace || '',
+        });
+      }
+    });
+    S.automation.workloads = items.slice(0, 400);
   }
 
   // -------------------------------------------------------------------- audit

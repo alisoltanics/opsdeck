@@ -128,6 +128,9 @@ class IntelligenceService {
       diagnostics: (input) => this.diagnostics(input),
       queryDatabase: (input) => this.queryDatabase(input),
       restartContainer: (id) => this.restartContainer(id),
+      restartCompose: (project) => this.restartCompose(project),
+      restartWorkload: (input) => this.restartWorkload(input),
+      scaleWorkload: (input) => this.scaleWorkload(input),
       recentEvents: async (options) => (await this.timeline({ limit: options?.limit || 200 })).items,
       onEvent: (event) => this.onAutomationEvent(event),
     };
@@ -1114,6 +1117,38 @@ class IntelligenceService {
   restartContainer(id) {
     if (!this.docker) return { ok: false, error: 'Docker is not available.' };
     return this.docker.containerAction(id, 'restart');
+  }
+
+  restartCompose(project) {
+    if (!this.docker) return { ok: false, error: 'Docker is not available.' };
+    return this.docker.composeAction(project, 'restart');
+  }
+
+  /**
+   * Rolling restart for a Deployment, StatefulSet or DaemonSet. The engine
+   * already verified approval and the object name; this only forwards to the
+   * same kubectl path the Kubernetes workspace uses.
+   */
+  async restartWorkload(input = {}) {
+    if (!this.kubernetes) return { ok: false, error: 'Kubernetes is not available.' };
+    if (!input.section || !input.name || !input.namespace) {
+      return { ok: false, error: 'A workload kind, namespace and name are required.' };
+    }
+    return this.kubernetes.resourceAction(input.section, 'restart', {
+      name: input.name,
+      namespace: input.namespace,
+    });
+  }
+  async scaleWorkload(input = {}) {
+    if (!this.kubernetes) return { ok: false, error: 'Kubernetes is not available.' };
+    if (!input.section || !input.name || !input.namespace) {
+      return { ok: false, error: 'A workload kind, namespace and name are required.' };
+    }
+    return this.kubernetes.resourceAction(input.section, 'scale', {
+      name: input.name,
+      namespace: input.namespace,
+      replicas: input.replicas,
+    });
   }
 
   async diagnostics(input = {}) {

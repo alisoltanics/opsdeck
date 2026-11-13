@@ -466,3 +466,35 @@ test('service: deployment evidence reads Kubernetes and Docker independently', a
     instance.dispose();
   }
 });
+
+test('service: automation forwards Kubernetes restarts and scales through resourceAction', async () => {
+  const calls = [];
+  let compose = null;
+  const docker = {
+    composeAction: async (project, action) => {
+      compose = { project, action };
+      return { ok: true };
+    },
+  };
+  const kubernetes = {
+    resourceAction: async (section, action, options) => {
+      calls.push({ section, action, ...options });
+      return { ok: true, message: `${action} requested.` };
+    },
+  };
+  const { instance, dir } = service({ kubernetes, docker });
+  try {
+    assert.equal((await instance.restartWorkload({ section: 'deployments', name: 'api', namespace: 'shop' })).ok, true);
+    assert.equal((await instance.restartWorkload({ section: 'deployments', name: '', namespace: 'shop' })).ok, false);
+    assert.equal((await instance.scaleWorkload({ section: 'statefulsets', name: 'db', namespace: 'data', replicas: 3 })).ok, true);
+    assert.equal((await instance.restartCompose('shop')).ok, true);
+    assert.deepEqual(compose, { project: 'shop', action: 'restart' });
+    assert.deepEqual(calls, [
+      { section: 'deployments', action: 'restart', name: 'api', namespace: 'shop' },
+      { section: 'statefulsets', action: 'scale', name: 'db', namespace: 'data', replicas: 3 },
+    ]);
+  } finally {
+    instance.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
