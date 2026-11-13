@@ -452,14 +452,18 @@ function rendererScript(routes) {
     const dockerOpen = await waitFor(() => location.hash === '#/overview' && !!document.querySelector('#view .page'), 8000);
     if (!dockerOpen) failures.push('workspace: Docker did not return');
 
-    // Theme and sidebar toggles must round-trip.
+    // Theme picker in the header must open and apply a branded theme.
     const root = document.documentElement;
     const app = document.getElementById('app');
     const themeBefore = root.dataset.theme;
-    document.querySelector('[data-action="toggle-theme"]')?.click();
-    const themeChanged = await waitFor(() => root.dataset.theme !== themeBefore, 2500);
-    if (!themeChanged) failures.push('theme: toggle did nothing');
-    document.querySelector('[data-action="toggle-theme"]')?.click();
+    const themePrefBefore = window.OD.store.state.settings.theme;
+    document.querySelector('#theme-btn')?.click();
+    const pickerOpen = await waitFor(() => !!document.querySelector('[data-theme-choice="github"]'), 2500);
+    if (!pickerOpen) failures.push('theme: header picker did not open');
+    document.querySelector('[data-theme-choice="github"]')?.click();
+    const themeChanged = await waitFor(() => root.dataset.theme === 'github', 2500);
+    if (!themeChanged) failures.push('theme: header picker did not apply GitHub Dark');
+    await window.OD.store.setSetting('theme', themePrefBefore || 'dark');
     await waitFor(() => root.dataset.theme === themeBefore, 2500);
 
     const collapsedBefore = app.dataset.collapsed;

@@ -194,6 +194,190 @@
   --shadow-accent: 0 8px 24px rgba(20,121,204,.18);
 }
 
+/* ---------- Brand themes ----------
+   Each theme only overrides the token layer, so every component, chart and
+   state colour follows automatically. All three are dark palettes that keep
+   the app's contrast and density. */
+[data-theme='vscode'] {
+  color-scheme: dark;
+
+  --bg: #1e1e1e;
+  --bg-soft: #181818;
+  --surface: #252526;
+  --surface-2: #2d2d30;
+  --surface-3: #333337;
+  --surface-hover: #3a3d41;
+  --overlay: #252526;
+
+  --border: #3c3c3c;
+  --border-soft: #2b2b2b;
+  --border-strong: #545454;
+  --border-focus: #007acc;
+
+  --text: #e6e6e6;
+  --text-secondary: #cccccc;
+  --muted: #9d9d9d;
+  --faint: #7d7d7d;
+  --inverse: #ffffff;
+
+  --accent: #007acc;
+  --accent-hover: #1a8ad4;
+  --accent-soft: rgba(0, 122, 204, 0.16);
+  --accent-border: rgba(0, 122, 204, 0.42);
+  --accent-text: #4daafc;
+  --orange: #ce9178;
+  --orange-soft: rgba(206, 145, 120, 0.14);
+  --orange-border: rgba(206, 145, 120, 0.36);
+  --violet: #c586c0;
+  --violet-soft: rgba(197, 134, 192, 0.14);
+  --violet-border: rgba(197, 134, 192, 0.36);
+  --cyan: #4ec9b0;
+  --cyan-soft: rgba(78, 201, 176, 0.13);
+  --cyan-border: rgba(78, 201, 176, 0.34);
+  --green: #89d185;
+  --green-soft: rgba(137, 209, 133, 0.14);
+  --green-border: rgba(137, 209, 133, 0.34);
+  --amber: #dcdcaa;
+  --amber-soft: rgba(220, 220, 170, 0.13);
+  --amber-border: rgba(220, 220, 170, 0.32);
+  --red: #f14c4c;
+  --red-soft: rgba(241, 76, 76, 0.13);
+  --red-border: rgba(241, 76, 76, 0.34);
+  --slate: #9da5b4;
+
+  --chart-1: #007acc;
+  --chart-2: #4ec9b0;
+  --chart-3: #c586c0;
+  --chart-4: #ce9178;
+  --chart-5: #89d185;
+
+  --gradient-brand: linear-gradient(135deg, #2b9be0 0%, #0062a3 100%);
+  --gradient-hero: radial-gradient(900px 420px at 12% -20%, rgba(0, 122, 204, 0.16), transparent 60%),
+                   radial-gradient(700px 380px at 92% -10%, rgba(197, 134, 192, 0.08), transparent 60%);
+  --gradient-glow: radial-gradient(600px 260px at 50% 0%, rgba(0, 122, 204, 0.2), transparent 70%);
+  --shadow-accent: 0 8px 30px rgba(0, 122, 204, 0.22);
+}
+
+[data-theme='github'] {
+  color-scheme: dark;
+
+  --bg: #0d1117;
+  --bg-soft: #090c10;
+  --surface: #161b22;
+  --surface-2: #1c2128;
+  --surface-3: #22272e;
+  --surface-hover: #2d333b;
+  --overlay: #161b22;
+
+  --border: #30363d;
+  --border-soft: #21262d;
+  --border-strong: #484f58;
+  --border-focus: #58a6ff;
+
+  --text: #e6edf3;
+  --text-secondary: #c9d1d9;
+  --muted: #8b949e;
+  --faint: #6e7681;
+  --inverse: #ffffff;
+
+  --accent: #2ea043;
+  --accent-hover: #3fb950;
+  --accent-soft: rgba(46, 160, 67, 0.16);
+  --accent-border: rgba(46, 160, 67, 0.42);
+  --accent-text: #56d364;
+  --orange: #db6d28;
+  --orange-soft: rgba(219, 109, 40, 0.14);
+  --orange-border: rgba(219, 109, 40, 0.36);
+  --violet: #bc8cff;
+  --violet-soft: rgba(188, 140, 255, 0.14);
+  --violet-border: rgba(188, 140, 255, 0.36);
+  --cyan: #39c5cf;
+  --cyan-soft: rgba(57, 197, 207, 0.13);
+  --cyan-border: rgba(57, 197, 207, 0.34);
+  --green: #3fb950;
+  --green-soft: rgba(63, 185, 80, 0.14);
+  --green-border: rgba(63, 185, 80, 0.34);
+  --amber: #d29922;
+  --amber-soft: rgba(210, 153, 34, 0.14);
+  --amber-border: rgba(210, 153, 34, 0.34);
+  --red: #f85149;
+  --red-soft: rgba(248, 81, 73, 0.13);
+  --red-border: rgba(248, 81, 73, 0.34);
+  --slate: #8b949e;
+
+  --chart-1: #58a6ff;
+  --chart-2: #3fb950;
+  --chart-3: #bc8cff;
+  --chart-4: #db6d28;
+  --chart-5: #39c5cf;
+
+  --gradient-brand: linear-gradient(135deg, #2ea043 0%, #1a7f37 100%);
+  --gradient-hero: radial-gradient(900px 420px at 12% -20%, rgba(46, 160, 67, 0.15), transparent 60%),
+                   radial-gradient(700px 380px at 92% -10%, rgba(88, 166, 255, 0.09), transparent 60%);
+  --gradient-glow: radial-gradient(600px 260px at 50% 0%, rgba(46, 160, 67, 0.18), transparent 70%);
+  --shadow-accent: 0 8px 30px rgba(46, 160, 67, 0.22);
+}
+
+[data-theme='chatgpt'] {
+  color-scheme: dark;
+
+  --bg: #212121;
+  --bg-soft: #1a1a1a;
+  --surface: #2f2f2f;
+  --surface-2: #383838;
+  --surface-3: #414141;
+  --surface-hover: #4a4a4a;
+  --overlay: #2f2f2f;
+
+  --border: #424242;
+  --border-soft: #363636;
+  --border-strong: #5d5d5d;
+  --border-focus: #10a37f;
+
+  --text: #ececec;
+  --text-secondary: #d1d1d1;
+  --muted: #a3a3a3;
+  --faint: #8a8a8a;
+  --inverse: #ffffff;
+
+  --accent: #10a37f;
+  --accent-hover: #19b892;
+  --accent-soft: rgba(16, 163, 127, 0.16);
+  --accent-border: rgba(16, 163, 127, 0.42);
+  --accent-text: #5eead4;
+  --orange: #f59e0b;
+  --orange-soft: rgba(245, 158, 11, 0.14);
+  --orange-border: rgba(245, 158, 11, 0.36);
+  --violet: #a78bfa;
+  --violet-soft: rgba(167, 139, 250, 0.14);
+  --violet-border: rgba(167, 139, 250, 0.36);
+  --cyan: #22d3ee;
+  --cyan-soft: rgba(34, 211, 238, 0.13);
+  --cyan-border: rgba(34, 211, 238, 0.34);
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.14);
+  --green-border: rgba(52, 211, 153, 0.34);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.14);
+  --amber-border: rgba(251, 191, 36, 0.34);
+  --red: #ef4444;
+  --red-soft: rgba(239, 68, 68, 0.13);
+  --red-border: rgba(239, 68, 68, 0.34);
+  --slate: #9ca3af;
+
+  --chart-1: #10a37f;
+  --chart-2: #22d3ee;
+  --chart-3: #a78bfa;
+  --chart-4: #f59e0b;
+  --chart-5: #34d399;
+
+  --gradient-brand: linear-gradient(135deg, #19c39c 0%, #0d8a6c 100%);
+  --gradient-hero: radial-gradient(900px 420px at 12% -20%, rgba(16, 163, 127, 0.16), transparent 60%),
+                   radial-gradient(700px 380px at 92% -10%, rgba(167, 139, 250, 0.08), transparent 60%);
+  --gradient-glow: radial-gradient(600px 260px at 50% 0%, rgba(16, 163, 127, 0.2), transparent 70%);
+  --shadow-accent: 0 8px 30px rgba(16, 163, 127, 0.22);
+}
+
 @font-face {
   font-family: 'Vazirmatn var';
   src: url('../../../assets/fonts/Vazirmatn-Variable.woff2') format('woff2');

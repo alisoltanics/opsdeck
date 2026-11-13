@@ -198,7 +198,7 @@ function registerIpc({ getWindow, dialog, app }) {
 
   handle('academy:reload', async () => {
     await storeReady;
-    return { ok: true, academy: content.load(), progress: store.getProgress() };
+    return { ok: true, academy: content.load(true), progress: store.getProgress() };
   });
 
   handle('academy:progress', async () => {
@@ -598,6 +598,9 @@ function registerIpc({ getWindow, dialog, app }) {
     intelligence.dispose();
     databases.disposeAll().catch(() => {});
   });
+
+  // Start the Docker reads the first screen needs before the renderer asks.
+  docker.warmup?.();
 }
 
 module.exports = { registerIpc };

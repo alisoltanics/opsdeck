@@ -19,6 +19,41 @@
     return OD.store?.state?.settings?.uiLanguage === 'fa' ? 'fa' : 'en';
   }
 
+  // Help articles are plain data modules that used to be parsed at launch.
+  // They are now fetched the first time an article is shown.
+  const HELP_SOURCES = {
+    en: [
+      './js/help/docker.js',
+      './js/help/kubernetes.js',
+      './js/help/databases.js',
+      './js/help/observability.js',
+      './js/help/intelligence.js',
+    ],
+    fa: [
+      './js/help-fa/docker.js',
+      './js/help-fa/kubernetes-1.js',
+      './js/help-fa/kubernetes-2.js',
+      './js/help-fa/databases.js',
+      './js/help-fa/observability-1.js',
+      './js/help-fa/observability-2.js',
+      './js/help-fa/intelligence.js',
+    ],
+  };
+  const helpLoads = new Map();
+  function loadHelpSet(set) {
+    if (helpLoads.has(set)) return helpLoads.get(set);
+    const promise = OD.utils.loadScripts(HELP_SOURCES[set]).catch((error) => {
+      helpLoads.delete(set);
+      console.error('Help content failed to load:', error.message);
+    });
+    helpLoads.set(set, promise);
+    return promise;
+  }
+  function ensureHelp() {
+    const sets = language() === 'fa' ? ['en', 'fa'] : ['en'];
+    return Promise.all(sets.map(loadHelpSet)).then(() => undefined);
+  }
+
   // Persian falls back to English per article, so a missing translation never leaves a blank page.
   function articleFor(route) {
     const key = keyOf(route);
@@ -88,9 +123,11 @@
     const parts = key.split('/');
     const target = parts[0] === 'app' ? '#/settings' : parts[0] === 'docker' ? `#/${parts[1]}` : `#/${parts[0]}/${parts[1]}`;
     dockKey = key;
-    const dock = document.getElementById('help-dock');
-    if (dock) dock.dataset.key = '';
-    if (location.hash === target) syncDock(OD.store.state.route); else location.hash = target;
+    ensureHelp().then(() => {
+      const dock = document.getElementById('help-dock');
+      if (dock) dock.dataset.key = '';
+      if (location.hash === target) syncDock(OD.store.state.route); else location.hash = target;
+    });
   }
 
   function article(entry, L) {
@@ -102,7 +139,8 @@
       ${entry.tips?.length ? U.card({ title: L.tips, icon: 'sparkles', body: list(entry.tips) }) : ''}`;
   }
 
-  function render(route) {
+  async function render(route) {
+    await ensureHelp();
     const { entry, lang } = articleFor(route);
     const L = LABELS[lang];
     if (!entry) {

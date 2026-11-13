@@ -42,6 +42,13 @@
     return typeof window.Terminal === 'function' && !!window.FitAddon?.FitAddon;
   }
 
+  // xterm is fetched on first use instead of at launch.
+  async function ensureTerminal() {
+    if (ptySupported()) return true;
+    try { await OD.utils.loadScripts(['./vendor/xterm.js', './vendor/addon-fit.js']); } catch { /* fall back to line mode */ }
+    return ptySupported();
+  }
+
   function toolLabel(name) {
     return TOOL_LABELS[name] || name;
   }
@@ -946,8 +953,8 @@
    * gives the renderer a genuine interactive terminal. The selected context
    * and namespace are validated again in the main process.
    */
-  function showPodShell(pod) {
-    if (!ptySupported()) {
+  async function showPodShell(pod) {
+    if (!(await ensureTerminal())) {
       U.toast('Interactive terminal unavailable', 'error', { description: 'This build does not include the terminal renderer.' });
       return;
     }

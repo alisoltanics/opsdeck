@@ -14,6 +14,7 @@ class ContentService {
       ? path.join(process.resourcesPath, 'content')
       : path.join(app.getAppPath(), 'content');
     this.version = null;
+    this.cached = null;
   }
 
   readJson(relative, fallback) {
@@ -34,7 +35,8 @@ class ContentService {
     }
   }
 
-  load() {
+  load(force = false) {
+    if (this.cached && !force) return this.cached;
     const courses = this.readDir('courses')
       .map((file) => this.readJson(path.join('courses', file), null))
       .filter(Boolean)
@@ -67,7 +69,7 @@ class ContentService {
     });
 
     this.version = meta.version || '1.0.0';
-    return {
+    this.cached = {
       courses,
       paths,
       commands,
@@ -79,6 +81,7 @@ class ContentService {
       version: this.version,
       loadedAt: new Date().toISOString(),
     };
+    return this.cached;
   }
 }
 

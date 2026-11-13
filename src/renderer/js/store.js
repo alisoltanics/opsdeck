@@ -59,12 +59,29 @@
     document.documentElement.dataset.reduceTransparency = settings?.reduceTransparency ? 'true' : 'false';
   }
 
+  // Every theme is a token set in styles/tokens.css. `tone` is used by the
+  // quick toggle so it can flip between a light and a dark palette no matter
+  // which branded theme is active.
+  const THEMES = [
+    { id: 'dark', label: 'OpsDeck Dark', tone: 'dark', icon: 'moon', swatch: '#0e141e', accent: '#2496ed' },
+    { id: 'light', label: 'OpsDeck Light', tone: 'light', icon: 'sun', swatch: '#f4f6fa', accent: '#1479cc' },
+    { id: 'system', label: 'Match system', tone: 'system', icon: 'monitor', swatch: 'linear-gradient(135deg, #f4f6fa 0 50%, #0e141e 50% 100%)', accent: '#64748b' },
+    { id: 'vscode', label: 'VS Code Dark+', tone: 'dark', icon: 'code', swatch: '#1e1e1e', accent: '#007acc' },
+    { id: 'github', label: 'GitHub Dark', tone: 'dark', icon: 'github', swatch: '#0d1117', accent: '#3fb950' },
+    { id: 'chatgpt', label: 'ChatGPT', tone: 'dark', icon: 'sparkles', swatch: '#212121', accent: '#10a37f' },
+  ];
+  const THEME_IDS = new Set(THEMES.map((t) => t.id));
+  function isThemeId(id) { return THEME_IDS.has(id); }
+  function themeMeta(id = state.settings.theme) {
+    return THEMES.find((t) => t.id === id) || THEMES[0];
+  }
+
   function resolvedTheme() {
     const pref = state.settings.theme || 'dark';
     if (pref === 'system') {
       return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
-    return pref === 'light' ? 'light' : 'dark';
+    return THEME_IDS.has(pref) ? pref : 'dark';
   }
 
   function applyTheme() {
@@ -89,9 +106,10 @@
   }
 
   async function boot() {
-    const [info, boot] = await Promise.all([
+    const [info, boot, initialStatus] = await Promise.all([
       api.app.info().catch((error) => ({ ok: false, error: error.message })),
       api.academy.bootstrap().catch((error) => ({ ok: false, error: error.message })),
+      refreshStatus(),
     ]);
     state.info = info;
     if (!boot || !boot.ok) {
@@ -107,7 +125,7 @@
     state.academyFull = state.academy;
     buildIndex();
     applySettings(state.progress.settings || {});
-    state.status = await refreshStatus();
+    state.status = initialStatus;
     state.booted = true;
     emit();
     return state;
@@ -633,7 +651,7 @@
   OD.store = {
     state, index, api, boot, subscribe, emit,
     refreshStatus, refreshAcademy, refreshProgress, refreshSettings: applySettings,
-    applyTheme, resolvedTheme, setSetting, setTrack, trackForCourse, trackForLesson,
+    applyTheme, resolvedTheme, themeMeta, themes: THEMES, setSetting, setTrack, trackForCourse, trackForLesson,
     courseById, lessonById, commandById, guideById, pathById, diagramById,
     commandsFor, allLabs, allLessons, labs: allLabs,
     progressFor, isComplete, isBookmarked, noteFor, quizFor,

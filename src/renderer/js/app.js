@@ -265,6 +265,7 @@
   let paletteIndex = 0;
   let paletteItems = [];
   let workspaceMenuOpen = false;
+  let themeMenuOpen = false;
   let statusTimer = null;
 
   // ------------------------------------------------------------------ routing
@@ -440,9 +441,23 @@
     </div>`;
   }
 
-  async function renderRoute(options = {}) {
-    const seq = ++renderSeq;
+  // A hash change and the boot sequence can ask for the same page at the same
+  // time. Share the in-flight render instead of building the page twice.
+  let activeRender = null;
+
+  function renderRoute(options = {}) {
     const route = parseHash();
+    const key = `${route.raw}|${options.scroll === false ? 'refresh' : 'full'}`;
+    if (activeRender && activeRender.key === key) return activeRender.promise;
+    const promise = renderRouteNow(route, options);
+    const entry = { key, promise };
+    activeRender = entry;
+    promise.finally(() => { if (activeRender === entry) activeRender = null; });
+    return promise;
+  }
+
+  async function renderRouteNow(route, options = {}) {
+    const seq = ++renderSeq;
     store.state.route = route;
     if (route.name === 'academy') syncAcademyTrack(route);
     setFaviconTitle(route);
@@ -501,6 +516,7 @@
       html = renderError(error, route);
     }
     if (seq !== renderSeq) return;
+    setFaviconTitle(route);
     host = document.getElementById('view') || host;
     host.innerHTML = html || '';
 
@@ -680,7 +696,8 @@
     const status = store.state.status;
     const ok = !!status?.available;
     const isMac = store.state.info?.platform === 'darwin';
-    const theme = store.resolvedTheme();
+    const themePref = store.state.settings.theme || 'dark';
+    const theme = store.themeMeta(themePref);
 
     bar.innerHTML = `
       <div class="breadcrumbs">${breadcrumbs(route)}</div>
@@ -697,7 +714,18 @@
           <button type="button" class="zoom-value" data-action="zoom-reset" data-zoom-value aria-label="Reset zoom">${Math.round((store.state.zoomFactor || 1) * 100)}%</button>
           <button type="button" class="icon-btn" data-action="zoom-in" aria-label="Zoom in">${icon('plus', 14)}</button>
         </div>
-        <button type="button" class="icon-btn" data-action="toggle-theme" title="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">${icon(theme === 'dark' ? 'sun' : 'moon', 15)}</button>
+        <div class="theme-wrap">
+          <button type="button" class="icon-btn" id="theme-btn" aria-haspopup="true" aria-expanded="${themeMenuOpen}" title="Theme — ${esc(theme.label)}" aria-label="Choose theme">${icon(theme.icon, 15)}</button>
+          ${themeMenuOpen ? `<div class="theme-menu" role="menu" aria-label="Theme">
+            <div class="theme-menu-label">Theme</div>
+            ${store.themes.map((t) => `<button type="button" class="theme-menu-item ${t.id === themePref ? 'active' : ''}" data-theme-choice="${t.id}" role="menuitemradio" aria-checked="${t.id === themePref}">
+              <span class="theme-swatch" style="--swatch-bg:${t.swatch};--swatch-accent:${t.accent}"></span>
+              <span class="theme-menu-name">${esc(t.label)}</span>
+              ${t.id === themePref ? icon('check', 13, 'theme-check') : ''}
+            </button>`).join('')}
+            <div class="theme-menu-note">Colours only — layout, density and data are unchanged.</div>
+          </div>` : ''}
+        </div>
         <button type="button" class="icon-btn" data-action="toggle-sidebar" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">${icon('panel-left', 15)}</button>
         <a class="icon-btn" href="#/academy" title="Academy" aria-label="Academy">${icon('graduation-cap', 15)}</a>
         ${isMac ? '' : `<div class="window-controls">
@@ -895,7 +923,7 @@
 
   async function runGlobalAction(action) {
     if (action === 'toggle-theme') {
-      const next = store.resolvedTheme() === 'dark' ? 'light' : 'dark';
+      const next = store.resolvedTheme() === 'light' ? 'dark' : 'light';
       await store.setSetting('theme', next);
       applyChrome();
       U.toast(`${titleCase(next)} theme`, 'success');
@@ -995,8 +1023,30 @@
     if (event.target.closest('#workspace-btn')) {
       event.preventDefault();
       workspaceMenuOpen = !workspaceMenuOpen;
+      themeMenuOpen = false;
       applyChrome();
       return;
+    }
+    const themeChoice = event.target.closest('[data-theme-choice]');
+    if (themeChoice) {
+      event.preventDefault();
+      themeMenuOpen = false;
+      const meta = store.themeMeta(themeChoice.dataset.themeChoice);
+      store.setSetting('theme', meta.id);
+      applyChrome();
+      U.toast(`${meta.label} theme`, 'success');
+      return;
+    }
+    if (event.target.closest('#theme-btn')) {
+      event.preventDefault();
+      themeMenuOpen = !themeMenuOpen;
+      workspaceMenuOpen = false;
+      applyChrome();
+      return;
+    }
+    if (themeMenuOpen && !event.target.closest('.theme-wrap')) {
+      themeMenuOpen = false;
+      applyChrome();
     }
     if (workspaceMenuOpen && !event.target.closest('.workspace-wrap')) {
       workspaceMenuOpen = false;
@@ -1046,6 +1096,7 @@
       if (event.key === 'Escape') {
         if (paletteOpen) { event.preventDefault(); closePalette(); return; }
         if (workspaceMenuOpen) { workspaceMenuOpen = false; applyChrome(); return; }
+        if (themeMenuOpen) { themeMenuOpen = false; applyChrome(); return; }
         if (U.isOverlayOpen && U.isOverlayOpen()) { event.preventDefault(); U.closeTopOverlay(); return; }
       }
       if (event.key === '/' && !typing && !paletteOpen) {
@@ -1059,6 +1110,7 @@
     window.addEventListener('hashchange', () => {
       closePalette();
       workspaceMenuOpen = false;
+      themeMenuOpen = false;
       rememberRoute();
       renderRoute();
     });
@@ -1110,7 +1162,13 @@
     }).catch(() => {});
   }
 
+  let bootStarted = false;
   async function boot() {
+    // Deferred scripts run while the document is still "interactive", so the
+    // readyState fallback below and DOMContentLoaded both fire. Boot is
+    // expensive (content, index, engine status, first render): run it once.
+    if (bootStarted) return;
+    bootStarted = true;
     setupGlobalEvents();
     renderSidebar();
     renderTopbar();
@@ -1136,6 +1194,17 @@
     setMaximizedState();
     startPolling();
     primeKubernetes();
+    prefetchTerminalRenderer();
+  }
+
+  // The xterm bundle is only needed once a shell is opened. Warm it up while
+  // the app is idle so the first terminal still feels instant.
+  function prefetchTerminalRenderer() {
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1200));
+    idle(() => {
+      if (typeof window.Terminal === 'function' && window.FitAddon) return;
+      OD.utils.loadScripts(['./vendor/xterm.js', './vendor/addon-fit.js']).catch(() => { /* terminal falls back to line mode */ });
+    });
   }
 
   // Read the kubeconfig and pick the cluster at launch, so the sidebar already

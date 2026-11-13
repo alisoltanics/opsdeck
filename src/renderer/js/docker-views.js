@@ -18,7 +18,7 @@
     eventFilter: { since: 3600, type: 'all' },
     terminal: { history: [], consent: false, pending: null, busy: false },
     registry: { query: '', items: null, error: null, loading: false },
-    last: {},
+    last: { statsByName: new Map() },
   };
   let cleanup = [];
   function onCleanup(fn) { cleanup.push(fn); }
@@ -254,6 +254,36 @@
 
   // ------------------------------------------------------------------ overview
 
+  function diskListHtml(items) {
+    const diskMax = Math.max(1, ...(items || []).map((d) => d.size || 0));
+    return `<div class="disk-list">${(items || []).map((d) => `<div class="disk-row">
+      <span class="label">${esc(d.type)}</span>
+      <div>${U.meter(d.size, diskMax, /image/i.test(d.type) ? 'violet' : /volume/i.test(d.type) ? 'orange' : 'accent', { label: `${d.count} items`, showLabel: false })}</div>
+      <span class="value"><strong>${esc(d.sizeLabel || fmtBytes(d.size))}</strong>${d.reclaimable ? `<br>${esc(d.reclaimableLabel || fmtBytes(d.reclaimable))} free` : ''}</span>
+    </div>`).join('') || '<div class="muted text-sm">No disk usage data.</div>'}</div>`;
+  }
+
+  // `docker system df` is slow, so the overview paints without it and this
+  // swaps the real numbers into the disk card when they arrive.
+  function mountOverview(root) {
+    const snapshot = state.last.overview;
+    if (!snapshot?.ov?.diskPending) return;
+    let cancelled = false;
+    onCleanup(() => { cancelled = true; });
+    api.docker.systemDf().then((res) => {
+      if (cancelled || !res?.ok || !Array.isArray(res.items)) return;
+      const card = root.querySelector('#disk-card');
+      if (!card) return;
+      const reclaim = res.items.reduce((sum, d) => sum + (d.reclaimable || 0), 0);
+      const body = card.querySelector('.card-body');
+      const sub = card.querySelector('.card-sub');
+      if (body) body.innerHTML = diskListHtml(res.items);
+      if (sub) sub.textContent = `${fmtBytes(reclaim)} reclaimable`;
+      snapshot.ov.disk = res.items;
+      snapshot.ov.diskPending = false;
+    }).catch(() => { /* the placeholder stays; it never blocks the page */ });
+  }
+
   async function renderOverview() {
     if (engineOfflineStatus()) return engineDown(OD.store.state.status?.reason);
     const [ov, list] = await Promise.all([api.docker.overview(), api.docker.containers()]);
@@ -265,7 +295,6 @@
     OD.store.pushSample({ cpu: c.cpu || 0, mem: memPercent, net: c.running || 0 });
     const running = (list.items || []).filter((x) => x.state === 'running');
     const recent = (list.items || []).slice(0, 6);
-    const diskMax = Math.max(1, ...(ov.disk || []).map((d) => d.size || 0));
     const reclaim = (ov.disk || []).reduce((sum, d) => sum + (d.reclaimable || 0), 0);
     const next = OD.store.nextLesson();
     const academy = OD.store.overallStats();
@@ -334,15 +363,14 @@
     });
 
     const disk = U.card({
+      id: 'disk-card',
       title: 'Disk usage',
       icon: 'hard-drive',
-      sub: `${fmtBytes(reclaim)} reclaimable`,
+      sub: (ov.disk || []).length ? `${fmtBytes(reclaim)} reclaimable` : 'Measuring usage…',
       actions: `<a class="btn btn-sm btn-ghost" href="#/settings">Manage</a>`,
-      body: `<div class="disk-list">${(ov.disk || []).map((d) => `<div class="disk-row">
-        <span class="label">${esc(d.type)}</span>
-        <div>${U.meter(d.size, diskMax, /image/i.test(d.type) ? 'violet' : /volume/i.test(d.type) ? 'orange' : 'accent', { label: `${d.count} items`, showLabel: false })}</div>
-        <span class="value"><strong>${esc(d.sizeLabel || fmtBytes(d.size))}</strong>${d.reclaimable ? `<br>${esc(d.reclaimableLabel || fmtBytes(d.reclaimable))} free` : ''}</span>
-      </div>`).join('') || '<div class="muted text-sm">No disk usage data.</div>'}</div>`,
+      body: (ov.disk || []).length
+        ? diskListHtml(ov.disk)
+        : '<div class="disk-list"><div class="muted text-sm">Measuring disk usage — this can take a moment on a busy engine.</div></div>',
     });
 
     const continueCard = next ? `<a class="continue-card" href="#/academy/lesson/${esc(next.id)}">
@@ -491,7 +519,7 @@
       <td><div class="cell-main"><span class="dot-indicator ${esc(x.state)}"></span><div><div class="cell-title">${esc(x.name)}</div><div class="cell-sub mono">${esc(x.image)}</div></div></div></td>
       <td>${U.stateBadge(x.state, x.status)}</td>
       <td class="cell-mono">${esc(ports || '—')}${extra > 0 ? ` <span class="badge mono">+${extra}</span>` : ''}</td>
-      <td class="cell-mono">${(x.cpuPercent || 0).toFixed(1)}%<div class="cell-sub">${fmtBytes(x.memoryBytes || 0)}</div></td>
+      <td class="cell-mono" data-stats-for="${esc(x.name)}">${x.statsPending ? '—<div class="cell-sub">reading…</div>' : `${(x.cpuPercent || 0).toFixed(1)}%<div class="cell-sub">${fmtBytes(x.memoryBytes || 0)}</div>`}</td>
       <td class="cell-nowrap">${esc(x.runningFor || timeAgo(x.createdAt))}</td>
       <td>${x.compose ? `<button type="button" class="badge tone-violet badge-btn" data-project-only="${esc(x.compose)}" title="Show every container in this project">${esc(x.compose)}${x.service ? `/${esc(x.service)}` : ''}</button>` : '<span class="faint">—</span>'}</td>
       <td><div class="row-actions" onclick="event.stopPropagation()">
@@ -579,18 +607,21 @@
       state.containerFilter.imageAliases = [];
     }
     const needImages = Boolean(queryImage) && !(state.last.images || []).some((i) => i.id === queryImage);
-    const [res, stats, imageRes] = await Promise.all([
+    const [res, imageRes] = await Promise.all([
       api.docker.containers(),
-      api.docker.stats().catch(() => ({ items: [] })),
       needImages ? api.docker.images().catch(() => null) : Promise.resolve(null),
     ]);
     if (imageRes?.ok) state.last.images = imageRes.items;
     if (queryImage) state.containerFilter.imageAliases = imageAliasesFor(queryImage, state.containerFilter.imageLabel);
     if (!res.ok) return engineDown(res.error);
-    const statMap = new Map((stats.items || []).map((s) => [s.name, s]));
+    // Stats are slow, so reuse the last sample (if any) and let mountContainer
+    // fill the column in when a fresh sample lands.
+    const statMap = state.last.statsByName instanceof Map ? state.last.statsByName : new Map();
     const items = (res.items || []).map((x) => {
       const s = statMap.get(x.name);
-      return s ? { ...x, cpuPercent: s.cpuPercent, memoryBytes: s.memoryUsed } : x;
+      return s
+        ? { ...x, cpuPercent: s.cpuPercent, memoryBytes: s.memoryUsed }
+        : { ...x, statsPending: x.state === 'running' };
     });
     state.last.containers = items;
     if (state.containerFilter.grouped == null) {
@@ -690,13 +721,20 @@
     return typeof window.Terminal === 'function' && !!window.FitAddon?.FitAddon;
   }
 
+  // xterm is fetched on first use instead of at launch.
+  async function ensureTerminal() {
+    if (ptySupported()) return true;
+    try { await OD.utils.loadScripts(['./vendor/xterm.js', './vendor/addon-fit.js']); } catch { /* fall back to line mode */ }
+    return ptySupported();
+  }
+
   async function showExec(item) {
     if (item.state !== 'running') {
       U.toast('Container is not running', 'warning', { description: 'Start it first to open an interactive shell.' });
       return;
     }
     let capabilities = null;
-    if (ptySupported()) {
+    if (await ensureTerminal()) {
       capabilities = await api.docker.execCapabilities().catch(() => null);
     }
     if (capabilities?.ok && capabilities.pty === true) {
@@ -1701,6 +1739,18 @@
 
   // ------------------------------------------------------------------ monitoring
 
+  function monitoringCardItems(items, memHost) {
+    const totalCpu = items.reduce((sum, s) => sum + s.cpuPercent, 0);
+    const memUsed = items.reduce((sum, s) => sum + s.memoryUsed, 0);
+    const memPercent = Math.min(100, (memUsed / memHost) * 100);
+    return [
+      U.statCard({ label: 'Aggregate CPU', value: `${totalCpu.toFixed(1)}%`, sub: `${items.length} running containers`, icon: 'cpu', tone: 'accent' }),
+      U.statCard({ label: 'Memory', value: fmtBytes(memUsed), sub: `${memPercent.toFixed(1)}% of ${fmtBytes(memHost)}`, icon: 'hard-drive', tone: 'cyan' }),
+      U.statCard({ label: 'Highest CPU', value: items.length ? `${Math.max(...items.map((s) => s.cpuPercent)).toFixed(1)}%` : '—', sub: items.length ? items.slice().sort((a, b) => b.cpuPercent - a.cpuPercent)[0].name : 'no samples', icon: 'zap', tone: 'amber' }),
+      U.statCard({ label: 'Processes', value: fmtNumber(items.reduce((sum, s) => sum + s.pids, 0)), sub: 'PIDs across containers', icon: 'server', tone: 'violet' }),
+    ].join('');
+  }
+
   function monitoringRows(items) {
     if (!items.length) return `<tr><td colspan="7">${U.empty({ compact: true, icon: 'activity', title: 'No running containers', body: 'Start a container to collect live resource samples.' })}</td></tr>`;
     return items.map((s) => `<tr>
@@ -1716,15 +1766,14 @@
 
   async function renderMonitoring() {
     if (engineOfflineStatus()) return engineDown(OD.store.state.status?.reason);
-    const res = await api.docker.stats();
-    if (!res.ok) return engineDown(res.error);
-    const items = res.items || [];
-    state.last.stats = items;
-    const totalCpu = items.reduce((sum, s) => sum + s.cpuPercent, 0);
-    const memUsed = items.reduce((sum, s) => sum + s.memoryUsed, 0);
+    const items = Array.isArray(state.last.stats) ? state.last.stats : [];
+    const sampled = Array.isArray(state.last.stats);
     const memHost = OD.store.state.status?.memory || 1;
-    const memPercent = Math.min(100, (memUsed / memHost) * 100);
-    OD.store.pushSample({ cpu: totalCpu, mem: memPercent, net: items.length });
+    if (sampled) {
+      const totalCpu = items.reduce((sum, s) => sum + s.cpuPercent, 0);
+      const memUsed = items.reduce((sum, s) => sum + s.memoryUsed, 0);
+      OD.store.pushSample({ cpu: totalCpu, mem: Math.min(100, (memUsed / memHost) * 100), net: items.length });
+    }
 
     return `<div class="page">
       ${pageHead({
@@ -1733,18 +1782,13 @@
         actions: `${U.button({ label: 'Refresh now', icon: 'refresh', variant: 'secondary', attrs: 'data-action="refresh"' })}<span class="badge tone-green" id="mon-live-badge"><i class="badge-dot"></i>Live · 4s</span>`,
         ai: { kind: 'page', page: 'monitoring' },
       })}
-      <div class="stat-grid">
-        ${U.statCard({ label: 'Aggregate CPU', value: `${totalCpu.toFixed(1)}%`, sub: `${items.length} running containers`, icon: 'cpu', tone: 'accent' })}
-        ${U.statCard({ label: 'Memory', value: fmtBytes(memUsed), sub: `${memPercent.toFixed(1)}% of ${fmtBytes(memHost)}`, icon: 'hard-drive', tone: 'cyan' })}
-        ${U.statCard({ label: 'Highest CPU', value: items.length ? `${Math.max(...items.map((s) => s.cpuPercent)).toFixed(1)}%` : '—', sub: items.length ? items.slice().sort((a, b) => b.cpuPercent - a.cpuPercent)[0].name : 'no samples', icon: 'zap', tone: 'amber' })}
-        ${U.statCard({ label: 'Processes', value: fmtNumber(items.reduce((sum, s) => sum + s.pids, 0)), sub: 'PIDs across containers', icon: 'server', tone: 'violet' })}
-      </div>
+      <div class="stat-grid" data-mon-cards>${monitoringCardItems(items, memHost)}</div>
       <div class="split-2 mt-4">
         ${U.card({ title: 'CPU pressure', icon: 'cpu', sub: 'Aggregate across running containers', body: `<div id="mon-cpu-chart">${OD.charts.area(OD.store.state.history.cpu, { height: 170, labels: ['60s', 'now'], label: 'Aggregate CPU' })}</div>` })}
         ${U.card({ title: 'Memory pressure', icon: 'hard-drive', sub: 'Percentage of host memory', body: `<div id="mon-mem-chart">${OD.charts.area(OD.store.state.history.mem, { height: 170, color: 'var(--cyan)', format: (v) => `${Math.round(v)}%`, labels: ['60s', 'now'], label: 'Memory percent' })}</div>` })}
       </div>
-      <div class="section-head"><div><div class="section-eyebrow">${icon('server', 12)}Containers</div><h2 class="section-title">Per-container telemetry</h2></div><span class="muted text-xs" id="mon-sample-time">sampled ${esc(new Date().toLocaleTimeString('en-US', { hour12: false }))}</span></div>
-      <div class="card flush"><div class="table-wrap"><table class="data-table"><thead><tr><th>Container</th><th>CPU</th><th>Memory</th><th>Network</th><th>Block I/O</th><th>PIDs</th><th></th></tr></thead><tbody id="mon-tbody">${monitoringRows(items)}</tbody></table></div></div>
+      <div class="section-head"><div><div class="section-eyebrow">${icon('server', 12)}Containers</div><h2 class="section-title">Per-container telemetry</h2></div><span class="muted text-xs" id="mon-sample-time">${sampled ? `sampled ${esc(new Date().toLocaleTimeString('en-US', { hour12: false }))}` : 'collecting…'}</span></div>
+      <div class="card flush"><div class="table-wrap"><table class="data-table"><thead><tr><th>Container</th><th>CPU</th><th>Memory</th><th>Network</th><th>Block I/O</th><th>PIDs</th><th></th></tr></thead><tbody id="mon-tbody">${sampled ? monitoringRows(items) : `<tr><td colspan="7">${U.loader('Collecting live samples from docker stats…')}</td></tr>`}</tbody></table></div></div>
       <div class="mt-4">${U.infoBanner('Learn to read the numbers', 'CPU percentage can exceed 100% when a container uses multiple cores. Memory limits are the ceiling, not the working set.', 'info', learnLink('resource-limits', 'Resource limits lesson'))}</div>
     </div>`;
   }
@@ -1890,7 +1934,7 @@
     const a = OD.store.overallStats();
     const aiConfig = OD.ai ? await OD.ai.ready() : null;
     const goal = Number(s.dailyGoalMinutes || OD.store.state.academy.meta?.dailyGoalMinutes || 20);
-    const themes = [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['system', 'System', 'monitor']];
+    const themes = OD.store.themes.map((t) => [t.id, t.label, t.icon]);
     return `<div class="page">
       ${pageHead({
         eyebrow: 'OpsDeck', iconName: 'settings', title: 'Settings',
@@ -1902,7 +1946,7 @@
         <div class="stack-3">
           ${OD.ai ? OD.ai.settingsCard(aiConfig) : ''}
           ${U.card({
-            title: 'Appearance', icon: 'palette', sub: 'Dark is the default. Light mode is designed, not inverted.',
+            title: 'Appearance', icon: 'palette', sub: 'Six palettes, including VS Code, GitHub and ChatGPT. Colours only — layout and data are unchanged.',
             body: `<div class="stack-3">
               <div><div class="rail-progress-label"><span>Language</span></div><div class="filter-row">${[['en', 'English'], ['fa', 'فارسی']].map(([v, label]) => `<button type="button" class="chip ${(s.uiLanguage || 'en') === v ? 'active' : ''}" data-ui-lang="${v}">${label}</button>`).join('')}</div></div>
               <div><div class="rail-progress-label"><span>Theme</span></div><div class="filter-row">${themes.map(([v, label, ic]) => `<button type="button" class="chip ${(s.theme || 'dark') === v ? 'active' : ''}" data-theme-set="${v}">${icon(ic, 13)}${label}</button>`).join('')}</div></div>
@@ -2003,6 +2047,35 @@
     });
   }
 
+  // The table paints from `docker ps` first; CPU and memory need a separate
+  // `docker stats` sample, which is far slower on a busy engine.
+  async function loadContainerStats(root) {
+    let res;
+    try { res = await api.docker.stats(); } catch { return; }
+    if (!res?.ok || !Array.isArray(res.items)) {
+      // Keep whatever the last sample showed; drop the "reading" hint.
+      for (const cell of root.querySelectorAll('[data-stats-for]')) {
+        if (cell.textContent.includes('reading')) cell.innerHTML = '—';
+      }
+      return;
+    }
+    const map = new Map(res.items.map((s) => [s.name, s]));
+    state.last.statsByName = map;
+    for (const item of state.last.containers || []) {
+      const s = map.get(item.name);
+      if (!s) continue;
+      item.cpuPercent = s.cpuPercent;
+      item.memoryBytes = s.memoryUsed;
+      delete item.statsPending;
+    }
+    for (const row of root.querySelectorAll('#container-tbody tr[data-container-name]')) {
+      const s = map.get(row.dataset.containerName);
+      const cell = row.querySelector('[data-stats-for]');
+      if (!s || !cell) continue;
+      cell.innerHTML = `${s.cpuPercent.toFixed(1)}%<div class="cell-sub">${fmtBytes(s.memoryUsed)}</div>`;
+    }
+  }
+
   function mountContainers(root) {
     const tbody = root.querySelector('#container-tbody');
     const search = root.querySelector('#container-search');
@@ -2078,6 +2151,8 @@
         if (item) showInspect(item);
       }
     });
+
+    loadContainerStats(root);
   }
 
   function mountImages(root) {
@@ -2298,6 +2373,8 @@
       OD.store.pushSample({ cpu: totalCpu, mem: Math.min(100, (memUsed / memHost) * 100), net: items.length });
       const tbody = root.querySelector('#mon-tbody');
       if (tbody) tbody.innerHTML = monitoringRows(items);
+      const cards = root.querySelector('[data-mon-cards]');
+      if (cards) cards.innerHTML = monitoringCardItems(items, memHost);
       const cpu = root.querySelector('#mon-cpu-chart');
       if (cpu) cpu.innerHTML = OD.charts.area(OD.store.state.history.cpu, { height: 170, labels: ['60s', 'now'], label: 'Aggregate CPU' });
       const mem = root.querySelector('#mon-mem-chart');
@@ -2305,6 +2382,7 @@
       const stamp = root.querySelector('#mon-sample-time');
       if (stamp) stamp.textContent = `sampled ${new Date().toLocaleTimeString('en-US', { hour12: false })}`;
     };
+    update();
     timer(update, 4000);
   }
 
@@ -2430,6 +2508,7 @@
     }
     bindCommon(root);
     switch (route.name) {
+      case 'overview': mountOverview(root); break;
       case 'containers': mountContainers(root); break;
       case 'images': mountImages(root); break;
       case 'compose': mountCompose(root); break;

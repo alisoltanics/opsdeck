@@ -84,8 +84,19 @@ function parsePorts(text) {
   return String(text).split(',').map((p) => p.trim()).filter(Boolean);
 }
 
-async function status() {
-  const version = await run(['version', '--format', '{{json .}}'], { timeout: 6000 });
+// The engine status is read once and shared by the boot sequence, the overview
+// and the 30s poll. The TTL is short so a manual retry after starting Docker
+// still sees the new state.
+function status() {
+  return cached('status', 2000, readStatus);
+}
+
+async function readStatus() {
+  const [version, infoRes, compose] = await Promise.all([
+    run(['version', '--format', '{{json .}}'], { timeout: 6000 }),
+    run(['info', '--format', '{{json .}}'], { timeout: 6000 }),
+    composeVersion(),
+  ]);
   if (!version.ok) {
     return {
       available: false,
@@ -99,7 +110,6 @@ async function status() {
   try { parsed = JSON.parse(version.stdout); } catch { /* ignore */ }
   const server = parsed.Server || {};
   let info = {};
-  const infoRes = await run(['info', '--format', '{{json .}}'], { timeout: 6000 });
   if (infoRes.ok) { try { info = JSON.parse(infoRes.stdout); } catch { /* ignore */ } }
   return {
     available: true,
@@ -122,7 +132,7 @@ async function status() {
     containersPaused: info.ContainersPaused ?? 0,
     containersStopped: info.ContainersStopped ?? 0,
     images: info.Images ?? 0,
-    compose: await composeVersion(),
+    compose,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -134,18 +144,24 @@ async function composeVersion() {
 
 async function overview() {
   return cached('overview', 2500, async () => {
-    const [st, df, containers, eventList] = await Promise.all([
+    // `docker system df` walks every image/volume/container and can take
+    // seconds on a busy engine. Start it, but never hold the overview back for
+    // more than a moment: the renderer fills the disk card in when it lands.
+    const dfPromise = systemDf().catch(() => null);
+    const [st, containers, eventList] = await Promise.all([
       status(),
-      systemDf(),
       containersList(),
       events(3600).catch(() => ({ items: [] })),
     ]);
+    const df = await Promise.race([dfPromise, delay(250, null)]);
+    const disk = df && df.ok ? df : lastDiskUsage;
     const running = containers.items.filter((c) => c.state === 'running');
     const cpu = running.reduce((s, c) => s + (c.cpuPercent || 0), 0);
     const mem = running.reduce((s, c) => s + (c.memoryBytes || 0), 0);
     return {
       status: st,
-      disk: df.items,
+      disk: disk?.items || [],
+      diskPending: !(df && df.ok),
       containers: {
         total: containers.items.length,
         running: running.length,
@@ -156,6 +172,13 @@ async function overview() {
       events: (eventList.items || []).slice(0, 12),
       checkedAt: new Date().toISOString(),
     };
+  });
+}
+
+function delay(ms, value) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(value), ms);
+    timer.unref?.();
   });
 }
 
@@ -747,6 +770,13 @@ async function searchRegistry(query) {
 }
 
 async function stats() {
+  // `docker stats --no-stream` samples every container and routinely takes a
+  // second or two. A short cache keeps the containers page and the 4s
+  // monitoring poll from running two heavy samples back to back.
+  return cached('stats', 1000, readStats);
+}
+
+async function readStats() {
   const res = await runJson(['stats', '--no-stream', '--format', '{{json .}}'], { timeout: 15000 });
   if (!res.ok) return { ok: false, error: res.stderr, items: [] };
   const num = (v) => {
@@ -802,6 +832,8 @@ async function events(sinceSeconds = 3600) {
   return { ok: true, items: items.slice(0, 500) };
 }
 
+let lastDiskUsage = null;
+
 async function systemDf() {
   return cached('df', 5000, async () => {
     const res = await runJson(['system', 'df', '--format', 'json'], { timeout: 15000 });
@@ -821,7 +853,8 @@ async function systemDf() {
       reclaimableLabel: d.Reclaimable,
       reclaimable: parseSize(String(d.Reclaimable || '').split(' ')[0]),
     }));
-    return { ok: true, items };
+    lastDiskUsage = { ok: true, items, at: Date.now() };
+    return lastDiskUsage;
   });
 }
 
@@ -986,11 +1019,20 @@ async function commandHelp(command) {
   return result;
 }
 
+/**
+ * Warm the caches the first screen needs while the window is still loading, so
+ * the renderer's first IPC calls usually resolve immediately.
+ */
+function warmup() {
+  status().catch(() => { /* the UI reports the failure */ });
+  containersList().catch(() => { /* the UI reports the failure */ });
+}
+
 module.exports = {
   status, overview, containersList, inspectContainer, containerLogs, containerTop, containerAction,
   imagesList, imageInspect, imageAction, removeUnusedImages, isProtectedImageRepository,
   volumesList, volumeAction, containersForVolume, networksList, networkAction, containersForNetwork,
   composeList, composeConfig, composeAction, pickComposeFile, builds, registries,
   searchRegistry, stats, events, systemDf, terminalRun, commandIndex, commandHelp,
-  parseHelp, stripAnsi, invalidate, validId, validName, validProject, runRaw: run,
+  parseHelp, stripAnsi, invalidate, warmup, validId, validName, validProject, runRaw: run,
 };

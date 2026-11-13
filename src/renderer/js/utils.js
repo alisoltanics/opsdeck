@@ -146,10 +146,34 @@
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   }
 
+  // Script tags in index.html load the shell and the workspaces eagerly. The
+  // heavy reference material (help articles, the terminal renderer) is fetched
+  // on first use instead, so launch does not parse ~1.5 MB of data nobody has
+  // asked for yet. Each source is loaded at most once.
+  const scriptLoads = new Map();
+  function loadScript(src) {
+    if (scriptLoads.has(src)) return scriptLoads.get(src);
+    const promise = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = src;
+      el.async = false;
+      el.onload = () => resolve(src);
+      el.onerror = () => reject(new Error(`Could not load ${src}`));
+      document.head.appendChild(el);
+    });
+    promise.catch(() => scriptLoads.delete(src));
+    scriptLoads.set(src, promise);
+    return promise;
+  }
+
+  function loadScripts(sources = []) {
+    return Promise.all(sources.map(loadScript)).then(() => undefined);
+  }
+
   window.OD = window.OD || {};
   OD.utils = {
     esc, attr: esc, fmtBytes, fmtNumber, fmtPercent, timeAgo, fmtDateTime, fmtClock,
     shortId, titleCase, debounce, clamp, highlight, truncate, plural, groupBy, copyText,
-    safeJson, parseMs, normalizeCommand, cssTone, dayKey, escapeRegExp,
+    safeJson, parseMs, normalizeCommand, cssTone, dayKey, escapeRegExp, loadScript, loadScripts,
   };
 })();
