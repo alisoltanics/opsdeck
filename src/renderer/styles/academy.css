@@ -1016,3 +1016,15 @@
 .lh-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .lh-table th, .lh-table td { text-align: start; vertical-align: top; padding: 7px 8px; border-top: 1px solid var(--border-soft); }
 .lh-table td:first-child { white-space: nowrap; font-family: var(--mono); color: var(--accent-text); direction: ltr; }
+
+/* Stacked text lines built from <span>s must not run together on one line. */
+.continue-label, .continue-title, .continue-meta,
+span.course-mini-title, span.course-mini-sub,
+span.search-result-title, span.search-result-sub,
+span.lesson-row-title, span.stat-sub, span.p-title, span.p-sub,
+.lesson-nav a > .dir, .lesson-nav a > .title { display: block; }
+.continue-body { display: flex; flex-direction: column; gap: 2px; }
+.continue-meta { overflow-wrap: anywhere; }
+.search-result-body, .course-mini-body, .lesson-row-body, .lab-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.search-result-title, .search-result-sub, .course-mini-title, .course-mini-sub,
+.lesson-row-title, .lesson-row-sub, .lab-item-sub, .lab-item-progress { display: block; }
