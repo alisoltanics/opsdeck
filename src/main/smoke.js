@@ -281,6 +281,26 @@ function rendererScript(routes) {
       if (!intelOpen) failures.push('workspace: Intelligence did not open');
     }
 
+    // A control inside the Intelligence workspace must run its own action. The
+    // page wrapper also carries data-intel-page="<name>", which once matched the
+    // pagination branch and turned every click into a silent re-render.
+    location.hash = '#/intelligence/automation';
+    await waitFor(() => !!document.querySelector('[data-intel-automation-new]'), 15000);
+    const newAutomation = document.querySelector('[data-intel-automation-new]');
+    if (!newAutomation) failures.push('intelligence: New automation button is missing');
+    else {
+      newAutomation.click();
+      const drawerOpen = await waitFor(() => {
+        const panel = document.querySelector('#overlay-root .drawer');
+        return panel && /New automation/i.test(panel.innerText || '');
+      }, 20000);
+      if (!drawerOpen) failures.push('intelligence: New automation did not open its drawer');
+      else {
+        document.querySelector('#overlay-root .drawer [data-close]')?.click();
+        await waitFor(() => !document.querySelector('#overlay-root .drawer'), 3000);
+      }
+    }
+
     // Reference live help should resolve (or explain why it cannot).
     location.hash = '#/academy/reference/run';
     await waitFor(() => {

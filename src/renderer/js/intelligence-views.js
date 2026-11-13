@@ -570,7 +570,8 @@
       return true;
     });
     const pages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
-    const page = Math.min(state.page, pages);
+    const page = Math.min(Math.max(1, Number(state.page) || 1), pages);
+    if (state.page !== page) state.page = page;
     const slice = filtered.slice((page - 1) * state.pageSize, page * state.pageSize);
     const rows = slice.map((item) => `<tr>
       <td><a href="${esc(item.href || '#/intelligence/resources')}"><strong>${esc(item.name)}</strong></a><div class="intel-muted">${esc(item.statusDetail || item.kind)}</div></td>
@@ -1586,10 +1587,15 @@
       refreshView();
       return;
     }
+    // The page wrapper also carries data-intel-page="<name>" as a mount marker,
+    // so only the numeric pager buttons may take this branch. Without this
+    // guard every click inside the workspace was treated as pagination and
+    // silently re-rendered the page instead of running its action.
     const pageButton = event.target.closest('[data-intel-page]');
-    if (pageButton && pageButton.dataset.intelPage) {
+    const targetPage = pageButton ? Number(pageButton.dataset.intelPage) : NaN;
+    if (Number.isInteger(targetPage) && targetPage > 0) {
       event.preventDefault();
-      S.resources.page = Math.max(1, Number(pageButton.dataset.intelPage) || 1);
+      S.resources.page = targetPage;
       refreshView();
       return;
     }
