@@ -176,7 +176,7 @@ function stripContext(args, allowed) {
   return out;
 }
 
-function parseKubectl(input, { context = '', namespace = '', allowContext = '' } = {}) {
+function parseKubectl(input, { context = '', namespace = '', allowContext = '', lesson = false } = {}) {
   const tokens = tokenize(input);
   if (!tokens.length) throw new Error('Type a kubectl command first.');
 
@@ -213,7 +213,7 @@ function parseKubectl(input, { context = '', namespace = '', allowContext = '' }
   if (verb === 'config' && CONFIG_MUTATIONS.has(second)) {
     throw new Error('OpsDeck never edits kubeconfig files. Import a kubeconfig instead.');
   }
-  if (hasFlag(head, ...STREAMING_FLAGS) || head.some((arg) => /^--(follow|watch)=/.test(arg))) {
+  if (!lesson && (hasFlag(head, ...STREAMING_FLAGS) || head.some((arg) => /^--(follow|watch)=/.test(arg)))) {
     throw new Error('Long-running watch and follow commands are not supported here. Run a snapshot command instead.');
   }
   if (['port-forward', 'proxy', 'attach', 'edit'].includes(verb)) {

@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('opsdeck', {
     resourceAction: (payload) => invoke('k8s:resource-action', payload),
     commands: (payload) => invoke('k8s:commands', payload),
     runCommand: (payload) => invoke('k8s:run-command', payload),
+    runLesson: (payload) => invoke('k8s:run-lesson', payload),
     podLogs: (payload) => invoke('k8s:pod-logs', payload),
     shellStart: (payload) => invoke('k8s:shell-start', payload),
     shellInput: (payload) => invoke('k8s:shell-input', payload),

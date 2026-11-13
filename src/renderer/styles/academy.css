@@ -946,3 +946,14 @@
   .ref-index-link { grid-template-columns: minmax(0, 1fr) 14px; }
   .ref-index-link > span:nth-child(2) { display: none; }
 }
+
+.lesson-run { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
+.lesson-run-out { flex: 1 1 100%; display: flex; flex-direction: column; gap: 8px; }
+.lesson-run-out[hidden] { display: none; }
+.lesson-run-step { border: 1px solid var(--border); border-inline-start: 3px solid var(--border-strong); border-radius: var(--r-sm); background: #05080e; padding: 8px 10px; direction: ltr; text-align: left; }
+.lesson-run-step.ok { border-inline-start-color: #3fb97c; }
+.lesson-run-step.fail { border-inline-start-color: #ef6a62; }
+.lesson-run-cmd { display: flex; justify-content: space-between; gap: 10px; align-items: center; font: 11.5px var(--mono); color: #e6eef8; overflow-wrap: anywhere; }
+.lesson-run-pre { margin: 6px 0 0; max-height: 320px; overflow: auto; font: 11.5px/1.5 var(--mono); color: #cfdbea; white-space: pre; }
+.lesson-run-err { color: var(--red); font-size: 12px; padding: 6px 2px; }
+.lesson-run-meta { direction: ltr; }

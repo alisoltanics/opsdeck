@@ -158,6 +158,63 @@
     });
   }
 
+  // ------------------------------------------------------------------ in-lesson runner
+
+  function isK8sLesson(lesson) {
+    return OD.store.courseById(lesson?.courseId)?.track === 'kubernetes';
+  }
+
+  // The text sent to the main-process runner, or null when nothing in the block can run.
+  function lessonScript(section) {
+    const code = String(section.code || '');
+    const lang = section.language;
+    if (lang === 'yaml') return /^\s*kind:/m.test(code) ? `cat <<'EOF' | kubectl apply -f -\n${code.replace(/\n?$/, '\n')}EOF` : null;
+    if (lang && !['bash', 'sh', 'shell'].includes(lang)) return null;
+    return /^\s*(kubectl|helm)\b/m.test(code) ? code : null;
+  }
+
+  function runBar(id, label) {
+    return `<div class="lesson-run" data-run-id="${esc(id)}">
+      <button type="button" class="btn btn-primary btn-sm" data-lesson-run="${esc(id)}">${icon('play', 12)}<span>${esc(label)}</span></button>
+      <span class="faint text-xs">Runs on your selected Kubernetes context, right here.</span>
+      <div class="lesson-run-out" data-run-out hidden></div>
+    </div>`;
+  }
+
+  function runResultHtml(res) {
+    if (!res || (res.ok === false && !res.steps)) return `<div class="lesson-run-err">${esc(res?.error || 'The command could not run.')}</div>`;
+    const bar = `<div class="lesson-run-meta faint text-xs">${icon('cloud', 11)} ${esc(res.context || '')}${res.namespace ? ` · ${esc(res.namespace)}` : ''}</div>`;
+    return bar + (res.steps || []).map((st) => {
+      const body = [st.stdout, st.stderr].filter((t) => String(t || '').trim()).join('\n');
+      const badge = st.skipped ? U.badge('skipped', 'slate') : st.ok ? U.badge('exit 0', 'green') : U.badge(`exit ${st.code}`, 'red');
+      return `<div class="lesson-run-step ${st.skipped ? 'skip' : st.ok ? 'ok' : 'fail'}"><div class="lesson-run-cmd"><code><span class="faint">$</span> ${esc(st.command)}</code>${badge}</div>${body ? `<pre class="lesson-run-pre">${esc(body)}</pre>` : '<div class="faint text-xs">No output.</div>'}</div>`;
+    }).join('');
+  }
+
+  async function runInLesson(lesson, id, host) {
+    let script = null;
+    if (id.startsWith('ex')) script = lesson.exercises?.[Number(id.slice(2))]?.command;
+    else script = lessonScript(lesson.sections?.[Number(id.slice(1))] || {});
+    const out = host.querySelector('[data-run-out]');
+    const button = host.querySelector('[data-lesson-run]');
+    if (!script || !out) return;
+    if (/^\s*(kubectl\s+)?(apply|create|delete|scale|set|patch|run|label|annotate|taint|cordon|drain|uncordon|expose|autoscale|rollout\s+(restart|undo)|helm\s+(install|upgrade|uninstall|rollback))|\bhelm\s+(install|upgrade|uninstall|rollback)\b|kubectl\s+(apply|create|delete|scale|run|drain|taint)\b/m.test(script)) {
+      const ok = await U.confirm({ title: 'Run this on your cluster?', message: `${script.trim().slice(0, 600)}\n\nThis changes resources on your selected Kubernetes context.`, confirmLabel: 'Run' });
+      if (!ok) return;
+    }
+    const yamls = (lesson.sections || []).filter((x) => x.type === 'code' && x.language === 'yaml').map((x) => ({ title: x.title || '', code: x.code }));
+    out.hidden = false;
+    out.innerHTML = U.loader('Running…');
+    if (button) button.disabled = true;
+    try {
+      out.innerHTML = runResultHtml(await window.opsdeck.kubernetes.runLesson({ script, yamls }));
+    } catch (error) {
+      out.innerHTML = runResultHtml({ ok: false, error: error.message });
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   // ------------------------------------------------------------------ sections
 
   function sectionHtml(section, lesson, index) {
@@ -166,7 +223,8 @@
       return `<section class="lesson-section">${section.title ? `<h2>${esc(section.title)}</h2>` : ''}<div class="lesson-prose">${prose(section.body)}</div></section>`;
     }
     if (section.type === 'code') {
-      return `<section class="lesson-section">${section.title ? `<h2>${esc(section.title)}</h2>` : ''}${U.codeBlock({ code: section.code, lang: section.language, title: section.language, output: section.output, note: section.note })}</section>`;
+      const runnable = isK8sLesson(lesson) && lessonScript(section) != null;
+      return `<section class="lesson-section">${section.title ? `<h2>${esc(section.title)}</h2>` : ''}${U.codeBlock({ code: section.code, lang: section.language, title: section.language, output: section.output, note: section.note })}${runnable ? runBar(`s${index}`, section.language === 'yaml' ? 'Apply to cluster' : 'Run here') : ''}</section>`;
     }
     if (section.type === 'callout') {
       const toneMap = { tip: ['tip', 'sparkles'], info: ['info', 'info'], warning: ['warning', 'alert-triangle'], danger: ['danger', 'shield'] };
@@ -529,7 +587,7 @@
     return `<section class="lesson-section"><h2>Practice</h2><div class="exercise-grid">${lesson.exercises.map((ex) => `<div class="exercise-card">
       <h4>${icon('flask', 13)}${esc(ex.title)}</h4>
       <p>${esc(ex.prompt)}</p>
-      ${ex.command ? `<div class="cmd-cta">${U.commandLine(ex.command, { run: true })}</div>` : ''}
+      ${ex.command ? (isK8sLesson(lesson) ? `<div class="cmd-cta">${U.commandLine(ex.command)}</div>${runBar(`ex${(lesson.exercises || []).indexOf(ex)}`, 'Run here')}` : `<div class="cmd-cta">${U.commandLine(ex.command, { run: true })}</div>`) : ''}
       ${ex.expected ? `<div class="expected"><strong>Expected:</strong> ${esc(ex.expected)}</div>` : ''}
       ${ex.hint ? `<div class="expected"><strong>Hint:</strong> ${esc(ex.hint)}</div>` : ''}
     </div>`).join('')}</div></section>`;
@@ -644,6 +702,12 @@
     mountDiagrams(root);
 
     root.addEventListener('click', async (event) => {
+      const runBtn = event.target.closest('[data-lesson-run]');
+      if (runBtn) {
+        event.preventDefault();
+        await runInLesson(lesson, runBtn.dataset.lessonRun, runBtn.closest('[data-run-id]'));
+        return;
+      }
       const option = event.target.closest('[data-quiz-option]');
       if (option) {
         const cur = state.quiz[lesson.id] || { answers: {}, submitted: false };

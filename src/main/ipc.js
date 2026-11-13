@@ -162,6 +162,7 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('k8s:resource-action', (p) => kubernetes.resourceAction(p?.section, p?.action, { name: p?.name, namespace: p?.namespace, replicas: p?.replicas }));
   handle('k8s:commands', (p) => kubernetes.commandList(p?.section, { name: p?.name, namespace: p?.namespace, allNamespaces: p?.allNamespaces === true }));
   handle('k8s:run-command', (p) => kubernetes.runCommand(p?.command));
+  handle('k8s:run-lesson', (p) => kubernetes.runLesson({ script: p?.script, yamls: p?.yamls }));
   handle('k8s:pod-logs', (p) => kubernetes.podLogs({ name: p?.name, namespace: p?.namespace, container: p?.container, tailLines: p?.tailLines, previous: p?.previous === true }));
   handle('k8s:shell-start', (p, event) => kubernetes.shellStart(p, event.sender, { pty: p?.pty === true, cols: p?.cols, rows: p?.rows }));
   handle('k8s:shell-input', (p, event) => kubernetes.shellInput(p?.sessionId, p?.data, event.sender.id));

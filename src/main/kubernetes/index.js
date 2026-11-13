@@ -18,6 +18,7 @@ const { RESOURCES, sanitizeManifest, validObjectName, actionsFor, actionArgs, tr
 const { sectionCommands, objectCommands } = require('./commands');
 const { buildTopology } = require('./topology');
 const { runKubectl } = require('./kubectl-runner');
+const { runLessonScript } = require('./lesson-runner');
 const { start: shellStart, input: shellInput, resize: shellResize, stop: shellStop, disposeAll: shellDisposeAll } = require('./shell');
 
 const CONTEXT_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@/+=,-]{0,252}$/;
@@ -220,6 +221,15 @@ class KubernetesService {
       env: this.env(),
       allowContext: state.selected,
     });
+  }
+
+  async runLesson({ script, yamls } = {}) {
+    if (typeof script !== 'string' || !script.trim() || script.length > 20000) return { ok: false, error: 'There is nothing to run.' };
+    const cleanYamls = (Array.isArray(yamls) ? yamls : []).slice(0, 12).map((y) => ({ title: String(y?.title || '').slice(0, 120), code: String(y?.code || '').slice(0, 20000) }));
+    const [tools, state] = await Promise.all([this.tools(), this.contextState()]);
+    if (!tools.tools.kubectl.installed) return { ok: false, error: 'kubectl is not installed. Open Kubernetes → Local tools to install it.' };
+    if (!state.selected) return { ok: false, error: 'Choose a Kubernetes context first (Kubernetes → Contexts).' };
+    return runLessonScript({ script, yamls: cleanYamls, context: state.selected, namespace: state.namespace, env: this.env() });
   }
 
   async podLogs({ name, namespace, container = '', tailLines = 200, previous = false } = {}) {
