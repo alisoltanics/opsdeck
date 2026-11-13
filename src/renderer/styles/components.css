@@ -2368,3 +2368,17 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
 .data-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 41px; }
 .content { overscroll-behavior: contain; }
 .card { contain: layout style; }
+
+.ai-code { position: relative; margin: 9px 0; }
+.ai-code pre { margin: 0; padding-top: 30px; }
+.ai-code-copy {
+  position: absolute; top: 5px; inset-inline-end: 6px; z-index: 1;
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+  font: 600 10px var(--font); color: var(--muted); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer;
+}
+.ai-code-copy:hover { color: var(--accent-text); border-color: var(--accent-border); background: var(--accent-soft); }
+
+textarea.k8s-con-input { resize: none; overflow-y: auto; line-height: 1.5; padding: 2px 0; max-height: 220px; white-space: pre; }
+.k8s-con-prompt { align-items: flex-start; }
+.k8s-con-ps { padding-top: 3px; }

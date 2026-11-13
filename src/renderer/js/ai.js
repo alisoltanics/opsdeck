@@ -611,6 +611,11 @@
     return isRtlText(text) ? ' dir="rtl"' : '';
   }
 
+  // Every code block in an answer carries its own copy button.
+  function codeBlock(code) {
+    return `<div class="ai-code" dir="ltr"><button type="button" class="ai-code-copy" title="Copy code" aria-label="Copy code">${icon('copy', 12)}<span>Copy</span></button><pre><code>${esc(code)}</code></pre></div>`;
+  }
+
   function formatAnswer(text) {
     const source = String(text || '');
     const lines = source.replace(/\r\n/g, '\n').split('\n');
@@ -633,7 +638,7 @@
       if (/^```/.test(raw.trim())) {
         closeList();
         if (inCode) {
-          out.push(`<pre dir="ltr"><code>${esc(code.join('\n'))}</code></pre>`);
+          out.push(codeBlock(code.join('\n')));
           code = [];
           inCode = false;
         } else {
@@ -671,7 +676,7 @@
       closeList();
       out.push(`<p${dirAttr(line)}>${inline(line)}</p>`);
     }
-    if (inCode) out.push(`<pre dir="ltr"><code>${esc(code.join('\n'))}</code></pre>`);
+    if (inCode) out.push(codeBlock(code.join('\n')));
     closeList();
     return out.join('');
   }

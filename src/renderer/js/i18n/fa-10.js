@@ -31,6 +31,7 @@
     "Explain this line": "توضیح این خط",
     "What it means": "یعنی چه",
     "Part": "بخش",
+    "Copy code": "کپی کد",
     "All tracks": "همه مسیرها",
     "Open beside the page": "باز کردن کنار صفحه",
     "Close help": "بستن راهنما",

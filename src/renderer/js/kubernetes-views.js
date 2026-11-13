@@ -1453,7 +1453,7 @@
         <form class="k8s-con-prompt" data-k8s-console-form autocomplete="off">
           <div class="k8s-con-hints" data-con-hints hidden role="listbox"></div>
           <span class="k8s-con-ps"><span class="k8s-con-ps-ctx">${esc(data.selected || '')}</span><span class="k8s-con-ps-ns">${esc(ns)}</span><span class="k8s-con-dollar">$</span></span>
-          <input class="k8s-con-input" data-k8s-console-input name="command" placeholder="kubectl get pods -o wide" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="kubectl command" />
+          <textarea class="k8s-con-input" data-k8s-console-input autofocus rows="1" name="command" placeholder="kubectl get pods -o wide   (Shift+Enter for a new line, paste multi-line commands)" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="kubectl command"></textarea>
           <button type="submit" class="btn btn-primary btn-sm" data-k8s-console-run>${icon('play', 12)}<span>Run</span></button>
         </form>
         <footer class="k8s-con-foot faint text-xs">
@@ -1464,19 +1464,26 @@
   }
 
   // The same console, opened over any Kubernetes page from the header.
+  let consoleModalOpening = false;
+  let consoleModal = null;
   async function openConsoleModal() {
     if (!api?.kubernetes) return;
+    // Loading takes a moment; a second click must not stack a second modal.
+    if (consoleModalOpening || consoleModal) return;
+    consoleModalOpening = true;
     let data;
     let commands;
     try {
       [data, commands] = await Promise.all([loadBootstrap(), loadCommands('console')]);
     } catch (error) {
+      consoleModalOpening = false;
       U.toast('Console unavailable', 'error', { description: error.message });
       return;
     }
+    consoleModalOpening = false;
     if (!data.tools?.kubectl?.installed) { U.toast('kubectl is not installed', 'warning', { description: 'Open Kubernetes → Local tools to install it.' }); return; }
     if (!data.contexts?.length) { U.toast('No Kubernetes context', 'warning', { description: 'Import a kubeconfig or start a local cluster first.' }); return; }
-    U.modal({
+    consoleModal = U.modal({
       title: 'Kubectl console',
       eyebrow: 'Kubernetes',
       icon: 'terminal',
@@ -1484,7 +1491,10 @@
       width: 'min(1100px, 95vw)',
       className: 'k8s-con-modal',
       body: consoleCardHtml(data, commands),
-      onMount: ({ root }) => mountConsole(root),
+      onMount: ({ root, onClose }) => {
+        mountConsole(root);
+        onClose(() => { consoleModal = null; });
+      },
     });
   }
 
@@ -1583,7 +1593,22 @@
       busy(runBtn, true, 'Running…');
       const started = performance.now();
       try {
-        entry.result = await api.kubernetes.runCommand({ command: text });
+        const scripted = /\n|<<|&&|\s\|\s/.test(text);
+        if (scripted) {
+          const run = await api.kubernetes.runLesson({ script: text, yamls: [] });
+          if (!run?.steps) entry.result = { ok: false, error: run?.error || 'The command could not run.', code: 1, command: text.split('\n')[0] };
+          else {
+            entry.result = {
+              ok: run.ok,
+              code: run.steps.find((st) => !st.ok && !st.skipped)?.code ?? 0,
+              command: text.split('\n')[0] + (text.includes('\n') ? ' …' : ''),
+              stdout: run.steps.map((st) => (run.steps.length > 1 ? `$ ${st.command}\n` : '') + (st.stdout || '')).join('\n').trim(),
+              stderr: run.steps.map((st) => st.stderr || '').filter(Boolean).join('\n'),
+            };
+          }
+        } else {
+          entry.result = await api.kubernetes.runCommand({ command: text });
+        }
       } catch (error) {
         entry.result = { ok: false, error: error.message, code: 1 };
       }
@@ -1599,13 +1624,19 @@
       event.preventDefault();
       const command = input.value;
       input.value = '';
+      autosize();
       hideHints();
       execute(command);
     });
 
     input.addEventListener('input', () => { histIndex = CS.history.length; showHints(); });
     input.addEventListener('blur', () => setTimeout(hideHints, 120));
+    const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; };
+    input.addEventListener('input', autosize);
     input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey && hints.hidden === false && hintIndex >= 0) { /* handled below */ }
+      else if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); return; }
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && input.value.includes('\n')) return;
       if (event.key === 'Tab') {
         event.preventDefault();
         if (!hintItems.length) showHints();

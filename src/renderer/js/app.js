@@ -929,6 +929,7 @@
   async function copyFromElement(el) {
     const text = el.dataset.copyText
       || el.closest('.code-block')?.querySelector('pre code')?.textContent
+      || el.closest('.ai-code')?.querySelector('pre code')?.textContent
       || el.closest('.config-view')?.querySelector('pre')?.textContent
       || '';
     if (!text) return;
@@ -943,7 +944,7 @@
       if (/^https?:\/\//i.test(href)) api.app.openExternal(href);
       return;
     }
-    const copy = event.target.closest('[data-copy-text], .code-copy');
+    const copy = event.target.closest('[data-copy-text], .code-copy, .ai-code-copy');
     if (copy) {
       event.preventDefault();
       copyFromElement(copy);
