@@ -240,6 +240,7 @@
     const health = data.health || {};
     const schema = data.schema || {};
     const dependencies = schema.dependencies || {};
+    const timeMachine = data.timeMachine || {};
     const workloads = data.workloads || {};
     const history = data.history || {};
     const forecast = data.forecast || {};
@@ -342,6 +343,52 @@
         body: dependencies.supported === false ? 'This engine or schema did not report foreign-key constraints.' : (schema.limitations || [])[0] || 'Open the schema analysis first.',
       });
 
+    const changeLabels = {
+      'table-added': ['Table added', 'green'],
+      'table-removed': ['Table removed', 'red'],
+      'column-added': ['Column added', 'green'],
+      'column-removed': ['Column removed', 'red'],
+      'column-changed': ['Column changed', 'amber'],
+      'index-added': ['Index added', 'green'],
+      'index-removed': ['Index removed', 'amber'],
+      'index-changed': ['Index changed', 'amber'],
+      'foreign-key-added': ['Foreign key added', 'cyan'],
+      'foreign-key-removed': ['Foreign key removed', 'amber'],
+    };
+    const changeRows = (timeMachine.diff?.changes || []).map((change) => {
+      const [label, tone] = changeLabels[change.type] || [change.type, 'slate'];
+      return `<tr>
+        <td>${badge(label, tone)}</td>
+        <td><strong>${esc(change.table)}</strong></td>
+        <td class="mono">${esc(change.name || '—')}</td>
+        <td class="intel-wrap">${esc(change.detail || '')}</td>
+      </tr>`;
+    }).join('');
+    const snapshotRows = (timeMachine.history || []).map((entry) => `<tr>
+      <td class="intel-nowrap">${esc(fmtDateTime(entry.at))}<div class="intel-muted">${esc(timeAgo(entry.lastSeenAt || entry.at))}</div></td>
+      <td class="intel-nowrap">${fmtNumber(entry.tables)}</td>
+      <td class="intel-nowrap">${fmtNumber(entry.columns)}</td>
+      <td class="intel-nowrap">${fmtNumber(entry.indexes)}</td>
+      <td class="intel-nowrap">${fmtNumber(entry.foreignKeys)}</td>
+      <td>${entry.baseline ? badge('Baseline', 'slate') : entry.changed ? badge(`${fmtNumber(entry.changes)} change(s)`, 'amber') : badge('No change', 'green')}</td>
+    </tr>`).join('');
+    const timeMachineBody = !timeMachine.available
+      ? U.empty({
+        compact: true, icon: 'history',
+        title: 'No schema capture yet',
+        body: (timeMachine.limitations || [])[0] || 'The schema is captured when this page can read its structure.',
+      })
+      : `${timeMachine.baseline
+        ? U.infoBanner('Baseline captured', 'This is the first stored structure for this connection. The next capture is compared against it.', 'info')
+        : timeMachine.changed
+          ? U.infoBanner(`${Object.values(timeMachine.diff?.summary || {}).reduce((sum, value) => sum + value, 0)} structural change(s) since the previous capture`, 'Only differences the database reported are shown. Data changes are not tracked.', 'warning')
+          : U.infoBanner('No structural change', `The schema is identical to the capture from ${esc(timeAgo((timeMachine.history || [])[1]?.at || timeMachine.history?.[0]?.at))}.`, 'success')}
+        ${timeMachine.changed ? table(['Change', 'Table', 'Object', 'Detail'], changeRows, { emptyTitle: 'No change listed', icon: 'history' }) : ''}
+        <div class="insight-subhead">Captured structures</div>
+        ${table(['Captured', 'Tables', 'Columns', 'Indexes', 'Foreign keys', 'Compared with previous'], snapshotRows, { emptyTitle: 'No capture stored', icon: 'history' })}
+        <p class="intel-muted">The last ${fmtNumber(timeMachine.retention || 8)} distinct structures are kept per connection. Re-reading an unchanged schema refreshes its timestamp instead of adding a duplicate.</p>
+        ${(timeMachine.limitations || []).length ? `<ul class="insight-limits">${timeMachine.limitations.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}`;
+
     return `
       ${U.card({
         title: 'Connection',
@@ -383,6 +430,15 @@
           ? `${fmtNumber(dependencies.stats?.edges ?? 0)} declared foreign key(s) across ${fmtNumber(dependencies.stats?.tables ?? 0)} table(s)${dependencies.stats?.external ? ` · ${fmtNumber(dependencies.stats.external)} referenced table(s) outside this schema` : ''}`
           : 'Built only from declared constraints, never from table names',
         body: dependencyBody,
+      })}
+      ${U.card({
+        title: 'Schema time machine',
+        icon: 'history',
+        sub: timeMachine.available
+          ? `${fmtNumber((timeMachine.history || []).length)} stored capture(s)${timeMachine.baseline ? ' · baseline only' : timeMachine.changed ? ' · structure changed since the previous capture' : ' · no structural change detected'}`
+          : 'Capture and compare the introspected structure',
+        actions: BTN('Capture now', 'refresh', 'data-insight-refresh', 'secondary', 'xs'),
+        body: timeMachineBody,
       })}
       ${U.card({ title: 'Workloads', icon: 'activity', sub: 'Active sessions, blocking chains and slow statements', body: `${table(['Session', 'User', 'State', 'Age', 'Wait', 'Blocked', 'Statement'], workloadRows, { emptyTitle: 'No active workloads', emptyBody: workloads.available ? 'Nothing is running right now.' : (workloads.limitations || [])[0] || 'This engine does not expose session data.', icon: 'activity' })}${slowRows ? `<div class="insight-subhead">Slow statements from the engine</div>${table(['Statement', 'Calls', 'Mean', 'Rows'], slowRows)}` : ''}` })}
       ${U.card({ title: 'Query time machine', icon: 'history', sub: 'History is grouped by normalised statement so literal values do not split it', body: `${table(['Statement', 'Runs', 'Errors', 'Mean', 'p95', 'Trend'], statementRows, { emptyTitle: 'No query history yet', emptyBody: 'Run a query in the SQL editor; history is recorded by the database service.', icon: 'history' })}${latestRows ? `<div class="insight-subhead">Latest runs</div>${table(['When', 'Result', 'Duration', 'Statement'], latestRows)}` : ''}` })}

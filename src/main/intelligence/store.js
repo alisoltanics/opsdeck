@@ -25,6 +25,8 @@ const LIMITS = {
   workspaces: 100,
   notes: 500,
   assignments: 2000,
+  schemaSnapshotsPerConnection: 8,
+  schemaSnapshots: 80,
 };
 
 const DEFAULT_ENVIRONMENTS = [
@@ -51,6 +53,7 @@ function defaults() {
     notes: [],
     changes: [],
     resourceState: {},
+    schemaSnapshots: [],
     settings: {
       environmentMatch: true,
       automationEnabled: true,
@@ -69,6 +72,38 @@ function array(value) {
 function trimList(list, max) {
   if (list.length > max) list.splice(0, list.length - max);
   return list;
+}
+
+function normalizeSnapshotEntry(entry) {
+  const tables = array(entry.tables).slice(0, 400).map((table) => ({
+    schema: clean(table?.schema, 120),
+    name: clean(table?.name, 240),
+    kind: clean(table?.kind, 40) || 'table',
+    columns: array(table?.columns).slice(0, 300).map((column) => [
+      clean(column?.[0], 200), clean(column?.[1], 120), clean(column?.[2], 20), clean(column?.[3], 200), clean(column?.[4], 20),
+    ]),
+    indexes: array(table?.indexes).slice(0, 80).map((index) => [
+      clean(index?.[0], 200), index?.[1] ? 1 : 0, clean(index?.[2], 1000),
+    ]),
+    foreignKeys: array(table?.foreignKeys).slice(0, 80).map((fk) => [
+      clean(fk?.[0], 200), clean(fk?.[1], 1000), clean(fk?.[2], 240),
+    ]),
+  })).filter((table) => table.name);
+  const at = clean(entry.at, 40) || new Date().toISOString();
+  return {
+    connectionId: clean(entry.connectionId, 80),
+    at,
+    lastSeenAt: clean(entry.lastSeenAt, 40) || at,
+    engine: clean(entry.engine, 40),
+    hash: clean(entry.hash, 80),
+    tables,
+    counts: {
+      tables: tables.length,
+      columns: tables.reduce((sum, table) => sum + table.columns.length, 0),
+      indexes: tables.reduce((sum, table) => sum + table.indexes.length, 0),
+      foreignKeys: tables.reduce((sum, table) => sum + table.foreignKeys.length, 0),
+    },
+  };
 }
 
 class IntelligenceStore {
@@ -128,8 +163,7 @@ class IntelligenceStore {
       }));
     for (const key of ['automations', 'runs', 'audit', 'favorites', 'savedSearches', 'savedQueries', 'workspaces', 'notes', 'changes']) {
       data[key] = array(data[key]);
-    }
-    trimList(data.automations, LIMITS.automations);
+    }    trimList(data.automations, LIMITS.automations);
     trimList(data.runs, LIMITS.runs);
     trimList(data.audit, LIMITS.audit);
     trimList(data.favorites, LIMITS.favorites);
@@ -138,6 +172,10 @@ class IntelligenceStore {
     trimList(data.workspaces, LIMITS.workspaces);
     trimList(data.notes, LIMITS.notes);
     trimList(data.changes, LIMITS.changes);
+    data.schemaSnapshots = array(data.schemaSnapshots)
+      .filter((entry) => entry && typeof entry === 'object' && clean(entry.connectionId, 80) && clean(entry.hash, 80))
+      .slice(-LIMITS.schemaSnapshots)
+      .map(normalizeSnapshotEntry);
     const state = {};
     let stateCount = 0;
     for (const [key, value] of Object.entries(data.resourceState || {})) {
@@ -330,6 +368,45 @@ class IntelligenceStore {
     this.data.workspaces = this.data.workspaces.filter((entry) => entry.id !== id);
     this.schedule();
     return { ok: true };
+  }
+
+  // --------------------------------------------------------- schema history
+
+  schemaSnapshots(connectionId = '') {
+    const id = clean(connectionId, 80);
+    const items = this.data.schemaSnapshots.filter((entry) => !id || entry.connectionId === id);
+    return items.slice().sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  }
+
+  latestSchemaSnapshot(connectionId = '') {
+    const items = this.schemaSnapshots(connectionId);
+    return items[items.length - 1] || null;
+  }
+
+  /**
+   * Store a schema capture, or refresh the timestamp when the structure is
+   * unchanged. Per-connection and global history stay bounded.
+   */
+  recordSchemaSnapshot(input = {}) {
+    const entry = normalizeSnapshotEntry(input);
+    if (!entry.connectionId || !entry.hash) throw new Error('A connection and schema hash are required.');
+    const existing = this.data.schemaSnapshots.filter((item) => item.connectionId === entry.connectionId);
+    const latest = existing[existing.length - 1];
+    if (latest && latest.hash === entry.hash) {
+      latest.lastSeenAt = entry.at;
+      this.schedule();
+      return { ok: true, stored: false, snapshot: latest };
+    }
+    this.data.schemaSnapshots.push(entry);
+    // Keep only the most recent captures per connection.
+    const perConnection = this.data.schemaSnapshots.filter((item) => item.connectionId === entry.connectionId);
+    if (perConnection.length > LIMITS.schemaSnapshotsPerConnection) {
+      const drop = new Set(perConnection.slice(0, perConnection.length - LIMITS.schemaSnapshotsPerConnection));
+      this.data.schemaSnapshots = this.data.schemaSnapshots.filter((item) => !drop.has(item));
+    }
+    trimList(this.data.schemaSnapshots, LIMITS.schemaSnapshots);
+    this.schedule();
+    return { ok: true, stored: true, snapshot: entry };
   }
 }
 

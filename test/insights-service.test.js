@@ -237,6 +237,61 @@ test('service: multi-cluster comparison forwards its bounded limit', async () =>
   }
 });
 
+test('service: schema time machine stores distinct captures and reports structural changes', async () => {
+  let columns = [
+    { schema: 'public', table: 'orders', name: 'id', type: 'bigint', nullable: 'NO', key: 'PRI' },
+  ];
+  const databases = {
+    listConnections: () => [{ id: 'live', name: 'App', engine: 'postgres', database: 'app', status: { state: 'connected' } }],
+    metrics: async () => ({ ok: true, available: true, engine: 'postgres', cacheHitRatio: 99, activeConnections: 1, maxConnections: 100 }),
+    diagnostics: async () => ({ ok: true, steps: [] }),
+    listDatabases: async () => ({ ok: true, items: [{ name: 'app' }] }),
+    explorer: async () => ({
+      ok: true,
+      relations: [{ schema: 'public', name: 'orders', kind: 'table' }],
+      columns,
+      indexes: [],
+      constraints: [],
+    }),
+    history: async () => ({ ok: true, items: [] }),
+  };
+  const { instance, dir } = service({ databases });
+  try {
+    const baseline = await instance.databaseInsights({ connectionId: 'live' });
+    assert.equal(baseline.timeMachine.available, true);
+    assert.equal(baseline.timeMachine.baseline, true);
+    assert.equal(baseline.timeMachine.changed, false);
+    assert.equal(baseline.timeMachine.history.length, 1);
+
+    // Re-reading an unchanged schema must not add a duplicate capture.
+    const unchanged = await instance.databaseInsights({ connectionId: 'live' });
+    assert.equal(unchanged.timeMachine.changed, false);
+    assert.equal(unchanged.timeMachine.history.length, 1);
+
+    columns = columns.concat([
+      { schema: 'public', table: 'orders', name: 'status', type: 'text', nullable: 'YES' },
+    ]);
+    const changed = await instance.databaseInsights({ connectionId: 'live' });
+    assert.equal(changed.timeMachine.baseline, false);
+    assert.equal(changed.timeMachine.changed, true);
+    assert.equal(changed.timeMachine.diff.summary.columnsAdded, 1);
+    assert.ok(changed.timeMachine.diff.changes.some((entry) => entry.type === 'column-added' && entry.name === 'status'));
+    assert.equal(changed.timeMachine.history.length, 2);
+    assert.equal(changed.timeMachine.history[0].changed, true, 'the newest capture is listed first');
+    assert.equal(changed.timeMachine.history[1].baseline, true);
+    assert.ok((changed.timeMachine.limitations || []).some((entry) => /between two captures/i.test(entry)));
+
+    // The history survives a restart because it is written to the store file.
+    instance.store.persist();
+    const raw = JSON.parse(fs.readFileSync(instance.store.file, 'utf8'));
+    assert.equal(raw.schemaSnapshots.length, 2);
+    assert.equal(raw.schemaSnapshots[1].counts.columns, 2);
+  } finally {
+    instance.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('service: observability insights evaluate stored objectives against retained metrics', async () => {
   const now = Date.now();
   const up = Array.from({ length: 20 }, (_, i) => [now - 20 * 60e3 + i * 60e3, i < 2 ? 0 : 1]);

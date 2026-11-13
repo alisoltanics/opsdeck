@@ -15,7 +15,7 @@
  */
 
 const os = require('node:os');
-const { IntelligenceStore } = require('./store');
+const { IntelligenceStore, LIMITS } = require('./store');
 const { ResourceCollector } = require('./resources');
 const { buildGraph } = require('./graph');
 const { TimelineBuilder } = require('./timeline');
@@ -25,6 +25,7 @@ const { AutomationEngine } = require('./automation');
 const { RootCauseAnalyzer } = require('./rca');
 const {
   databaseHealth, analyzeSchema, analyzeQueryHistory, analyzeWorkloads, databaseForecast,
+  schemaFingerprint, diffSchemaSnapshots,
   analyzeDockerSecurity, analyzeDockerImages, analyzeDockerResources, analyzeDockerCompose,
   analyzeDockerOptimizer, compareDockerEnvironments,
   kubernetesInsights: kubernetesInsightsReport,
@@ -693,6 +694,7 @@ class IntelligenceService {
     };
     const workloads = analyzeWorkloads(metrics || {});
     const history = analyzeQueryHistory(historyResult?.items || []);
+    const timeMachine = this.schemaTimeMachine(connection.id, explorer, metrics?.engine || connection.engine);
     let forecastResult = { supported: false, series: [], limitations: ['No metric history is stored for this connection.'] };
     if (this.observability) {
       forecastResult = await databaseForecast({
@@ -722,6 +724,7 @@ class IntelligenceService {
       workloads,
       history,
       forecast: forecastResult,
+      timeMachine,
       findings,
       counts: summarize(findings),
       limitations: [
@@ -730,6 +733,79 @@ class IntelligenceService {
         ...(workloads.limitations || []),
         ...(forecastResult.limitations || []),
       ].filter(Boolean).slice(0, 12),
+    };
+  }
+
+  /**
+   * Capture the current schema and compare it with the previous capture.
+   *
+   * A capture is only persisted when the structure changes; repeated visits
+   * refresh lastSeenAt instead of filling the history with duplicates. The
+   * history is bounded per connection and survives restarts.
+   */
+  schemaTimeMachine(connectionId, explorer, engine = '') {
+    const id = clean(connectionId, 80);
+    if (!id || !explorer) {
+      return {
+        available: false,
+        baseline: false,
+        changed: false,
+        diff: { available: false, baseline: false, changed: false, changes: [], summary: {} },
+        history: [],
+        limitations: ['The schema could not be read, so no capture was stored.'],
+      };
+    }
+    const fingerprint = schemaFingerprint({ ...explorer, engine: engine || explorer.engine });
+    if (!fingerprint) {
+      return {
+        available: false,
+        baseline: false,
+        changed: false,
+        diff: { available: false, baseline: false, changed: false, changes: [], summary: {} },
+        history: [],
+        limitations: ['The engine returned no relational structure to compare.'],
+      };
+    }
+    const previous = this.store.latestSchemaSnapshot(id);
+    const diff = diffSchemaSnapshots(previous, fingerprint);
+    const at = new Date().toISOString();
+    this.store.recordSchemaSnapshot({
+      connectionId: id,
+      at,
+      engine: engine || fingerprint.engine,
+      hash: fingerprint.hash,
+      tables: fingerprint.tables,
+      counts: fingerprint.counts,
+    });
+    const snapshots = this.store.schemaSnapshots(id);
+    const history = snapshots.map((entry, index) => {
+      const before = index > 0 ? snapshots[index - 1] : null;
+      const entryDiff = diffSchemaSnapshots(before, entry);
+      return {
+        at: entry.at,
+        lastSeenAt: entry.lastSeenAt,
+        engine: entry.engine,
+        hash: entry.hash.slice(0, 12),
+        tables: entry.counts.tables,
+        columns: entry.counts.columns,
+        indexes: entry.counts.indexes,
+        foreignKeys: entry.counts.foreignKeys,
+        baseline: !before,
+        changed: entryDiff.changed,
+        changes: Object.values(entryDiff.summary || {}).reduce((sum, value) => sum + value, 0),
+      };
+    }).reverse().slice(0, LIMITS.schemaSnapshotsPerConnection);
+    return {
+      available: true,
+      baseline: diff.baseline,
+      changed: diff.changed,
+      diff,
+      history,
+      retention: LIMITS.schemaSnapshotsPerConnection,
+      limitations: [
+        'Captures happen when this intelligence page reads the schema; changes made between two captures are only visible as their difference.',
+        ...(diff.limitations || []),
+      ],
     };
   }
 

@@ -12,6 +12,7 @@
  * forecast/SLO helpers, which are passed in as dependencies.
  */
 
+const crypto = require('node:crypto');
 const {
   clean, clamp, num, mean, percentile, forecast, timeToThreshold, detectAnomalies,
 } = require('./util');
@@ -581,6 +582,226 @@ function buildTableDependencies(tables, foreignKeys, tableStats = []) {
       cycles: cycles.length,
       isolated: isolated.length,
     },
+  };
+}
+
+/**
+ * Normalise an explorer response into a compact, deterministic schema
+ * snapshot. Data volumes (row estimates and sizes) are deliberately excluded:
+ * the time machine tracks structure, not traffic, so a growing table is not
+ * reported as a schema change.
+ */
+function schemaFingerprint(explorer = {}) {
+  const relations = Array.isArray(explorer.relations) ? explorer.relations : [];
+  const columns = Array.isArray(explorer.columns) ? explorer.columns : [];
+  const rawIndexes = Array.isArray(explorer.indexes) ? explorer.indexes : [];
+  const rawConstraints = Array.isArray(explorer.constraints) ? explorer.constraints : [];
+  if (!relations.length) return null;
+
+  const columnMap = new Map();
+  for (const column of columns) {
+    const key = `${column.schema || ''}\u0000${column.table || ''}`;
+    if (!columnMap.has(key)) columnMap.set(key, []);
+    columnMap.get(key).push([clean(column.name, 200), clean(column.type, 120), String(column.nullable || ''), clean(column.default, 200), clean(column.key, 20)]);
+  }
+  for (const list of columnMap.values()) {
+    list.sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
+  const indexMap = new Map();
+  for (const index of rawIndexes) {
+    const schema = index.schema || '';
+    const table = index.table || '';
+    const name = index.name || '';
+    if (!table || !name) continue;
+    const key = `${schema}\u0000${table}\u0000${name}`;
+    if (!indexMap.has(key)) indexMap.set(key, { schema, table, name, unique: index.unique === true || index.non_unique === 0, columns: [] });
+    const entry = indexMap.get(key);
+    if (Array.isArray(index.columns)) entry.columns.push(...index.columns.filter(Boolean));
+    else if (index.column_name) entry.columns.push({ column: index.column_name, position: index.seq_in_index });
+    else if (index.definition) {
+      const match = String(index.definition).match(/\(([^()]*)\)\s*$/);
+      if (match) entry.columns.push(...match[1].split(',').map((value) => value.trim()).filter(Boolean));
+    }
+  }
+  const fkMap = new Map();
+  for (const constraint of rawConstraints) {
+    if (String(constraint.type) !== 'FOREIGN KEY') continue;
+    const key = `${constraint.schema || ''}\u0000${constraint.table || ''}\u0000${constraint.name || ''}`;
+    if (!fkMap.has(key)) fkMap.set(key, {
+      schema: constraint.schema || '',
+      table: constraint.table || '',
+      name: constraint.name || '',
+      columns: [],
+      refSchema: constraint.ref_schema || constraint.schema || '',
+      refTable: constraint.ref_table || '',
+    });
+    if (constraint.column) fkMap.get(key).columns.push({ column: constraint.column, position: constraint.position });
+  }
+
+  const tables = relations.slice(0, 400).map((relation) => {
+    const schema = relation.schema || '';
+    const name = relation.name || '';
+    const key = `${schema}\u0000${name}`;
+    const indexes = [...indexMap.values()]
+      .filter((entry) => entry.table === name && (entry.schema || '') === schema)
+      .map((entry) => {
+        const cols = entry.columns.map((column) => (typeof column === 'string' ? column : column.column)).filter(Boolean);
+        const ordered = entry.columns
+          .map((column, position) => ({ value: typeof column === 'string' ? column : column.column, position: Number(column.position) || position }))
+          .filter((entry2) => entry2.value)
+          .sort((a, b) => a.position - b.position)
+          .map((entry2) => entry2.value);
+        return [entry.name, entry.unique ? 1 : 0, (ordered.length ? ordered : cols).join(',')];
+      })
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(0, 80);
+    const foreignKeys = [...fkMap.values()]
+      .filter((entry) => entry.table === name && (entry.schema || '') === schema)
+      .map((entry) => [
+        entry.name,
+        entry.columns
+          .map((column, position) => ({ value: column.column, position: Number(column.position) || position }))
+          .sort((a, b) => a.position - b.position)
+          .map((column) => column.value)
+          .join(','),
+        entry.refTable,
+      ])
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(0, 80);
+    return {
+      schema,
+      name,
+      kind: clean(relation.kind || 'table', 40),
+      columns: (columnMap.get(key) || []).slice(0, 300),
+      indexes,
+      foreignKeys,
+    };
+  }).filter((table) => table.name).sort((a, b) => `${a.schema}.${a.name}`.localeCompare(`${b.schema}.${b.name}`));
+
+  const payload = JSON.stringify(tables);
+  return {
+    engine: clean(explorer.engine || '', 40),
+    tables,
+    hash: crypto.createHash('sha256').update(payload).digest('hex'),
+    counts: {
+      tables: tables.length,
+      columns: tables.reduce((sum, table) => sum + table.columns.length, 0),
+      indexes: tables.reduce((sum, table) => sum + table.indexes.length, 0),
+      foreignKeys: tables.reduce((sum, table) => sum + table.foreignKeys.length, 0),
+    },
+  };
+}
+
+const MAX_SCHEMA_CHANGES = 300;
+
+/**
+ * Compare two schema snapshots produced by schemaFingerprint().
+ * Only real additions, removals and definition changes are reported. A null
+ * previous snapshot means this is the baseline, not a change.
+ */
+function diffSchemaSnapshots(previous, current) {
+  if (!current) return { available: false, baseline: false, changed: false, changes: [], summary: {}, limitations: ['The schema could not be fingerprinted.'] };
+  const summary = {
+    tablesAdded: 0, tablesRemoved: 0, columnsAdded: 0, columnsRemoved: 0, columnsChanged: 0,
+    indexesAdded: 0, indexesRemoved: 0, indexesChanged: 0,
+    foreignKeysAdded: 0, foreignKeysRemoved: 0,
+  };
+  if (!previous) {
+    return {
+      available: true, baseline: true, changed: false, changes: [], summary,
+      from: null, to: current.hash,
+      limitations: ['This is the first capture. Future captures are compared against it.'],
+    };
+  }
+  const changes = [];
+  const labelOf = (table) => (table.schema ? `${table.schema}.${table.name}` : table.name);
+  const previousTables = new Map((previous.tables || []).map((table) => [`${table.schema}\u0000${table.name}`, table]));
+  const currentTables = new Map((current.tables || []).map((table) => [`${table.schema}\u0000${table.name}`, table]));
+  const push = (type, table, name, detail = '') => {
+    if (changes.length < MAX_SCHEMA_CHANGES) changes.push({ type, table, name, detail });
+  };
+
+  for (const [key, table] of currentTables) {
+    if (!previousTables.has(key)) {
+      summary.tablesAdded += 1;
+      push('table-added', labelOf(table), '', `${table.columns.length} column(s), ${table.indexes.length} index(es)`);
+    }
+  }
+  for (const [key, table] of previousTables) {
+    if (!currentTables.has(key)) {
+      summary.tablesRemoved += 1;
+      push('table-removed', labelOf(table), '', `${table.columns.length} column(s) removed with the table`);
+    }
+  }
+
+  for (const [key, table] of currentTables) {
+    const before = previousTables.get(key);
+    if (!before) continue;
+    const label = labelOf(table);
+    const oldColumns = new Map((before.columns || []).map((column) => [column[0], column]));
+    const newColumns = new Map((table.columns || []).map((column) => [column[0], column]));
+    for (const [name, column] of newColumns) {
+      if (!oldColumns.has(name)) {
+        summary.columnsAdded += 1;
+        push('column-added', label, name, column[1] || '');
+      } else if (JSON.stringify(oldColumns.get(name)) !== JSON.stringify(column)) {
+        summary.columnsChanged += 1;
+        push('column-changed', label, name, `${(oldColumns.get(name) || []).slice(1).join(' · ')} → ${column.slice(1).join(' · ')}`);
+      }
+    }
+    for (const [name, column] of oldColumns) {
+      if (!newColumns.has(name)) {
+        summary.columnsRemoved += 1;
+        push('column-removed', label, name, column[1] || '');
+      }
+    }
+
+    const oldIndexes = new Map((before.indexes || []).map((index) => [index[0], index]));
+    const newIndexes = new Map((table.indexes || []).map((index) => [index[0], index]));
+    for (const [name, index] of newIndexes) {
+      if (!oldIndexes.has(name)) {
+        summary.indexesAdded += 1;
+        push('index-added', label, name, `${index[2] || '—'}${index[1] ? ' · unique' : ''}`);
+      } else if (JSON.stringify(oldIndexes.get(name)) !== JSON.stringify(index)) {
+        summary.indexesChanged += 1;
+        push('index-changed', label, name, `${oldIndexes.get(name)[2]} → ${index[2]}`);
+      }
+    }
+    for (const [name, index] of oldIndexes) {
+      if (!newIndexes.has(name)) {
+        summary.indexesRemoved += 1;
+        push('index-removed', label, name, index[2] || '—');
+      }
+    }
+
+    const oldFks = new Map((before.foreignKeys || []).map((fk) => [fk[0], fk]));
+    const newFks = new Map((table.foreignKeys || []).map((fk) => [fk[0], fk]));
+    for (const [name, fk] of newFks) {
+      if (!oldFks.has(name)) {
+        summary.foreignKeysAdded += 1;
+        push('foreign-key-added', label, name, `${fk[1] || '—'} → ${fk[2] || '—'}`);
+      }
+    }
+    for (const [name, fk] of oldFks) {
+      if (!newFks.has(name)) {
+        summary.foreignKeysRemoved += 1;
+        push('foreign-key-removed', label, name, `${fk[1] || '—'} → ${fk[2] || '—'}`);
+      }
+    }
+  }
+
+  const total = Object.values(summary).reduce((sum, value) => sum + value, 0);
+  return {
+    available: true,
+    baseline: false,
+    changed: total > 0,
+    from: previous.hash,
+    to: current.hash,
+    summary,
+    changes,
+    truncated: total > MAX_SCHEMA_CHANGES,
+    limitations: total > MAX_SCHEMA_CHANGES ? [`Only the first ${MAX_SCHEMA_CHANGES} of ${total} changes are listed.`] : [],
   };
 }
 
@@ -1895,6 +2116,8 @@ module.exports = {
   weighChecks,
   databaseHealth,
   analyzeSchema,
+  schemaFingerprint,
+  diffSchemaSnapshots,
   analyzeQueryHistory,
   analyzeWorkloads,
   databaseForecast,

@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 
 const {
   databaseHealth, analyzeSchema, analyzeQueryHistory, analyzeWorkloads, databaseForecast,
+  schemaFingerprint, diffSchemaSnapshots,
   analyzeDockerSecurity, analyzeDockerImages, analyzeDockerResources, analyzeDockerCompose,
   analyzeDockerOptimizer, compareDockerEnvironments,
   analyzeKubernetesHealth, analyzeKubernetesSecurity, analyzeKubernetesStorage,
@@ -168,6 +169,133 @@ test('database: schema understands MySQL index rows and a missing default', () =
   assert.equal(result.indexes, 2);
   assert.equal(result.tableStats[0].primary, true);
   assert.equal(result.findings.filter((entry) => /no primary key/i.test(entry.title)).length, 0);
+});
+
+test('database: schema fingerprint is deterministic and ignores data volumes', () => {
+  const base = {
+    engine: 'postgres',
+    relations: [
+      { schema: 'public', name: 'orders', kind: 'table', row_estimate: 10, size_bytes: 1024 },
+      { schema: 'public', name: 'customers', kind: 'table', row_estimate: 5, size_bytes: 512 },
+    ],
+    columns: [
+      { schema: 'public', table: 'orders', name: 'id', type: 'bigint', nullable: 'NO', key: 'PRI' },
+      { schema: 'public', table: 'orders', name: 'customer_id', type: 'bigint', nullable: 'NO' },
+      { schema: 'public', table: 'customers', name: 'id', type: 'bigint', nullable: 'NO', key: 'PRI' },
+    ],
+    indexes: [
+      { schema: 'public', table: 'orders', name: 'orders_pkey', definition: 'CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)' },
+    ],
+    constraints: [
+      { schema: 'public', table: 'orders', name: 'orders_customer_fk', type: 'FOREIGN KEY', column: 'customer_id', ref_schema: 'public', ref_table: 'customers' },
+    ],
+  };
+  const first = schemaFingerprint(base);
+  assert.equal(first.counts.tables, 2);
+  assert.equal(first.counts.columns, 3);
+  assert.equal(first.counts.indexes, 1);
+  assert.equal(first.counts.foreignKeys, 1);
+
+  // Row counts and sizes are data, not structure.
+  const grown = schemaFingerprint({
+    ...base,
+    relations: base.relations.map((relation) => ({ ...relation, row_estimate: 999999, size_bytes: 8 * 1024 ** 3 })),
+  });
+  assert.equal(grown.hash, first.hash);
+
+  // The order the engine returns objects in does not create a false change.
+  const reordered = schemaFingerprint({
+    ...base,
+    relations: base.relations.slice().reverse(),
+    columns: base.columns.slice().reverse(),
+  });
+  assert.equal(reordered.hash, first.hash);
+
+  const changed = schemaFingerprint({
+    ...base,
+    columns: base.columns.map((column) => (column.name === 'customer_id' ? { ...column, nullable: 'YES' } : column)),
+  });
+  assert.notEqual(changed.hash, first.hash);
+});
+
+test('database: schema diff reports only real structural changes', () => {
+  const before = schemaFingerprint({
+    engine: 'postgres',
+    relations: [
+      { schema: 'public', name: 'orders', kind: 'table' },
+      { schema: 'public', name: 'legacy', kind: 'table' },
+    ],
+    columns: [
+      { schema: 'public', table: 'orders', name: 'id', type: 'bigint', nullable: 'NO', key: 'PRI' },
+      { schema: 'public', table: 'orders', name: 'status', type: 'text', nullable: 'YES' },
+      { schema: 'public', table: 'legacy', name: 'id', type: 'int', nullable: 'NO' },
+    ],
+    indexes: [
+      { schema: 'public', table: 'orders', name: 'orders_status_idx', definition: 'CREATE INDEX orders_status_idx ON orders (status)' },
+    ],
+    constraints: [],
+  });
+  const after = schemaFingerprint({
+    engine: 'postgres',
+    relations: [
+      { schema: 'public', name: 'orders', kind: 'table' },
+      { schema: 'public', name: 'audit', kind: 'table' },
+    ],
+    columns: [
+      { schema: 'public', table: 'orders', name: 'id', type: 'bigint', nullable: 'NO', key: 'PRI' },
+      { schema: 'public', table: 'orders', name: 'status', type: 'varchar(20)', nullable: 'NO' },
+      { schema: 'public', table: 'orders', name: 'customer_id', type: 'bigint', nullable: 'YES' },
+      { schema: 'public', table: 'audit', name: 'id', type: 'bigint', nullable: 'NO' },
+    ],
+    indexes: [
+      { schema: 'public', table: 'orders', name: 'orders_customer_idx', definition: 'CREATE INDEX orders_customer_idx ON orders (customer_id)' },
+      { schema: 'public', table: 'orders', name: 'orders_status_idx', definition: 'CREATE INDEX orders_status_idx ON orders (id)' },
+    ],
+    constraints: [
+      { schema: 'public', table: 'orders', name: 'orders_customer_fk', type: 'FOREIGN KEY', column: 'customer_id', ref_table: 'customers' },
+    ],
+  });
+  const diff = diffSchemaSnapshots(before, after);
+  assert.equal(diff.available, true);
+  assert.equal(diff.baseline, false);
+  assert.equal(diff.changed, true);
+  assert.equal(diff.summary.tablesAdded, 1);
+  assert.equal(diff.summary.tablesRemoved, 1);
+  assert.equal(diff.summary.columnsAdded, 1);
+  assert.equal(diff.summary.columnsRemoved, 0);
+  assert.equal(diff.summary.columnsChanged, 1);
+  assert.equal(diff.summary.indexesAdded, 1);
+  assert.equal(diff.summary.indexesRemoved, 0);
+  assert.equal(diff.summary.indexesChanged, 1);
+  assert.equal(diff.summary.foreignKeysAdded, 1);
+  const kinds = new Set(diff.changes.map((change) => change.type));
+  assert.ok(kinds.has('table-added'));
+  assert.ok(kinds.has('table-removed'));
+  assert.ok(kinds.has('column-changed'));
+  assert.ok(kinds.has('foreign-key-added'));
+  assert.ok(!diff.changes.some((change) => change.name === 'status' && change.type === 'column-added'));
+
+  const baseline = diffSchemaSnapshots(null, after);
+  assert.equal(baseline.baseline, true);
+  assert.equal(baseline.changed, false);
+  assert.equal(baseline.changes.length, 0);
+});
+
+test('database: schema diff reports no change for an identical capture', () => {
+  const snapshot = schemaFingerprint({
+    engine: 'sqlite',
+    relations: [{ schema: 'main', name: 'people', kind: 'table' }],
+    columns: [
+      { schema: 'main', table: 'people', name: 'id', type: 'INTEGER', nullable: 'NO', key: 'PRI' },
+      { schema: 'main', table: 'people', name: 'name', type: 'TEXT', nullable: 'YES' },
+    ],
+    indexes: [],
+    constraints: [],
+  });
+  const diff = diffSchemaSnapshots(snapshot, snapshot);
+  assert.equal(diff.changed, false);
+  assert.deepEqual(diff.changes, []);
+  assert.equal(diff.summary.tablesAdded + diff.summary.columnsChanged, 0);
 });
 
 test('database: query history groups literal variants and flags a slow regression', () => {
