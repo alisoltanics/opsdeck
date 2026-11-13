@@ -492,7 +492,16 @@
   // ---------------- progress mutations ----------------
   async function recordView(lesson) {
     if (!lesson) return;
-    try { await api.academy.recordView({ lessonId: lesson.id, courseId: lesson.courseId || lesson.course?.id }); } catch { /* ignore */ }
+    try {
+      await api.academy.recordView({ lessonId: lesson.id, courseId: lesson.courseId || lesson.course?.id });
+      await refreshProgress();
+    } catch { /* ignore */ }
+  }
+
+  // The lesson the learner was last reading, finished or not.
+  function resumeLesson() {
+    const last = (state.progress.recent || []).map((r) => lessonById(r.lessonId)).find(Boolean);
+    return last || null;
   }
 
   async function setLessonProgress(lesson, patch) {
@@ -581,7 +590,7 @@
     progressFor, isComplete, isBookmarked, noteFor, quizFor,
     courseStats, pathStats, missingPrerequisites, overallStats, nextLesson, recentLessons,
     guideForText, lessonForError, contextLesson, search,
-    recordView, setLessonProgress, completeLesson, saveQuiz, toggleBookmark, saveNote,
+    recordView, resumeLesson, setLessonProgress, completeLesson, saveQuiz, toggleBookmark, saveNote,
     unlockAchievement, resetProgress, pushSample, greet, elapsedLabel,
   };
 })();

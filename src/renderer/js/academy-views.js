@@ -352,6 +352,14 @@
     </div>`).join('')}</div>`;
   }
 
+  function resumeCard() {
+    const last = OD.store.resumeLesson();
+    if (!last) return '';
+    const stats = OD.store.courseStats(last.course);
+    const done = OD.store.isComplete(last.id);
+    return `<a class="continue-card resume-card" href="#/academy/lesson/${esc(last.id)}"><span class="continue-icon">${icon('play', 18)}</span><span class="continue-body"><span class="continue-label">Resume where you left off</span><span class="continue-title">${esc(last.title)}</span><span class="continue-meta">${esc(last.course.title)} · ${esc(last.moduleTitle || '')} · ${done ? 'completed' : 'in progress'} · ${stats.percent}% of the course</span>${U.progressBar(stats.percent, 'accent')}</span>${icon('arrow-right', 16)}</a>`;
+  }
+
   async function renderDashboard() {
     await evaluateAchievements();
     const a = OD.store.overallStats();
@@ -401,7 +409,8 @@
 
       <div class="academy-grid-main">
         <div class="stack-3">
-          ${next ? `<a class="continue-card" href="#/academy/lesson/${esc(next.id)}"><span class="continue-icon">${icon('play', 18)}</span><span class="continue-body"><span class="continue-label">Continue learning</span><span class="continue-title">${esc(next.title)}</span><span class="continue-meta">${esc(next.course.title)} · ${esc(next.duration)} · ${OD.store.courseStats(next.course).percent}% of the course</span></span>${icon('arrow-right', 16)}</a>` : ''}
+          ${resumeCard()}
+          ${next && next.id !== OD.store.resumeLesson()?.id ? `<a class="continue-card" href="#/academy/lesson/${esc(next.id)}"><span class="continue-icon">${icon('play', 18)}</span><span class="continue-body"><span class="continue-label">Continue learning</span><span class="continue-title">${esc(next.title)}</span><span class="continue-meta">${esc(next.course.title)} · ${esc(next.duration)} · ${OD.store.courseStats(next.course).percent}% of the course</span></span>${icon('arrow-right', 16)}</a>` : ''}
           ${U.card({
             title: 'Your courses', icon: 'graduation-cap', sub: `${courses.length} courses · ${a.lessons} lessons`,
             actions: `<a class="btn btn-sm btn-ghost" href="#/academy/courses">All courses</a>`,
@@ -451,6 +460,7 @@
     const filtered = courses.filter((c) => (state.courseLevel === 'All' || c.level === state.courseLevel) && (state.courseTrack === 'All' || (c.track || 'docker') === state.courseTrack) && (!q || `${c.title} ${c.subtitle} ${c.description}`.toLowerCase().includes(q)));
     return `<div class="page">
       ${academyNav('courses')}
+      ${resumeCard()}
       <div class="page-head">
         <div class="page-head-left"><div class="eyebrow">${icon('graduation-cap', 12)}Curriculum</div><h1 class="page-title">Academy</h1><p class="page-sub">Docker and Kubernetes courses from first principles to expert operations. Every lesson has objectives, real commands, a knowledge check and a next step.</p></div>
         <div class="page-actions"><span class="badge tone-accent">${courses.length} courses</span><span class="badge tone-slate">${OD.store.allLessons().length} lessons</span>${OD.ai ? OD.ai.button({ kind: 'academy' }, { label: 'Ask AI about the Academy' }) : ''}</div>

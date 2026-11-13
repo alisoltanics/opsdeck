@@ -19,6 +19,7 @@
     "Preview": "پیش‌نمایش",
     "Markdown supported": "Markdown پشتیبانی می‌شود",
     "Nothing to preview yet.": "هنوز چیزی برای پیش‌نمایش نیست.",
+    "Resume where you left off": "ادامه از جایی که ماندید",
     "All tracks": "همه مسیرها",
     "Open beside the page": "باز کردن کنار صفحه",
     "Close help": "بستن راهنما",

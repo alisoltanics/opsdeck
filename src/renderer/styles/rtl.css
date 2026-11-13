@@ -43,5 +43,6 @@
 
 :root[dir='rtl'] .ai-bubble[dir='rtl'], :root[dir='rtl'] .ai-answer[dir='rtl'] { direction: rtl; text-align: right; unicode-bidi: plaintext; }
 :root[dir='rtl'] .ai-answer p, :root[dir='rtl'] .ai-answer li, :root[dir='rtl'] .ai-answer h4, :root[dir='rtl'] .ai-answer blockquote { unicode-bidi: plaintext; text-align: start; }
+:root[dir='rtl'] .ai-answer [dir='ltr'] { text-align: left; }
 :root[dir='rtl'] .ai-answer ul, :root[dir='rtl'] .ai-answer ol { padding-inline-start: 19px; padding-inline-end: 0; }
 :root[dir='rtl'] .notes-card textarea { direction: rtl; text-align: right; unicode-bidi: plaintext; }

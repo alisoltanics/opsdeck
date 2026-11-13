@@ -1456,9 +1456,9 @@ mark.hl { background: rgba(36,150,237,.24); color: inherit; border-radius: 2px; 
   color: var(--muted);
 }
 .ai-answer a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
-.ai-answer[dir="rtl"], .ai-bubble[dir="rtl"], .ai-answer [dir="rtl"] { text-align: end; }
+.ai-answer[dir="rtl"], .ai-bubble[dir="rtl"], .ai-answer [dir="rtl"] { direction: rtl; text-align: right; }
 .ai-answer ul, .ai-answer ol { padding-inline-start: 0; padding-inline-start: 19px; }
-.ai-answer li[dir="rtl"] { text-align: end; }
+.ai-answer li[dir="rtl"] { text-align: right; }
 .ai-answer ul[dir="rtl"], .ai-answer ol[dir="rtl"] { padding-inline-start: 19px; padding-inline-end: 0; }
 .ai-input, .ai-choice-model input { unicode-bidi: plaintext; text-align: start; }
 .ai-answer[dir="rtl"] blockquote, .ai-answer blockquote[dir="rtl"] {

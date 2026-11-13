@@ -968,3 +968,6 @@
 .notes-tabs .faint { margin-inline-start: auto; }
 .notes-preview { min-height: 120px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
 .notes-preview[hidden] { display: none; }
+
+.resume-card { margin-bottom: 14px; }
+.resume-card .progress { margin-top: 6px; }
