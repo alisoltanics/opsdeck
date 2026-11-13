@@ -1,6 +1,6 @@
 {
   "name": "opsdeck",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "private": true,
   "description": "OpsDeck — Operations Studio: a premium desktop control plane for Docker with a complete interactive Docker Academy, built to host Kubernetes, databases and observability workspaces.",
   "author": {

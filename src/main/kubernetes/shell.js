@@ -151,7 +151,7 @@ function validate(spec) {
   if (spec.container && !CONTAINER_RE.test(String(spec.container))) throw new Error('That container name is not valid.');
 }
 
-async function pickShell(spec, runCommand) {
+async function pickShell(spec, runCommand, env = {}) {
   let lastError = '';
   for (const shell of ['bash', 'sh']) {
     const args = [];
@@ -160,9 +160,20 @@ async function pickShell(spec, runCommand) {
     args.push('exec', spec.name);
     if (spec.container) args.push('--container', spec.container);
     args.push('--', shell, '-c', 'exit 0');
-    const res = await runCommand('kubectl', args, { timeout: 6000 });
+    const res = await runCommand('kubectl', args, { timeout: 8000, env });
     if (res.ok) return { shell };
-    lastError = res.stderr || lastError;
+    if (res.missing) return { shell: null, error: 'kubectl was not found. Open Kubernetes → Local tools to install it.' };
+    lastError = String(res.stderr || '').split('\n').filter((l) => l.trim() && !/^E\d{4} .*memcache\.go/.test(l)).join('\n').trim() || lastError;
+  }
+  if (/executable file not found|no such file or directory/i.test(lastError)) {
+    return {
+      shell: null,
+      error: `This container image has no shell (neither bash nor sh), so nothing can be opened inside it. Minimal images such as scratch, distroless or http-echo are built this way.\n\nTo inspect it anyway, attach a debug container:\n  kubectl debug -it ${spec.name} --image=busybox:1.36 --target=${spec.container || '<container>'}\n(Open it in the Kubectl console as a normal command, or run it in your own terminal.)`,
+      noShell: true,
+    };
+  }
+  if (/container not found|is not running|ContainerCreating|PodInitializing|waiting to start/i.test(lastError)) {
+    return { shell: null, error: `The container is not running yet, so a shell cannot attach.\n${lastError}`.trim() };
   }
   return { shell: null, error: lastError || 'This pod does not provide /bin/bash or /bin/sh.' };
 }
@@ -171,7 +182,7 @@ async function start(spec, sender, options = {}) {
   validate(spec);
   if (!sender || sender.isDestroyed()) throw new Error('No active window.');
 
-  const detected = await pickShell(spec, options.run);
+  const detected = await pickShell(spec, options.run, options.env || {});
   if (!detected.shell) return { ok: false, error: detected.error || 'No usable shell in this pod.' };
   if (sender.isDestroyed()) return { ok: false, error: 'The window was closed.' };
 

@@ -16,7 +16,7 @@
 
   const MAX_SESSIONS = 12;
   const MAX_MESSAGES = 40;
-  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource', 'observability', 'intelligence']);
+  const KINDS = new Set(['database', 'db-object', 'container', 'image', 'volume', 'network', 'compose', 'lesson', 'course', 'page', 'academy', 'kubernetes', 'k8s-resource', 'observability', 'intelligence', 'snippet']);
 
   const state = {
     config: null,
@@ -55,7 +55,8 @@
   }
 
   function targetKey(target) {
-    return [target.kind || 'page', target.id || '', target.name || '', target.page || '', target.section || '', target.namespace || ''].join('|');
+    const snip = target.kind === 'snippet' ? `${(target.snippet || '').length}:${(target.focus || '').slice(0, 80)}:${(target.snippet || '').slice(0, 60)}` : '';
+    return [target.kind || 'page', target.id || '', target.name || '', target.page || '', target.section || '', target.namespace || '', snip].join('|');
   }
 
   function targetTitle(target) {
@@ -66,6 +67,7 @@
     if (target.kind === 'intelligence') return `Intelligence · ${titleCase(target.page || 'overview')}`;
     if (target.kind === 'db-object') return target.name || 'Database object';
     if (target.kind === 'k8s-resource') return target.name || 'Kubernetes object';
+    if (target.kind === 'snippet') return target.label || 'Selected text';
     if (target.name) return target.name;
     if (target.kind === 'container') return `Container ${shortId(target.id || '', 12)}`;
     if (target.kind === 'image') return `Image ${shortId(target.id || '', 12)}`;
@@ -93,6 +95,7 @@
       observability: 'Observability workspace · live monitoring context',
       intelligence: 'Cross-module intelligence · live environment evidence',
       'k8s-resource': 'Kubernetes object · sanitized live context',
+      snippet: 'Text from the current view',
       page: 'Docker workspace · live page context',
     };
     return labels[target?.kind] || 'Live workspace context';

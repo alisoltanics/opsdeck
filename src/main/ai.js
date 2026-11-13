@@ -159,6 +159,12 @@ const SQL_SYSTEM_PROMPT = [
 ].join('\n');
 
 const SUGGESTIONS = {
+  snippet: [
+    'Explain what this means in plain language.',
+    'Is anything here wrong or risky? What should I change?',
+    'What is the most likely cause of the problem shown here?',
+    'Summarize this and tell me what to do next.',
+  ],
   container: [
     'Is this container healthy? Explain the evidence.',
     'What do the recent logs indicate, and what should I check next?',
@@ -1962,7 +1968,8 @@ class AIService {
     let title = String(target.name || target.id || 'OpsDeck');
     let subtitle = '';
     let suggestions = SUGGESTIONS[kind] || SUGGESTIONS.default;
-    const kubernetesContext = kind === 'kubernetes' || kind === 'k8s-resource' || kind === 'database' || kind === 'db-object';
+    const snippetContext = kind === 'snippet';
+    const kubernetesContext = snippetContext || kind === 'kubernetes' || kind === 'k8s-resource' || kind === 'database' || kind === 'db-object';
     const observabilityContext = kind === 'observability';
     const crossModuleContext = kind === 'intelligence';
     let engine = null;
@@ -1980,6 +1987,15 @@ class AIService {
         title = out.title || title;
         subtitle = out.subtitle || subtitle;
         suggestions = out.suggestions || SUGGESTIONS.kubernetes;
+      } else if (kind === 'snippet') {
+        const body = redactSecrets(String(target.snippet || '')).slice(0, 24000);
+        const focus = redactSecrets(String(target.focus || '')).slice(0, 4000);
+        builder.add('What the user is looking at', `${target.label ? `Source: ${String(target.label).slice(0, 200)}\n` : ''}Format: ${String(target.language || 'text').slice(0, 20)}${target.truncated ? '\n(The view was truncated.)' : ''}`);
+        if (focus) builder.add('The part the user is asking about', focus);
+        builder.add('Full content shown', body || '(empty)');
+        title = String(target.label || 'Selected text').slice(0, 120);
+        subtitle = 'Text from the current view';
+        suggestions = SUGGESTIONS.snippet;
       } else if (kind === 'database' || kind === 'db-object') {
         const out = await this.databaseContext(target, builder);
         title = out.title || title;

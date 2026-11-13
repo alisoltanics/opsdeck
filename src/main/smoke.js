@@ -438,7 +438,7 @@ function rendererScript(routes) {
             if (!objectAi?.ok || !objectAi.context?.text?.includes(first.name)) failures.push('kubernetes: object AI context is incomplete');
             const manifestTab = drawer.querySelector('[data-tabs="k8s-detail"] [data-tab="manifest"]');
             manifestTab?.click();
-            if (!(await waitFor(() => !!drawer.querySelector('.code-block'), 2000))) failures.push('kubernetes: manifest tab did not render');
+            if (!(await waitFor(() => !!drawer.querySelector('[data-lv-view] .lv-row'), 3000))) failures.push('kubernetes: manifest tab did not render');
             window.OD.ui.closeTopOverlay();
             await sleep(220);
           }
@@ -635,14 +635,14 @@ function rendererScript(routes) {
     if (logsButton) {
       logsButton.click();
       const loaded = await waitFor(() => {
-        const view = document.querySelector('#log-view');
-        return view && (view.querySelector('pre') || view.querySelector('.empty-state'));
+        const view = document.querySelector('[data-lv-view]');
+        return view && (view.querySelector('.lv-row') || view.querySelector('.lv-empty'));
       }, 15000);
       if (!loaded) {
         failures.push('logs: log content never loaded');
       } else {
         await sleep(150);
-        const view = document.querySelector('#log-view');
+        const view = document.querySelector('[data-lv-view]');
         if (Math.abs(view.scrollHeight - view.scrollTop - view.clientHeight) > 4) {
           failures.push('logs: view did not open at the newest line');
         }
@@ -650,13 +650,37 @@ function rendererScript(routes) {
           view.scrollTop = 0;
           view.dispatchEvent(new Event('scroll'));
           await sleep(120);
-          const latest = document.querySelector('[data-log-latest]');
+          const latest = document.querySelector('[data-lv-latest]');
           if (!latest?.classList.contains('show')) failures.push('logs: jump-to-latest control did not appear');
           latest?.click();
           await sleep(150);
           if (Math.abs(view.scrollHeight - view.scrollTop - view.clientHeight) > 4) {
             failures.push('logs: jump-to-latest did not scroll to the newest line');
           }
+        }
+        // Search, pause and per-line copy must work on the shared viewer.
+        const rows = document.querySelectorAll('[data-lv-view] .lv-row');
+        if (rows.length) {
+          const probe = (rows[0].querySelector('.lv-text')?.textContent || '').trim().split(/\s+/)[0] || '';
+          const q = document.querySelector('[data-lv-q]');
+          if (!q) failures.push('logs: search box is missing');
+          else if (probe.length >= 2) {
+            q.value = probe;
+            q.dispatchEvent(new Event('input', { bubbles: true }));
+            await sleep(120);
+            if (!document.querySelector('[data-lv-view] mark.lv-hit')) failures.push('logs: search did not highlight a match');
+            q.value = '';
+            q.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          const pause = document.querySelector('[data-lv-pause]');
+          if (!pause) failures.push('logs: pause button is missing');
+          else {
+            pause.click();
+            await sleep(60);
+            if (document.querySelector('[data-lv-banner]')?.hidden) failures.push('logs: pause did not show the paused banner');
+            pause.click();
+          }
+          if (!document.querySelector('[data-lv-view] [data-lv-copy]')) failures.push('logs: per-line copy button is missing');
         }
         document.querySelector('.drawer [data-close]')?.click();
         await sleep(250);

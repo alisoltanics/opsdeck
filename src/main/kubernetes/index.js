@@ -232,6 +232,23 @@ class KubernetesService {
     return runLessonScript({ script, yamls: cleanYamls, context: state.selected, namespace: state.namespace, env: this.env() });
   }
 
+  // A pod stuck in Init has no running app container. Pick the container that
+  // can actually answer: the first running one, else the running init container.
+  async pickContainer(name, namespace, context) {
+    const res = await this.kubeJson(['get', 'pod', name, '-o', 'json'], { timeout: 10000, context, namespace });
+    if (!res.ok || !res.data) return { container: '', note: '' };
+    const status = res.data.status || {};
+    const running = (list = []) => list.filter((c) => c.state && c.state.running).map((c) => c.name);
+    const app = running(status.containerStatuses);
+    if (app.length) return { container: app[0], note: '' };
+    const init = running(status.initContainerStatuses);
+    if (init.length) return { container: init[0], note: `Showing init container "${init[0]}": the app containers have not started yet.` };
+    const waiting = (status.initContainerStatuses || []).find((c) => c.state && c.state.waiting);
+    const done = (status.initContainerStatuses || []).filter((c) => c.state && c.state.terminated).map((c) => c.name);
+    if (!app.length && done.length) return { container: done[done.length - 1], note: `Showing the finished init container "${done[done.length - 1]}".` };
+    return { container: '', note: waiting ? `Container "${waiting.name}" is waiting: ${waiting.state.waiting.reason || 'not started'}.` : '' };
+  }
+
   async podLogs({ name, namespace, container = '', tailLines = 200, previous = false } = {}) {
     if (!validObjectName(name)) return { ok: false, error: 'That pod name is not valid.' };
     if (container && !/^[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?$/.test(container)) return { ok: false, error: 'That container name is not valid.' };
@@ -240,15 +257,23 @@ class KubernetesService {
     if (!state.selected) return { ok: false, error: 'Choose a context before reading logs.' };
     const ns = validNamespace(namespace) ? namespace : state.namespace;
     const tail = Math.min(2000, Math.max(10, Number.isFinite(Number(tailLines)) ? Math.round(Number(tailLines)) : 200));
+    let chosen = container;
+    let note = '';
+    if (!chosen && !previous) {
+      const pick = await this.pickContainer(name, ns, state.selected);
+      chosen = pick.container;
+      note = pick.note;
+    }
     const args = ['logs', name, '--tail', String(tail)];
-    if (container) args.push('--container', container);
+    if (chosen) args.push('--container', chosen);
     if (previous) args.push('--previous');
     const res = await this.kube(args, { timeout: 20000, context: state.selected, namespace: ns });
     return {
       ok: res.ok,
       name,
       namespace: ns,
-      container,
+      container: chosen,
+      note,
       previous: previous === true,
       lines: tail,
       stdout: res.ok ? String(res.stdout || '').slice(0, 250000) : '',
@@ -278,12 +303,20 @@ class KubernetesService {
   }
 
   async shellStart(spec, sender, options = {}) {
-    return shellStart({
+    const target = {
       context: String(spec?.context || ''),
       namespace: String(spec?.namespace || ''),
       name: String(spec?.name || ''),
       container: String(spec?.container || ''),
-    }, sender, { ...options, env: this.env(), run });
+    };
+    // Without an explicit container, use one that is actually running (init containers included).
+    if (!target.container && target.context && target.name) {
+      try {
+        const pick = await this.pickContainer(target.name, target.namespace || 'default', target.context);
+        if (pick.container) target.container = pick.container;
+      } catch { /* fall back to kubectl's default container */ }
+    }
+    return shellStart(target, sender, { ...options, env: this.env(), run });
   }
 
   shellInput(sessionId, data, senderId) { return shellInput(sessionId, data, senderId); }

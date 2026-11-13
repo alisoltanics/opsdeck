@@ -478,7 +478,7 @@
         ${status}
       </div>
       ${body
-        ? `<pre class="k8s-output">${esc(body)}</pre>`
+        ? '<div data-lv-host="output"></div>'
         : `<div class="faint text-xs">The command produced no output.</div>`}
       <div class="faint text-xs">${icon('shield-check', 11)} Context ${esc(result?.context || 'unknown')} · namespace ${esc(result?.namespace || 'default')}</div>
     </div>`;
@@ -550,7 +550,11 @@
         ${U.button({ label: 'Copy output', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(text)}"` })}
         ${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}
       </div>`,
-      onMount: ({ root }) => mountDrawerFullscreen(root),
+      onMount: ({ root }) => {
+        mountDrawerFullscreen(root);
+        const hostEl = root.querySelector('[data-lv-host="output"]');
+        if (hostEl) OD.logViewer.staticViewer(hostEl, text, { title: result.command || 'kubectl output', language: 'text' });
+      },
     });
   }
 
@@ -900,47 +904,38 @@
   }
 
   async function openPodLogs(name, namespace) {
-    let logs = null;
-    try {
-      logs = await api.kubernetes.podLogs({ name, namespace, tailLines: 300 });
-    } catch (error) {
-      logs = { ok: false, error: error.message || 'Could not read pod logs.' };
-    }
     let previous = false;
     U.drawer({
       eyebrow: 'Pod logs',
       title: name,
-      subtitle: `${namespace || 'default'} · last 300 lines`,
+      subtitle: `${namespace || 'default'} · newest at the bottom`,
       icon: 'file',
-      width: '900px',
-      body: `<div data-k8s-logs-body>${logsBody(logs)}</div>`,
+      width: '1000px',
+      body: OD.logViewer.markup({ loader: U.loader('Reading logs…') }),
       footer: `<div class="row gap-2" style="width:100%">
         ${OD.ai ? OD.ai.button({ kind: 'k8s-resource', section: 'pods', name, namespace }, { label: 'Ask AI', size: 'sm' }) : ''}
         <span class="toolbar-spacer"></span>
-        ${U.button({ label: 'Fullscreen', icon: 'maximize', size: 'sm', attrs: 'data-drawer-expand', title: 'View the logs fullscreen' })}
         ${U.button({ label: 'Open shell', icon: 'terminal', size: 'sm', attrs: 'data-k8s-logs-shell' })}
         ${U.button({ label: 'Previous instance', icon: 'history', size: 'sm', attrs: 'data-k8s-logs-previous' })}
         ${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}
       </div>`,
-      onMount: ({ root, close, body }) => {
-        mountDrawerFullscreen(root);
-        root.querySelector('[data-k8s-logs-shell]')?.addEventListener('click', () => {
-          close('shell');
-          showPodShell({ name, namespace });
+      onMount: ({ root, close, onClose }) => {
+        const viewer = OD.logViewer.mount(root, {
+          fetch: async (tail) => {
+            const res = await api.kubernetes.podLogs({ name, namespace, tailLines: tail, previous });
+            if (!res.ok) return { ok: false, error: res.error || 'Could not read pod logs.' };
+            return { ok: true, text: res.stdout, meta: `${res.container || 'all containers'}${previous ? ' · previous instance' : ''}${res.note ? ` · ${res.note}` : ''}` };
+          },
         });
+        onClose(() => viewer.stop());
+        root.querySelector('[data-k8s-logs-shell]')?.addEventListener('click', () => { close('shell'); showPodShell({ name, namespace }); });
         const previousBtn = root.querySelector('[data-k8s-logs-previous]');
-        previousBtn?.addEventListener('click', async () => {
+        previousBtn?.addEventListener('click', () => {
           previous = !previous;
-          busy(previousBtn, true, 'Reading…');
-          body.innerHTML = U.loader(previous ? 'Reading logs from the previous container instance…' : 'Reading logs…');
-          try {
-            const next = await api.kubernetes.podLogs({ name, namespace, tailLines: 300, previous });
-            body.innerHTML = logsBody(next);
-          } catch (error) {
-            body.innerHTML = logsBody({ ok: false, error: error.message });
-          } finally {
-            busy(previousBtn, false);
-          }
+          const label = previousBtn.querySelector('span:last-child');
+          if (label) label.textContent = previous ? 'Current instance' : 'Previous instance';
+          viewer.setAuto(!previous);
+          viewer.reload({ force: true, loader: true });
         });
       },
     });
@@ -1203,10 +1198,14 @@
       overview: detailSummary(detail),
       events: eventsBody(detail.events, detail.eventsError),
       commands: commandListBody(detail.commands),
-      manifest: U.codeBlock({ code: JSON.stringify(detail.manifest, null, 2), lang: 'json', title: 'JSON manifest' }),
+      manifest: '<div data-lv-host="manifest"></div>',
       describe: detail.describe
-        ? U.codeBlock({ code: detail.describe, lang: 'text', title: 'kubectl describe' })
+        ? '<div data-lv-host="describe"></div>'
         : U.infoBanner('Describe output unavailable', detail.describeError || 'kubectl returned no describe output.', 'warning'),
+    };
+    const viewerText = {
+      manifest: { text: JSON.stringify(detail.manifest, null, 2), title: `${detail.kind || 'Object'} ${detail.name} manifest`, language: 'json' },
+      describe: { text: detail.describe || '', title: `kubectl describe ${detail.name}`, language: 'text' },
     };
     const isPod = section === 'pods';
     const tabs = [
@@ -1227,26 +1226,30 @@
       body: `<div data-k8s-detail-body>${bodies.overview}</div>`,
       footer: detailActions(detail),
       width: '820px',
-      onMount: ({ root, close, body }) => {
+      onMount: ({ root, close, body, onClose }) => {
         let active = 'overview';
-        let logsPromise = null;
+        let liveLogs = null;
+        const stopLogs = () => { if (liveLogs) { liveLogs.stop(); liveLogs = null; } };
         const show = (id) => {
           active = id;
-          if (id === 'logs' && !bodies.logs) {
-            body.innerHTML = U.loader('Reading pod logs…');
-            if (!logsPromise) {
-              logsPromise = api.kubernetes.podLogs({ name: detail.name, namespace: detail.namespace || '', tailLines: 300 })
-                .catch((error) => ({ ok: false, error: error.message || 'Could not read pod logs.' }))
-                .then((logs) => {
-                  bodies.logs = logsBody(logs);
-                  return bodies.logs;
-                });
-            }
-            logsPromise.then((html) => { if (active === 'logs') body.innerHTML = html; });
+          stopLogs();
+          if (id === 'logs') {
+            body.innerHTML = OD.logViewer.markup({ loader: U.loader('Reading pod logs…') });
+            liveLogs = OD.logViewer.mount(body, {
+              title: `Logs of ${detail.name}`,
+              fetch: async (tail) => {
+                const res = await api.kubernetes.podLogs({ name: detail.name, namespace: detail.namespace || '', tailLines: tail });
+                return res.ok ? { ok: true, text: res.stdout, meta: `${res.container || 'all containers'}${res.note ? ` · ${res.note}` : ''}` } : { ok: false, error: res.error };
+              },
+            });
             return;
           }
           body.innerHTML = bodies[id] || bodies.overview;
+          const hostEl = body.querySelector('[data-lv-host]');
+          const src = hostEl && viewerText[hostEl.dataset.lvHost];
+          if (src) OD.logViewer.staticViewer(hostEl, src.text, { title: src.title, language: src.language });
         };
+        onClose(stopLogs);
         const tabButtons = [...root.querySelectorAll('[data-tabs="k8s-detail"] .tab')];
         for (const tab of tabButtons) {
           tab.addEventListener('click', () => {
@@ -1413,6 +1416,7 @@
           <button type="button" class="icon-btn" data-con-act="rerun" title="Run again" aria-label="Run again">${icon('refresh', 13)}</button>
           <button type="button" class="icon-btn" data-con-act="reuse" title="Edit in prompt" aria-label="Edit in prompt">${icon('terminal', 13)}</button>
           <button type="button" class="icon-btn" data-con-act="copy" title="Copy output" aria-label="Copy output">${icon('copy', 13)}</button>
+          ${OD.ai ? `<button type="button" class="icon-btn" data-con-act="ask" title="Ask AI about this output" aria-label="Ask AI about this output">${icon('sparkles', 13)}</button>` : ''}
           <button type="button" class="icon-btn" data-con-act="fold" title="${collapsed ? 'Expand' : 'Collapse'}" aria-label="${collapsed ? 'Expand' : 'Collapse'}">${icon(collapsed ? 'chevron-down' : 'chevron-up', 13)}</button>
           <button type="button" class="icon-btn" data-con-act="remove" title="Remove" aria-label="Remove">${icon('x', 13)}</button>
         </span>
@@ -1702,6 +1706,7 @@
         const kind = act.dataset.conAct;
         if (kind === 'rerun') execute(entry.command);
         else if (kind === 'reuse') { input.value = entry.command; input.focus(); }
+        else if (kind === 'ask') OD.ai?.openFor({ kind: 'snippet', label: entry.result?.command || entry.command, language: 'text', snippet: `$ ${entry.result?.command || entry.command}\n${[entry.result?.stdout, entry.result?.stderr, entry.result?.error].filter(Boolean).join('\n')}`.slice(0, 24000), focus: '' });
         else if (kind === 'copy') OD.utils.copyText([entry.result?.stdout, entry.result?.stderr].filter(Boolean).join('\n') || '', 'Output copied');
         else if (kind === 'fold') { if (CS.collapsed.has(id)) CS.collapsed.delete(id); else CS.collapsed.add(id); paint(); }
         else if (kind === 'remove') { CS.entries = CS.entries.filter((e) => e.id !== id); paint(); }

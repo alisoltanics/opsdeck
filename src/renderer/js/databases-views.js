@@ -1983,23 +1983,25 @@
   function openLogs(containerId) {
     if (!containerId) return;
     const id = containerId;
-    const paint = (body) => {
-      api.docker.containerLogs(id, 500).then((res) => {
-        const text = [res?.stdout || '', res?.stderr || ''].filter(Boolean).join('\n');
-        body.innerHTML = `<div class="db-log-actions">${U.button({ label: 'Refresh', icon: 'refresh', size: 'sm', attrs: 'data-db-log-refresh' })}${U.button({ label: 'Copy', icon: 'copy', size: 'sm', attrs: 'data-db-log-copy' })}</div><pre class="db-json db-log">${esc(text || res?.error || 'No log output.')}</pre>`;
-        body.querySelector('[data-db-log-refresh]')?.addEventListener('click', () => paint(body));
-        body.querySelector('[data-db-log-copy]')?.addEventListener('click', () => copyText(text, 'Logs copied'));
-      }).catch((error) => {
-        body.innerHTML = U.errorBanner('Could not read logs', error.message);
-      });
-    };
     U.drawer({
       title: 'Container logs',
       subtitle: id.slice(0, 12),
       icon: 'scroll-text',
-      width: '760px',
-      body: U.loader('Reading logs…'),
-      onMount: ({ body }) => paint(body),
+      width: '1000px',
+      body: OD.logViewer.markup({ loader: U.loader('Reading logs…'), tail: 600, tails: [100, 300, 600, 1200] }),
+      onMount: ({ root, onClose }) => {
+        const viewer = OD.logViewer.mount(root, {
+          title: `Database container ${id.slice(0, 12)} logs`,
+          tail: 600,
+          fetch: async (tail) => {
+            const res = await api.docker.containerLogs(id, tail);
+            const text = [res?.stdout || '', res?.stderr || ''].filter(Boolean).join('\n');
+            if (!text && res?.error) return { ok: false, error: res.error };
+            return { ok: true, text };
+          },
+        });
+        onClose(() => viewer.stop());
+      },
     });
   }
 

@@ -649,61 +649,20 @@
       subtitle: item.id,
       eyebrow: 'Container logs',
       icon: 'terminal',
-      width: '760px',
-      body: `<div class="row gap-2 mb-2"><label class="field" style="width:130px"><span>Tail</span><select class="input" id="log-tail">${[100, 300, 600, 1200].map((n) => `<option value="${n}" ${n === 300 ? 'selected' : ''}>${n} lines</option>`).join('')}</select></label><div class="toolbar-spacer"></div>${U.button({ label: 'Refresh', icon: 'refresh', size: 'sm', attrs: 'data-action="reload-logs"' })}</div>
-        <div class="log-view-wrap">
-          <div class="log-view" id="log-view">${U.loader('Reading logs…')}</div>
-          <button type="button" class="log-latest" data-log-latest>${icon('chevron-down', 12)}<span>Latest</span></button>
-        </div>`,
+      width: '1000px',
+      body: OD.logViewer.markup({ loader: U.loader('Reading logs…'), interval: 6000 }),
       footer: `<span class="faint text-xs mono">docker logs --tail 300 --timestamps ${esc(item.id)}</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${OD.store.lessonById('logs-and-debugging') ? `<a class="btn btn-sm btn-ghost" href="#/academy/lesson/logs-and-debugging">${icon('graduation-cap', 13)}<span>Debugging lesson</span></a>` : ''}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker logs --tail 300 --timestamps ${esc(item.id)}"` })}</div>`,
-      onMount: ({ root, close, onClose }) => {
-        const view = root.querySelector('#log-view');
-        const select = root.querySelector('#log-tail');
-        const latest = root.querySelector('[data-log-latest]');
-        let stopped = false;
-        let first = true;
-        let stick = true;
-
-        const atBottom = () => view.scrollHeight - view.scrollTop - view.clientHeight < 24;
-        const syncLatest = () => {
-          stick = atBottom();
-          latest?.classList.toggle('show', !stick);
-        };
-        const jumpToLatest = () => {
-          view.scrollTop = view.scrollHeight;
-          stick = true;
-          latest?.classList.remove('show');
-        };
-
-        view.addEventListener('scroll', syncLatest, { passive: true });
-        latest?.addEventListener('click', jumpToLatest);
-        onClose(() => { stopped = true; });
-
-        const load = async (opts = {}) => {
-          if (stopped) return;
-          if (first) view.innerHTML = U.loader('Reading logs…');
-          const res = await api.docker.containerLogs(item.id, Number(select.value) || 300);
-          if (stopped) return;
-          const pinned = opts.forceBottom === true || first || stick;
-          const text = [res.stdout, res.stderr].filter(Boolean).join('\n');
-          view.innerHTML = text
-            ? `<pre>${esc(text)}</pre>`
-            : U.empty({ compact: true, icon: 'terminal', title: 'No log output', body: 'The container has not written to stdout or stderr.' });
-          first = false;
-          if (pinned) {
-            jumpToLatest();
-            requestAnimationFrame(jumpToLatest);
-            setTimeout(() => { if (!stopped && stick) jumpToLatest(); }, 90);
-          } else {
-            requestAnimationFrame(syncLatest);
-          }
-        };
-
-        root.querySelector('[data-action="reload-logs"]')?.addEventListener('click', () => load());
-        select.addEventListener('change', () => load({ forceBottom: true }));
-        const interval = setInterval(() => load(), 6000);
-        onClose(() => clearInterval(interval));
-        load();
+      onMount: ({ root, onClose }) => {
+        const viewer = OD.logViewer.mount(root, {
+          interval: 6000,
+          fetch: async (tail) => {
+            const res = await api.docker.containerLogs(item.id, tail);
+            const text = [res.stdout, res.stderr].filter(Boolean).join('\n');
+            if (res.ok === false && !text) return { ok: false, error: res.error || res.stderr || 'Could not read container logs.' };
+            return { ok: true, text, meta: item.state ? `state: ${item.state}` : '' };
+          },
+        });
+        onClose(() => viewer.stop());
       },
     });
     return drawer;
@@ -1439,8 +1398,9 @@
       icon: 'file-code',
       width: '780px',
       body: `<div class="pill-row mb-3">${services.map((s) => `<span class="badge tone-violet">${esc(s)}</span>`).join('') || '<span class="muted text-sm">No services reported.</span>'}</div>
-        <div class="config-view"><div class="config-toolbar"><span class="path">${esc(res.file || '')}</span>${U.button({ label: 'Copy', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(pretty)}"` })}</div><pre>${esc(pretty)}</pre></div>`,
+        <div data-lv-host="compose-config"></div>`,
       footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'compose', id: project, name: project }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('compose-services', 'Compose services lesson')}${U.button({ label: 'Copy path', icon: 'copy', size: 'sm', attrs: `data-copy-text="${esc(res.file || '')}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      onMount: ({ root }) => { const h = root.querySelector('[data-lv-host="compose-config"]'); if (h) OD.logViewer.staticViewer(h, pretty, { title: `${project} compose config`, language: 'yaml' }); },
     });
   }
 
@@ -1449,20 +1409,21 @@
       title: project,
       eyebrow: 'Compose logs',
       icon: 'terminal',
-      width: '780px',
-      body: `<div class="row gap-2 mb-2"><span class="muted text-xs">Last 200 lines, ANSI stripped</span><div class="toolbar-spacer"></div>${U.button({ label: 'Reload', icon: 'refresh', size: 'sm', attrs: 'data-action="reload-compose-logs"' })}</div><div class="log-view" id="compose-log-view">${U.loader('Reading logs…')}</div>`,
+      width: '1000px',
+      body: OD.logViewer.markup({ loader: U.loader('Reading logs…'), tails: [100, 200, 500, 1000], tail: 200, interval: 8000 }),
       footer: `<span class="mono faint text-xs">docker compose -p ${esc(project)} logs --tail 200</span><div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'compose', id: project, name: project }, { label: 'Ask AI', size: 'sm' }) : ''}${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}</div>`,
       onMount: ({ root, onClose }) => {
-        const view = root.querySelector('#compose-log-view');
-        const load = async () => {
-          view.innerHTML = U.loader('Reading logs…');
-          const res = await api.docker.composeAction(project, 'logs', { tail: 200 });
-          const text = res.stdout || res.error || '';
-          view.innerHTML = text ? `<pre>${esc(text)}</pre>` : U.empty({ compact: true, icon: 'terminal', title: 'No log output', body: 'Services may not have written logs yet.' });
-        };
-        load();
-        root.querySelector('[data-action="reload-compose-logs"]').addEventListener('click', load);
-        onClose(() => {});
+        const viewer = OD.logViewer.mount(root, {
+          title: `${project} compose logs`,
+          interval: 8000,
+          fetch: async (tail) => {
+            const res = await api.docker.composeAction(project, 'logs', { tail });
+            const text = res.stdout || '';
+            if (!text && res.error) return { ok: false, error: res.error };
+            return { ok: true, text, meta: 'ANSI stripped' };
+          },
+        });
+        onClose(() => viewer.stop());
       },
     });
   }
@@ -2249,8 +2210,9 @@
         const res = await api.docker.volumeAction(name, 'inspect');
         U.drawer({
           title: name, eyebrow: 'Volume detail', icon: 'database', width: '640px',
-          body: res.ok ? `<div class="config-view"><pre>${esc(res.stdout || '')}</pre></div>` : U.errorBanner('Inspect failed', res.error || 'Unknown error'),
+          body: res.ok ? '<div data-lv-host="inspect"></div>' : U.errorBanner('Inspect failed', res.error || 'Unknown error'),
           footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'volume', id: name, name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink('storage-and-volumes', 'Storage lesson')}${U.button({ label: 'Copy command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker volume inspect ${esc(name)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+          onMount: ({ root }) => { const h = root.querySelector('[data-lv-host="inspect"]'); if (h) OD.logViewer.staticViewer(h, res.stdout || '', { title: `docker volume inspect ${name}`, language: 'json' }); },
         });
       }
     });
