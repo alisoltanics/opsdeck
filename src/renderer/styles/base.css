@@ -65,10 +65,20 @@ hr { border: 0; border-top: 1px solid var(--border); margin: var(--s-6) 0; }
 .brand-mark {
   width: 30px; height: 30px; flex: 0 0 30px;
   border-radius: 9px;
-  background: var(--gradient-brand);
+  background: #000;
   display: grid; place-items: center;
   color: #fff;
-  box-shadow: 0 6px 18px rgba(36,150,237,.28), inset 0 1px 0 rgba(255,255,255,.28);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.14), 0 6px 18px rgba(0,0,0,.35);
+  position: relative;
+  font-size: 0;
+}
+.brand-mark > svg { display: none; }
+.brand-mark::after {
+  content: 'OD';
+  font: 700 .5em/1 'DejaVu Serif', Georgia, 'Times New Roman', serif;
+  font-size: 13px;
+  letter-spacing: -.02em;
+  color: #fff;
 }
 .brand-text { min-width: 0; line-height: 1.1; }
 .brand-name { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }

@@ -520,12 +520,12 @@ const RESOURCE_SECTIONS = Object.keys(RESOURCES);
  * remove a storage class, role or persistent volume.
  */
 const RESOURCE_ACTIONS = {
-  pods: ['delete'],
+  pods: ['restart', 'delete'],
   deployments: ['scale', 'restart', 'delete'],
   statefulsets: ['scale', 'restart', 'delete'],
   daemonsets: ['restart', 'delete'],
   jobs: ['delete'],
-  cronjobs: ['delete'],
+  cronjobs: ['trigger', 'suspend', 'resume', 'delete'],
   services: ['delete'],
   ingresses: ['delete'],
   networkpolicies: ['delete'],
@@ -539,7 +539,7 @@ const RESOURCE_ACTIONS = {
   rolebindings: ['delete'],
 };
 
-const ACTION_LABELS = { scale: 'Scale', restart: 'Restart', delete: 'Delete' };
+const ACTION_LABELS = { scale: 'Scale', restart: 'Restart', delete: 'Delete', trigger: 'Run now', suspend: 'Suspend', resume: 'Resume' };
 
 const OBJECT_NAME_RE = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
 const ACTION_NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
@@ -580,8 +580,17 @@ function actionArgs(section, action, name, { namespace = '', replicas } = {}) {
       throw new Error(`Replicas must be a whole number between 0 and ${MAX_REPLICAS}.`);
     }
     args = ['scale', def.resource, name, `--replicas=${requestedReplicas}`];
+  } else if (action === 'restart' && section === 'pods') {
+    // A pod cannot be restarted in place: deleting it lets its controller
+    // (Deployment, StatefulSet, DaemonSet, Job) recreate it.
+    args = ['delete', 'pod', name, '--wait=false'];
   } else if (action === 'restart') {
     args = ['rollout', 'restart', `${def.resource}/${name}`];
+  } else if (action === 'trigger' && section === 'cronjobs') {
+    const suffix = Date.now().toString(36);
+    args = ['create', 'job', `${name.slice(0, 50)}-m${suffix}`.slice(0, 63).replace(/[-.]+$/, ''), `--from=cronjob/${name}`];
+  } else if ((action === 'suspend' || action === 'resume') && section === 'cronjobs') {
+    args = ['patch', 'cronjob', name, '--type=merge', '-p', JSON.stringify({ spec: { suspend: action === 'suspend' } })];
   } else if (action === 'delete') {
     args = ['delete', def.resource, name, '--wait=false'];
   } else {

@@ -524,9 +524,12 @@
       <td>${x.compose ? `<button type="button" class="badge tone-violet badge-btn" data-project-only="${esc(x.compose)}" title="Show every container in this project">${esc(x.compose)}${x.service ? `/${esc(x.service)}` : ''}</button>` : '<span class="faint">—</span>'}</td>
       <td><div class="row-actions" onclick="event.stopPropagation()">
         ${x.state === 'running'
-          ? U.iconButton({ icon: 'pause', label: 'Pause', attrs: `data-caction="pause" data-cid="${esc(x.id)}"` })
-          : U.iconButton({ icon: 'play', label: 'Start', attrs: `data-caction="start" data-cid="${esc(x.id)}"` })}
-        ${x.state === 'running' ? U.iconButton({ icon: 'rotate-cw', label: 'Restart', attrs: `data-caction="restart" data-cid="${esc(x.id)}"` }) : ''}
+          ? U.iconButton({ icon: 'pause', label: 'Pause', attrs: `data-caction="pause" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })
+          : x.state === 'paused'
+            ? U.iconButton({ icon: 'play', label: 'Resume', attrs: `data-caction="unpause" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })
+            : U.iconButton({ icon: 'play', label: 'Start', attrs: `data-caction="start" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
+        ${x.state === 'running' || x.state === 'paused' ? U.iconButton({ icon: 'square', label: 'Stop', attrs: `data-caction="stop" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` }) : ''}
+        ${U.iconButton({ icon: 'rotate-cw', label: x.state === 'running' ? 'Restart' : 'Restart (starts it again)', attrs: `data-caction="restart" data-cid="${esc(x.id)}" data-cname="${esc(x.name)}"` })}
         ${published.length ? U.iconButton({
           icon: 'globe',
           label: x.state === 'running' ? `Open in Firefox — ${containerUrl(published[0])}` : 'Start the container to open its address',
@@ -560,13 +563,21 @@
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
+    const runningIn = (key) => groups.get(key).filter((x) => x.state === 'running').length;
     const keys = [...groups.keys()].sort((a, b) => {
+      // Groups with running containers come first, then the rest.
+      const ra = runningIn(a) > 0 ? 1 : 0;
+      const rb = runningIn(b) > 0 ? 1 : 0;
+      if (ra !== rb) return rb - ra;
       if (a === '__standalone') return 1;
       if (b === '__standalone') return -1;
       return a.localeCompare(b);
     });
     return keys.map((key) => {
       const groupItems = groups.get(key).sort((a, b) => {
+        const ar = a.state === 'running' ? 0 : 1;
+        const br = b.state === 'running' ? 0 : 1;
+        if (ar !== br) return ar - br;
         const service = String(a.service || a.name).localeCompare(String(b.service || b.name));
         return service !== 0 ? service : String(a.name).localeCompare(String(b.name));
       });
@@ -1227,11 +1238,20 @@
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Network</th><th>IP</th><th>Gateway</th><th>MAC</th></tr></thead><tbody>${networks || '<tr><td colspan="4" class="muted">No networks.</td></tr>'}</tbody></table></div>
       <div class="section-head"><div><h2 class="section-title">Labels</h2></div></div>
       <div class="tag-row">${Object.entries(d.labels || {}).map(([k, v]) => `<span class="badge mono">${esc(k)}=${esc(v)}</span>`).join('') || '<span class="muted text-sm">No labels.</span>'}</div>`,
-      footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink(lesson?.id, 'Explain this container')}${firefoxAction}${U.button({ label: 'Copy inspect command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker inspect ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
+      footer: `<div class="row gap-2">${OD.ai ? OD.ai.button({ kind: 'container', id: item.id, name: item.name }, { label: 'Ask AI', size: 'sm' }) : ''}${learnLink(lesson?.id, 'Explain this container')}${firefoxAction}${['running', 'paused'].includes(item.state) ? U.button({ label: 'Stop', icon: 'square', size: 'sm', attrs: `data-inspect-caction="stop"` }) : U.button({ label: 'Start', icon: 'play', size: 'sm', attrs: `data-inspect-caction="start"` })}${U.button({ label: 'Restart', icon: 'rotate-cw', size: 'sm', attrs: `data-inspect-caction="restart"` })}${U.button({ label: 'Copy inspect command', icon: 'copy', size: 'sm', attrs: `data-copy-text="docker inspect ${esc(item.id)}"` })}</div>${U.button({ label: 'Close', variant: 'ghost', size: 'sm', attrs: 'data-close' })}`,
       onMount: ({ root }) => {
         root.querySelector('[data-open-firefox]')?.addEventListener('click', (event) => {
           openContainerInFirefox(item, event.currentTarget.dataset.openFirefox);
         });
+        for (const btn of root.querySelectorAll('[data-inspect-caction]')) {
+          btn.addEventListener('click', async () => {
+            const action = btn.dataset.inspectCaction;
+            btn.disabled = true;
+            const res = await api.docker.containerAction(item.id, action);
+            if (res.ok) { U.toast(`Container ${action === 'stop' ? 'stopped' : action === 'start' ? 'started' : 'restarted'}`, 'success', { description: item.name }); rerender(); }
+            else { U.toast(`${action} failed`, 'error', { description: res.error }); btn.disabled = false; }
+          });
+        }
       },
     });
   }

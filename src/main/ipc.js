@@ -1,6 +1,6 @@
 'use strict';
 
-const { ipcMain, shell, clipboard } = require('electron');
+const { ipcMain, shell, clipboard, BrowserWindow } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const os = require('node:os');
@@ -590,13 +590,24 @@ function registerIpc({ getWindow, dialog, app }) {
   handle('labs:consent', () => labs.consent());
 
   // Persist state and close container shells on quit.
+  let quitting = false;
   app.on('before-quit', () => {
-    store.persistNow();
-    exec.stopAll();
-    ai.dispose();
-    observability.dispose().catch(() => {});
-    intelligence.dispose();
-    databases.disposeAll().catch(() => {});
+    if (quitting) return;
+    quitting = true;
+    // Close the windows at once so the app feels instant; cleanup continues
+    // in the background and the process is force-exited after a short grace
+    // period so a slow tunnel, agent or in-flight CLI call cannot hold it open.
+    for (const win of BrowserWindow.getAllWindows()) { try { win.hide(); } catch { /* ignore */ } }
+    const tasks = [];
+    const safe = (fn) => { try { const r = fn(); if (r && typeof r.then === 'function') tasks.push(r.catch(() => {})); } catch { /* ignore */ } };
+    safe(() => store.persistNow());
+    safe(() => exec.stopAll());
+    safe(() => ai.dispose());
+    safe(() => observability.dispose());
+    safe(() => intelligence.dispose());
+    safe(() => databases.disposeAll());
+    const grace = new Promise((resolve) => setTimeout(resolve, 1500));
+    Promise.race([Promise.all(tasks), grace]).then(() => app.exit(0));
   });
 
   // Start the Docker reads the first screen needs before the renderer asks.

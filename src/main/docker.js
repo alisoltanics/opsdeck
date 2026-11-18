@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { validateTerminal } = require('./security');
+const api = require('./dockerapi');
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT = 20000;
@@ -93,8 +94,9 @@ function status() {
 
 async function readStatus() {
   const [version, infoRes, compose] = await Promise.all([
-    run(['version', '--format', '{{json .}}'], { timeout: 6000 }),
-    run(['info', '--format', '{{json .}}'], { timeout: 6000 }),
+    apiVersion().catch(() => null).then((v) => v || run(['version', '--format', '{{json .}}'], { timeout: 6000 })),
+    api.request('/info', { timeout: 5000 }).then((d) => ({ ok: true, stdout: JSON.stringify(d) }))
+      .catch(() => run(['info', '--format', '{{json .}}'], { timeout: 6000 })),
     composeVersion(),
   ]);
   if (!version.ok) {
@@ -137,7 +139,27 @@ async function readStatus() {
   };
 }
 
+// The engine version via the API; the client version is static per install, so
+// it is read from the CLI once and memoised.
+let clientVersion;
+async function apiVersion() {
+  const v = await api.request('/version', { timeout: 4000 });
+  if (clientVersion === undefined) {
+    const r = await run(['version', '--format', '{{.Client.Version}}'], { timeout: 6000 });
+    clientVersion = r.ok ? r.stdout.trim() : '—';
+  }
+  return { ok: true, stdout: JSON.stringify({ Client: { Version: clientVersion }, Server: { Version: v.Version, ApiVersion: v.ApiVersion, Os: v.Os, Arch: v.Arch } }) };
+}
+
+let composeMemo = null;
 async function composeVersion() {
+  if (composeMemo && Date.now() - composeMemo.at < 600000) return composeMemo.value;
+  const value = await readComposeVersion();
+  composeMemo = { at: Date.now(), value };
+  return value;
+}
+
+async function readComposeVersion() {
   const res = await run(['compose', 'version', '--short'], { timeout: 6000 });
   return res.ok ? res.stdout.trim() : 'unavailable';
 }
@@ -182,8 +204,45 @@ function delay(ms, value) {
   });
 }
 
+function fmtPort(p) {
+  if (!p.PublicPort) return `${p.PrivatePort}/${p.Type}`;
+  const ip = p.IP || '0.0.0.0';
+  return `${ip.includes(':') ? `[${ip}]` : ip}:${p.PublicPort}->${p.PrivatePort}/${p.Type}`;
+}
+
+function apiContainers(list) {
+  if (!Array.isArray(list)) return null;
+  return list.map((c) => {
+    const labels = c.Labels || {};
+    const state = String(c.State || '').toLowerCase();
+    return {
+      id: c.Id,
+      shortId: String(c.Id).slice(0, 12),
+      name: (c.Names || []).map((n) => n.replace(/^\//, '')).join(','),
+      image: c.Image,
+      command: c.Command,
+      createdAt: new Date((c.Created || 0) * 1000).toISOString(),
+      runningFor: '',
+      state,
+      status: c.Status,
+      size: '',
+      ports: (c.Ports || []).map(fmtPort),
+      labels,
+      mounts: (c.Mounts || []).map((m) => m.Name || m.Source).join(','),
+      networks: Object.keys(c.NetworkSettings?.Networks || {}),
+      platform: null,
+      compose: labels['com.docker.compose.project'] || null,
+      service: labels['com.docker.compose.service'] || null,
+      cpuPercent: 0,
+      memoryBytes: 0,
+    };
+  });
+}
+
 async function containersList() {
   return cached('containers', 1500, async () => {
+    const fast = await api.request('/containers/json?all=1', { timeout: 8000 }).then(apiContainers).catch(() => null);
+    if (fast) return { ok: true, items: fast };
     const res = await runJson(['ps', '-a', '--no-trunc', '--format', '{{json .}}'], { timeout: 12000 });
     if (!res.ok) return { ok: false, error: res.stderr, items: [] };
     const items = (res.data || []).map((c) => {
@@ -311,8 +370,49 @@ async function containerAction(id, action, options = {}) {
   return { ok: res.ok, stdout: res.stdout.trim(), error: res.ok ? null : res.stderr };
 }
 
+function fmtDec(n) {
+  if (n < 0) return 'N/A';
+  const u = ['B', 'kB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i += 1; }
+  return `${i ? n.toPrecision(3).replace(/\.?0+$/, (m) => (m.includes('.') ? '' : m)) : n}${u[i]}`;
+}
+
+function apiImages(list) {
+  if (!Array.isArray(list)) return null;
+  const items = [];
+  for (const img of list) {
+    const tags = (img.RepoTags && img.RepoTags.length ? img.RepoTags : ['<none>:<none>']);
+    for (const ref of tags) {
+      const idx = ref.lastIndexOf(':');
+      const repository = idx > 0 ? ref.slice(0, idx) : ref;
+      const tag = idx > 0 ? ref.slice(idx + 1) : '<none>';
+      const created = new Date((img.Created || 0) * 1000);
+      items.push({
+        id: String(img.Id || '').replace(/^sha256:/, '').slice(0, 12),
+        repository,
+        tag,
+        name: repository === '<none>' ? `<none>:${tag}` : `${repository}:${tag}`,
+        digest: (img.RepoDigests && img.RepoDigests[0] || '').split('@')[1] || '<none>',
+        createdSince: '',
+        createdAt: created.toISOString(),
+        size: fmtDec(img.Size),
+        sharedSize: fmtDec(img.SharedSize),
+        uniqueSize: fmtDec(img.Size - Math.max(0, img.SharedSize || 0)),
+        containers: String(Math.max(0, img.Containers ?? 0)),
+        dangling: repository === '<none>' || tag === '<none>',
+        registry: registryOf(repository),
+        protected: isProtectedImageRepository(repository),
+      });
+    }
+  }
+  return items;
+}
+
 async function imagesList() {
   return cached('images', 3000, async () => {
+    const fast = await api.request('/images/json', { timeout: 8000 }).then(apiImages).catch(() => null);
+    if (fast) return { ok: true, items: fast };
     const res = await runJson(['images', '--format', '{{json .}}'], { timeout: 12000 });
     if (!res.ok) return { ok: false, error: res.stderr, items: [] };
     const items = (res.data || []).map((i) => ({
@@ -776,7 +876,62 @@ async function stats() {
   return cached('stats', 1000, readStats);
 }
 
+const prevCpu = new Map();
+function fmtIec(n) {
+  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i += 1; }
+  return `${n.toFixed(i ? 2 : 0)}${u[i]}`;
+}
+
+async function apiStats() {
+  const list = await api.request('/containers/json', { timeout: 6000 });
+  if (!Array.isArray(list)) return null;
+  const seen = new Set();
+  const items = await Promise.all(list.map(async (c) => {
+    seen.add(c.Id);
+    const prev = prevCpu.get(c.Id);
+    // Without a previous sample the daemon takes two readings itself (~1s);
+    // afterwards a one-shot read plus our own previous sample is enough.
+    const q = prev ? '&one-shot=true' : '';
+    const s = await api.request(`/containers/${c.Id}/stats?stream=false${q}`, { timeout: 8000 });
+    const cur = { total: s.cpu_stats?.cpu_usage?.total_usage || 0, sys: s.cpu_stats?.system_cpu_usage || 0 };
+    const base = prev || { total: s.precpu_stats?.cpu_usage?.total_usage || 0, sys: s.precpu_stats?.system_cpu_usage || 0 };
+    prevCpu.set(c.Id, cur);
+    const dCpu = cur.total - base.total;
+    const dSys = cur.sys - base.sys;
+    const cores = s.cpu_stats?.online_cpus || s.cpu_stats?.cpu_usage?.percpu_usage?.length || 1;
+    const cpuPercent = dSys > 0 && dCpu >= 0 ? (dCpu / dSys) * cores * 100 : 0;
+    const m = s.memory_stats || {};
+    const cache = m.stats?.inactive_file ?? m.stats?.total_inactive_file ?? m.stats?.cache ?? 0;
+    const used = Math.max(0, (m.usage || 0) - cache);
+    const limit = m.limit || 0;
+    let netIn = 0; let netOut = 0;
+    for (const n of Object.values(s.networks || {})) { netIn += n.rx_bytes || 0; netOut += n.tx_bytes || 0; }
+    let blkRead = 0; let blkWrite = 0;
+    for (const b of s.blkio_stats?.io_service_bytes_recursive || []) {
+      const op = String(b.op).toLowerCase();
+      if (op === 'read') blkRead += b.value; else if (op === 'write') blkWrite += b.value;
+    }
+    return {
+      id: c.Id.slice(0, 12),
+      name: (c.Names?.[0] || '').replace(/^\//, ''),
+      cpuPercent,
+      memoryPercent: limit ? (used / limit) * 100 : 0,
+      memoryUsed: used,
+      memoryLimit: limit,
+      memoryLabel: `${fmtIec(used)} / ${fmtIec(limit)}`,
+      netIn, netOut, blockRead: blkRead, blockWrite: blkWrite,
+      pids: s.pids_stats?.current || 0,
+    };
+  }));
+  for (const id of prevCpu.keys()) if (!seen.has(id)) prevCpu.delete(id);
+  return items;
+}
+
 async function readStats() {
+  const fast = await apiStats().catch(() => null);
+  if (fast) return { ok: true, items: fast, at: Date.now() };
   const res = await runJson(['stats', '--no-stream', '--format', '{{json .}}'], { timeout: 15000 });
   if (!res.ok) return { ok: false, error: res.stderr, items: [] };
   const num = (v) => {
@@ -813,7 +968,10 @@ async function readStats() {
 
 async function events(sinceSeconds = 3600) {
   const since = Math.max(60, Math.min(7 * 24 * 3600, Number(sinceSeconds) || 3600));
-  const res = await run(['events', '--since', `${since}s`, '--until', '1s', '--format', '{{json .}}'], { timeout: 8000 });
+  const now = Math.floor(Date.now() / 1000);
+  const viaApi = await api.request(`/events?since=${now - since}&until=${now}`, { timeout: 8000, raw: true })
+    .then((text) => ({ ok: true, stdout: text, stderr: '' })).catch(() => null);
+  const res = viaApi || await run(['events', '--since', `${since}s`, '--until', '1s', '--format', '{{json .}}'], { timeout: 8000 });
   if (!res.ok && !res.stdout) return { ok: false, error: res.stderr, items: [] };
   let items = [];
   try {

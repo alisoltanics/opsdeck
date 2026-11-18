@@ -178,15 +178,15 @@ function createSplash() {
     html,body{height:100%;margin:0;background:#0a0e17;color:#e9eefb;font-family:Inter,system-ui,sans-serif;overflow:hidden}
     .wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
       background:radial-gradient(500px 220px at 50% 0%,rgba(36,150,237,.20),transparent 70%)}
-    .mark{width:56px;height:56px;border-radius:16px;background:linear-gradient(145deg,#2496ed,#1557b0);
-      display:flex;align-items:center;justify-content:center;box-shadow:0 14px 40px rgba(36,150,237,.35)}
+    .mark{width:56px;height:56px;border-radius:16px;background:#000;color:#fff;font:700 24px/1 'DejaVu Serif',Georgia,serif;
+      display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1px rgba(255,255,255,.14),0 14px 40px rgba(0,0,0,.5)}
     h1{font-size:20px;font-weight:650;letter-spacing:-.02em;margin:0}
     p{margin:0;color:#8794ad;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
     .bar{width:150px;height:2px;background:#1b2436;border-radius:2px;overflow:hidden;margin-top:8px}
     .bar i{display:block;height:100%;width:45%;background:linear-gradient(90deg,transparent,#2496ed,transparent);animation:run 1.1s infinite}
     @keyframes run{from{transform:translateX(-150px)}to{transform:translateX(200px)}}
   </style></head><body><div class="wrap">
-  <div class="mark"><svg width="30" height="30" viewBox="0 0 24 24" fill="none"><path d="M3 14h3v3H3v-3Zm4.5 0h3v3h-3v-3Zm4.5 0h3v3h-3v-3Zm4.5 0h3v3h-3v-3Zm-9-4.5h3v3h-3v-3Zm4.5 0h3v3h-3v-3Zm4.5 0h3v3h-3v-3Zm-4.5-4.5h3v3h-3V5Z" fill="#fff" opacity=".92"/><path d="M20.5 13.5c1.3-.8 2.4-2.2 2.7-3.9-1.6-.2-3 .3-4 1.2" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+  <div class="mark">OD</div>
   <div style="text-align:center"><h1>OpsDeck</h1><p>Operations Studio</p></div>
   <div class="bar"><i></i></div></div></body></html>`;
   splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));

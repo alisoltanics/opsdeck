@@ -845,7 +845,10 @@
     }
     const buttons = detail.actions.map((action) => {
       if (action === 'scale') return U.button({ label: 'Scale', icon: 'maximize', size: 'sm', attrs: 'data-k8s-action="scale"' });
-      if (action === 'restart') return U.button({ label: 'Restart rollout', icon: 'refresh', size: 'sm', attrs: 'data-k8s-action="restart"' });
+      if (action === 'restart') return U.button({ label: detail.section === 'pods' ? 'Restart pod' : 'Restart rollout', icon: 'refresh', size: 'sm', attrs: 'data-k8s-action="restart"' });
+      if (action === 'trigger') return U.button({ label: 'Run now', icon: 'play', size: 'sm', attrs: 'data-k8s-action="trigger"' });
+      if (action === 'suspend') return U.button({ label: 'Suspend', icon: 'pause', size: 'sm', attrs: 'data-k8s-action="suspend"' });
+      if (action === 'resume') return U.button({ label: 'Resume', icon: 'play', size: 'sm', attrs: 'data-k8s-action="resume"' });
       if (action === 'delete') return U.button({ label: 'Delete', icon: 'trash', size: 'sm', variant: 'danger', attrs: 'data-k8s-action="delete"' });
       return '';
     }).join('');
@@ -875,7 +878,20 @@
       }
       payload.replicas = replicas;
     } else {
-      const copy = action === 'restart'
+      const simple = {
+        trigger: { title: `Run ${detail.name} now?`, message: 'Creates a one-off Job from this CronJob right away. The schedule is not changed.', confirmLabel: 'Run now', tone: 'accent' },
+        suspend: { title: `Suspend ${detail.name}?`, message: 'No new Jobs are created until you resume it. Running Jobs are not stopped.', confirmLabel: 'Suspend', tone: 'accent' },
+        resume: { title: `Resume ${detail.name}?`, message: 'The CronJob starts creating Jobs on its schedule again.', confirmLabel: 'Resume', tone: 'accent' },
+      }[action];
+      const podRestart = action === 'restart' && detail.section === 'pods';
+      const copy = simple ? simple : podRestart
+        ? {
+          title: `Restart ${detail.name}?`,
+          message: 'The pod is deleted so its controller recreates it. A pod that has no controller (created with kubectl run) will not come back.',
+          confirmLabel: 'Restart pod',
+          tone: 'accent',
+        }
+        : action === 'restart'
         ? {
           title: `Restart ${detail.name}?`,
           message: 'OpsDeck runs a rolling restart. Pods are replaced one at a time according to the rollout strategy.',
@@ -899,7 +915,7 @@
         U.toast(`Could not ${action} ${detail.name}`, 'error', { description: res?.error || 'Try again.' });
         return;
       }
-      const done = action === 'delete' ? 'deleted' : action === 'restart' ? 'restart requested' : 'scaled';
+      const done = { delete: 'deleted', restart: 'restart requested', trigger: 'job created', suspend: 'suspended', resume: 'resumed' }[action] || 'scaled';
       U.toast(`${detail.kind} ${done}`, 'success', { description: res.message || '' });
       close('action');
       rerender();
