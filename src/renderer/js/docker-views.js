@@ -547,6 +547,35 @@
     </tr>`;
   }
 
+  async function runGroupAction(key, action, button) {
+    const label = projectLabel(key);
+    const all = (state.last.containers || []).filter((x) => projectKey(x) === key);
+    const targets = all.filter((x) => (action === 'start' ? x.state !== 'running' : action === 'stop' ? ['running', 'paused'].includes(x.state) : true));
+    if (!targets.length) { U.toast('Nothing to do', 'info', { description: label }); return; }
+    if (action === 'remove') {
+      const ok = await U.confirm({
+        title: `Remove all ${targets.length} containers in ${label}?`,
+        message: 'Every container in this group is force-removed together with its writable layer. Named volumes are kept. This cannot be undone.',
+        detail: targets.map((x) => x.name).join('\n'),
+        confirmLabel: `Remove ${targets.length}`,
+        tone: 'red',
+      });
+      if (!ok) return;
+    } else if (action !== 'start') {
+      const verb = action === 'stop' ? 'Stop' : 'Restart';
+      const ok = await U.confirm({ title: `${verb} ${targets.length} container${targets.length === 1 ? '' : 's'} in ${label}?`, message: 'The action is applied to every container in this group.', confirmLabel: `${verb} all`, tone: 'accent' });
+      if (!ok) return;
+    }
+    button.disabled = true;
+    const results = await Promise.all(targets.map((x) => api.docker.containerAction(x.id, action, action === 'remove' ? { force: true } : {}).catch((e) => ({ ok: false, error: e.message }))));
+    const failed = results.filter((r) => !r.ok);
+    const done = results.length - failed.length;
+    const past = { start: 'started', stop: 'stopped', restart: 'restarted', remove: 'removed' }[action];
+    if (failed.length) U.toast(`${done} ${past}, ${failed.length} failed`, 'error', { description: failed[0].error || '' });
+    else U.toast(`${done} container${done === 1 ? '' : 's'} ${past}`, 'success', { description: label });
+    rerender();
+  }
+
   function containerRows(items) {
     const filtered = items.filter(containerMatches);
     if (!filtered.length) {
@@ -592,6 +621,12 @@
           <span class="container-group-meta"><span class="dot-indicator ${running ? 'running' : 'exited'}"></span>${running} running</span>
           ${key !== '__standalone' ? `<button type="button" class="btn btn-sm btn-ghost" data-project-only="${esc(key)}">${icon('filter', 11)}<span>Show only this project</span></button>` : ''}
           <span class="container-group-spacer"></span>
+          <span class="row-actions" onclick="event.stopPropagation()">
+            ${running < groupItems.length ? U.iconButton({ icon: 'play', label: `Start all in ${projectLabel(key)}`, attrs: `data-gaction="start" data-gkey="${esc(key)}"` }) : ''}
+            ${running ? U.iconButton({ icon: 'square', label: `Stop all in ${projectLabel(key)}`, attrs: `data-gaction="stop" data-gkey="${esc(key)}"` }) : ''}
+            ${U.iconButton({ icon: 'rotate-cw', label: `Restart all in ${projectLabel(key)}`, attrs: `data-gaction="restart" data-gkey="${esc(key)}"` })}
+            ${U.iconButton({ icon: 'trash', tone: 'red', label: `Remove all in ${projectLabel(key)}`, attrs: `data-gaction="remove" data-gkey="${esc(key)}"` })}
+          </span>
         </div>
       </td></tr>${groupItems.map(containerRow).join('')}`;
     }).join('');
@@ -2132,6 +2167,12 @@
         state.containerFilter.imageLabel = '';
         state.containerFilter.imageAliases = [];
         OD.app.goto('#/containers');
+        return;
+      }
+      const groupBtn = event.target.closest('[data-gaction]');
+      if (groupBtn) {
+        event.stopPropagation();
+        await runGroupAction(groupBtn.dataset.gkey, groupBtn.dataset.gaction, groupBtn);
         return;
       }
       const projectOnly = event.target.closest('[data-project-only]');
